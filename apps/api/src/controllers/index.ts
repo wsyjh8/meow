@@ -12,3 +12,4 @@ export * from './shop.controller';
 export * from './inventory.controller';
 export * from './equipment.controller';
 export * from './backup.controller';
+export * from './settings.controller';

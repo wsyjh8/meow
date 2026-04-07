@@ -338,6 +338,20 @@ class ApiClient {
     );
   }
 
+  // ========== Settings ==========
+
+  /// Update daily new word target on backend
+  Future<void> updateDailyGoal(int dailyNewTarget) async {
+    final response = await _client.put(
+      Uri.parse('$baseUrl/me/settings/daily-goal'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'daily_new_target': dailyNewTarget}),
+    );
+    if (response.statusCode != 200) {
+      throw ApiException('PUT /me/settings/daily-goal failed: ${response.statusCode}');
+    }
+  }
+
   void dispose() {
     _client.close();
   }
@@ -546,6 +560,14 @@ class Word {
   final String meaning;
   final String? phonetic;
   final String bookId;
+  // Extended fields from CET-4 data (all nullable for backwards compat)
+  final String? translation;
+  final String? definition;
+  final int? difficultyLevel;
+  final bool? isCore;
+  final String? tags;
+  final int? frequencyRank;
+  final String? wordForms;
 
   Word({
     required this.wordId,
@@ -553,6 +575,13 @@ class Word {
     required this.meaning,
     this.phonetic,
     required this.bookId,
+    this.translation,
+    this.definition,
+    this.difficultyLevel,
+    this.isCore,
+    this.tags,
+    this.frequencyRank,
+    this.wordForms,
   });
 
   factory Word.fromJson(Map<String, dynamic> json) {
@@ -562,6 +591,13 @@ class Word {
       meaning: json['meaning'] as String,
       phonetic: json['phonetic'] as String?,
       bookId: json['book_id'] as String,
+      translation: json['translation'] as String?,
+      definition: json['definition'] as String?,
+      difficultyLevel: (json['difficulty_level'] as num?)?.toInt(),
+      isCore: json['is_core'] as bool?,
+      tags: json['tags'] as String?,
+      frequencyRank: (json['frequency_rank'] as num?)?.toInt(),
+      wordForms: json['word_forms'] as String?,
     );
   }
 }

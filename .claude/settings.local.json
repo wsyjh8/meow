@@ -21,7 +21,18 @@
       "Bash(grep -c \"''cat_hat_red\\\\|''cat_bow_blue\\\\|''cat_scarf_pink\\\\|''room_lamp_warm\\\\|''room_rug_soft\\\\|''cat_hat_straw\\\\|''cat_bow_yellow\\\\|''cat_scarf_stripe\\\\|''room_plant_small\\\\|''room_cushion_cloud\" apps/mobile/lib/features/customize/customize_page.dart)",
       "Bash(grep -c \"''cat_hat_red\\\\|''cat_bow_blue\\\\|''cat_scarf_pink\\\\|''room_lamp_warm\\\\|''room_rug_soft\\\\|''cat_hat_straw\\\\|''cat_bow_yellow\\\\|''cat_scarf_stripe\\\\|''room_plant_small\\\\|''room_cushion_cloud\" apps/mobile/lib/features/meow_home/meow_home_page.dart)",
       "Bash(find /d/code/AI/startUp/meow -name *export* -o -name *backup* -o -name *import*)",
-      "Bash(flutter pub:*)"
+      "Bash(flutter pub:*)",
+      "Bash(PGPASSWORD=jason123 psql -h localhost -U postgres -d meow_dev -f src/infrastructure/postgres/migrations/002_word_restructure.sql)",
+      "Bash(psql -h localhost -U postgres -d meow_dev -c ':*)",
+      "Bash(find \"D:/code/AI/startUp/meow/apps/api/src/controllers\" -type f -name \"*.ts\" -exec grep -l \"setting\\\\|goal\\\\|update\" {} \\\\;)",
+      "Bash(find \"D:/code/AI/startUp/meow/apps/api/src/controllers\" -type f -name \"*.ts\" -exec grep -l \"PUT\\\\|POST.*setting\\\\|update.*goal\" {} \\\\;)",
+      "Bash(grep -n \"daily_goal_progress\" /d/code/AI/startUp/meow/apps/api/src/infrastructure/postgres/migrations/*.sql)",
+      "Bash(grep -v \"^--$\")",
+      "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"SELECT daily_new_target FROM user_book_settings WHERE user_id = 'dev-user-001';\")",
+      "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"UPDATE user_book_settings SET daily_new_target = 6 WHERE user_id = 'dev-user-001'; SELECT daily_new_target FROM user_book_settings WHERE user_id = 'dev-user-001';\")",
+      "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"SELECT local_date, new_completed, new_target, goal_status FROM daily_goal_progress ORDER BY local_date DESC LIMIT 5;\")",
+      "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"SELECT COUNT\\(*\\) as total, date\\(created_at\\) as day FROM study_attempts WHERE action_result = 'know' GROUP BY day ORDER BY day;\")",
+      "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"UPDATE daily_goal_progress SET new_target = 6 WHERE user_id = 'dev-user-001' AND local_date = '2026-04-07';\")"
     ]
   }
 }

@@ -97,12 +97,12 @@ function computeLevelFromExp(totalExp: number): number {
 /**
  * Initial today state factory
  */
-function createInitialTodayState(userId: string, localDate: string): TodayState {
+function createInitialTodayState(userId: string, localDate: string, dailyNewTarget: number = 20): TodayState {
   return {
     user_id: userId,
     local_date: localDate,
     current_book_name: DEV_BOOK_NAME,
-    today_new_target: 20,
+    today_new_target: dailyNewTarget,
     today_new_completed: 0,
     today_review_target: 0,
     today_review_pending: 0,
@@ -209,6 +209,10 @@ export class DevStore {
         console.log('[DevStore] State restored from PostgreSQL.');
       }
     }
+    // Load word pool from PG (or fallback)
+    await this.loadWordPool();
+    // Load user settings (daily new target) from PG
+    await this.loadUserSettings();
   }
 
   /**
@@ -356,42 +360,116 @@ export class DevStore {
     { item_id: 'room_cushion_cloud', item_type: 'room_item', slot: 'floor', name: '云朵小靠垫', coin_price: 140, required_level: 3, is_active: true },
   ];
 
-  // Development word pool (placeholder)
-  // Phase 5 fix: Expanded to 20 words to match today_new_target
-  private readonly wordPool: Word[] = [
-    // New words (20)
-    { word_id: 'word-001', word_text: 'abandon', meaning: '放弃', phonetic: '/əˈbændən/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-002', word_text: 'ability', meaning: '能力', phonetic: '/əˈbɪləti/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-003', word_text: 'abnormal', meaning: '异常的', phonetic: '/æbˈnɔːrml/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-004', word_text: 'aboard', meaning: '在船上', phonetic: '/əˈbɔːrd/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-005', word_text: 'abrupt', meaning: '突然的', phonetic: '/əˈbrʌpt/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-006', word_text: 'absence', meaning: '缺席', phonetic: '/ˈæbsəns/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-007', word_text: 'absolute', meaning: '绝对的', phonetic: '/ˈæbsəluːt/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-008', word_text: 'absorb', meaning: '吸收', phonetic: '/əbˈzɔːrb/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-009', word_text: 'abstract', meaning: '抽象的', phonetic: '/ˈæbstrækt/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-010', word_text: 'abundant', meaning: '丰富的', phonetic: '/əˈbʌndənt/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-011', word_text: 'academic', meaning: '学术的', phonetic: '/ˌækəˈdemɪk/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-012', word_text: 'accelerate', meaning: '加速', phonetic: '/əkˈseləreɪt/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-013', word_text: 'access', meaning: '进入', phonetic: '/ˈækses/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-014', word_text: 'accommodate', meaning: '容纳', phonetic: '/əˈkɒmədeɪt/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-015', word_text: 'accompany', meaning: '陪伴', phonetic: '/əˈkʌmpəni/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-016', word_text: 'accomplish', meaning: '完成', phonetic: '/əˈkʌmplɪʃ/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-017', word_text: 'account', meaning: '账户', phonetic: '/əˈkaʊnt/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-018', word_text: 'accumulate', meaning: '积累', phonetic: '/əˈkjuːmjəleɪt/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-019', word_text: 'accurate', meaning: '准确的', phonetic: '/ˈækjərət/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-020', word_text: 'achieve', meaning: '实现', phonetic: '/əˈtʃiːv/', book_id: DEV_BOOK_ID },
-    // Review words (10)
-    { word_id: 'word-r-001', word_text: 'abandon', meaning: '放弃', phonetic: '/əˈbændən/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-r-002', word_text: 'background', meaning: '背景', phonetic: '/ˈbækɡraʊnd/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-r-003', word_text: 'bacteria', meaning: '细菌', phonetic: '/bækˈtɪriə/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-r-004', word_text: 'balance', meaning: '平衡', phonetic: '/ˈbæləns/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-r-005', word_text: 'banner', meaning: '横幅', phonetic: '/ˈbænər/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-r-006', word_text: 'barrier', meaning: '障碍', phonetic: '/ˈbæriər/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-r-007', word_text: 'behavior', meaning: '行为', phonetic: '/bɪˈheɪvjər/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-r-008', word_text: 'benefit', meaning: '利益', phonetic: '/ˈbenɪfɪt/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-r-009', word_text: 'biology', meaning: '生物学', phonetic: '/baɪˈɒlədʒi/', book_id: DEV_BOOK_ID },
-    { word_id: 'word-r-010', word_text: 'boundary', meaning: '边界', phonetic: '/ˈbaʊndri/', book_id: DEV_BOOK_ID },
-  ];
+  // Word pool — loaded dynamically from PG, with fallback for JSON mode
+  private wordPool: Word[] = [];
+
+  // User daily new target — loaded from PG user_book_settings, default 20
+  private userDailyNewTarget: number = 20;
+
+  /**
+   * Load word pool from PG or use minimal fallback.
+   * Called during initialization. If PG has CET-4 words, use those.
+   * Otherwise fall back to a minimal set for dev/test.
+   */
+  async loadWordPool(): Promise<void> {
+    try {
+      // Try loading from PG via persistence layer
+      const { Pool } = require('pg');
+      const pool = new Pool({
+        connectionString: process.env.DATABASE_URL || 'postgresql://postgres:jason123@localhost:5432/meow_dev',
+      });
+      const result = await pool.query(
+        'SELECT id as word_id, word_text, meaning, phonetic, book_id, translation, definition, difficulty_level, is_core, tags, frequency_rank, word_forms FROM words WHERE book_id = $1 ORDER BY sort_order ASC',
+        [DEV_BOOK_ID],
+      );
+      await pool.end();
+
+      if (result.rows.length > 0) {
+        this.wordPool = result.rows;
+        console.log(`[DevStore] Loaded ${this.wordPool.length} words from PG.`);
+        return;
+      }
+    } catch (e) {
+      // PG not available — use fallback
+    }
+
+    // Minimal fallback for JSON persistence / test mode
+    this.wordPool = [
+      { word_id: 'word-001', word_text: 'abandon', meaning: '放弃', phonetic: '/əˈbændən/', book_id: DEV_BOOK_ID },
+      { word_id: 'word-002', word_text: 'ability', meaning: '能力', phonetic: '/əˈbɪləti/', book_id: DEV_BOOK_ID },
+      { word_id: 'word-003', word_text: 'abnormal', meaning: '异常的', phonetic: '/æbˈnɔːrml/', book_id: DEV_BOOK_ID },
+      { word_id: 'word-004', word_text: 'aboard', meaning: '在船上', phonetic: '/əˈbɔːrd/', book_id: DEV_BOOK_ID },
+      { word_id: 'word-005', word_text: 'abrupt', meaning: '突然的', phonetic: '/əˈbrʌpt/', book_id: DEV_BOOK_ID },
+    ];
+    console.log(`[DevStore] Using ${this.wordPool.length} fallback words (PG not available).`);
+  }
+
+  /**
+   * Load user daily new target from PG user_book_settings.
+   * Falls back to 20 if PG unavailable.
+   */
+  async loadUserSettings(): Promise<void> {
+    try {
+      const { Pool } = require('pg');
+      const pool = new Pool({
+        connectionString: process.env.DATABASE_URL || 'postgresql://postgres:jason123@localhost:5432/meow_dev',
+      });
+      const result = await pool.query(
+        'SELECT daily_new_target FROM user_book_settings WHERE user_id = $1 AND is_active = TRUE LIMIT 1',
+        [DEV_USER_ID],
+      );
+      await pool.end();
+      if (result.rows.length > 0) {
+        this.userDailyNewTarget = result.rows[0].daily_new_target;
+        console.log(`[DevStore] User daily new target: ${this.userDailyNewTarget}`);
+      }
+    } catch (e) {
+      // PG not available — keep default 20
+    }
+  }
+
+  /**
+   * Update user daily new target in PG and in-memory.
+   * Also updates today's state target so it takes effect immediately.
+   */
+  async updateDailyNewTarget(newTarget: number): Promise<void> {
+    this.userDailyNewTarget = newTarget;
+
+    // Update PG
+    try {
+      const { Pool } = require('pg');
+      const pool = new Pool({
+        connectionString: process.env.DATABASE_URL || 'postgresql://postgres:jason123@localhost:5432/meow_dev',
+      });
+      await pool.query(
+        'UPDATE user_book_settings SET daily_new_target = $1, updated_at = NOW() WHERE user_id = $2 AND is_active = TRUE',
+        [newTarget, DEV_USER_ID],
+      );
+      await pool.end();
+    } catch (e) {
+      // PG not available — in-memory update still applies
+    }
+
+    // Update today's state immediately
+    const today = new Date().toISOString().split('T')[0];
+    const state = this.todayStates.get(today);
+    if (state) {
+      state.today_new_target = newTarget;
+      // Recompute daily goal status
+      const newGoalMet = state.today_new_completed >= newTarget;
+      const reviewGoalMet = state.today_review_completed >= state.today_review_target;
+      if (newGoalMet && reviewGoalMet) {
+        state.daily_goal_status = 'completed';
+      } else if (newGoalMet || reviewGoalMet) {
+        state.daily_goal_status = 'partially_completed';
+      } else if (state.today_new_completed > 0 || state.today_review_completed > 0) {
+        state.daily_goal_status = 'in_progress';
+      } else {
+        state.daily_goal_status = 'not_started';
+      }
+      this.saveToDisk();
+    }
+  }
 
   /**
    * Get or create today state
@@ -405,7 +483,28 @@ export class DevStore {
       const activeGroup = this.getActiveReviewGroup();
       const reviewPending = activeGroup ? activeGroup.items.filter(i => !i.completed).length : 0;
 
-      state = createInitialTodayState(this.userId, today);
+      state = createInitialTodayState(this.userId, today, this.userDailyNewTarget);
+
+      // Recount today_new_completed from today's study_attempts ONLY
+      // This prevents cross-day accumulation
+      const todayNewCompleted = this.studyAttempts.filter(
+        a => a.study_type === 'new' && a.action_result === 'know'
+          && a.created_at.startsWith(today)
+      ).length;
+      state.today_new_completed = todayNewCompleted;
+
+      // Recompute daily_goal_status based on actual counts
+      if (todayNewCompleted > 0) {
+        const newGoalMet = todayNewCompleted >= state.today_new_target;
+        const reviewGoalMet = state.today_review_completed >= state.today_review_target;
+        if (newGoalMet && reviewGoalMet) {
+          state.daily_goal_status = 'completed';
+        } else if (newGoalMet || reviewGoalMet) {
+          state.daily_goal_status = 'partially_completed';
+        } else {
+          state.daily_goal_status = 'in_progress';
+        }
+      }
 
       // Assumption (temporary, not frozen):
       // Simple rule: if there's pending review, set target to 1
@@ -415,6 +514,9 @@ export class DevStore {
       }
 
       this.todayStates.set(today, state);
+    } else {
+      // Existing state for today — ensure target reflects current user setting
+      state.today_new_target = this.userDailyNewTarget;
     }
 
     // P3 Phase 1: Compute very small CTA decision-support block.
@@ -520,6 +622,12 @@ export class DevStore {
    * Get next new word
    */
   getNextNewWord(): Word | null {
+    // Check daily limit: if today's target is reached, stop serving new words
+    const state = this.getTodayState();
+    if (state.today_new_completed >= state.today_new_target && state.today_new_target > 0) {
+      return null; // Daily target reached
+    }
+
     // Find words already mastered (action_result === 'know').
     // Words marked 'forgot' should REAPPEAR so the user can study them again.
     const masteredWordIds = new Set(
@@ -528,9 +636,9 @@ export class DevStore {
         .map(a => a.word_id)
     );
 
-    // Get new words from pool (excluding review words and already-mastered words)
+    // Get unmastered words from pool (all words are candidates with real data)
     const newWords = this.wordPool.filter(
-      w => !w.word_id.startsWith('word-r-') && !masteredWordIds.has(w.word_id)
+      w => !masteredWordIds.has(w.word_id)
     );
 
     if (newWords.length === 0) {

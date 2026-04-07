@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/api/api_client.dart';
 import '../../core/storage/local_settings_service.dart';
 import '../../core/storage/local_progress_repository.dart';
 import '../../core/storage/snapshot_export_service.dart';
@@ -459,14 +460,23 @@ class _SettingsPageState extends State<SettingsPage> {
       final settings = LocalSettingsService(prefs);
       await settings.setDailyGoal(result);
 
+      // Sync to backend so today_new_target updates immediately
+      try {
+        await ApiClient().updateDailyGoal(result);
+      } catch (_) {
+        // Backend sync failed — local setting saved, will take effect on next restart
+      }
+
       setState(() => _currentDailyGoal = result);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('\u5df2\u66f4\u65b0\u4e3a $result \u4e2a/\u5929'), // 已更新为 N 个/天
-          duration: const Duration(seconds: 1),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('\u5df2\u66f4\u65b0\u4e3a $result \u4e2a/\u5929'), // 已更新为 N 个/天
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
     }
   }
 

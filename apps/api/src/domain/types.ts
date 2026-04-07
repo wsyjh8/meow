@@ -47,6 +47,14 @@ export interface Word {
   meaning: string;
   phonetic?: string;
   book_id: string;
+  // Extended fields from CET-4 CSV (all optional for backwards compatibility)
+  translation?: string;
+  definition?: string;
+  difficulty_level?: number;
+  is_core?: boolean;
+  tags?: string;
+  frequency_rank?: number;
+  word_forms?: string;
 }
 
 /**

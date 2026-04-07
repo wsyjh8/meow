@@ -104,6 +104,7 @@ class DevStoreCheckInAdapter implements ICheckInRepository {
 class DevStoreTodayAdapter implements ITodayRepository {
   getTodayState() { return devStore.getTodayState(); }
   updateTodayState(updates: any) { return devStore.updateTodayState(updates); }
+  async updateDailyNewTarget(newTarget: number) { return devStore.updateDailyNewTarget(newTarget); }
 }
 
 // ========== Feed ==========
