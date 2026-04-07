@@ -1,0 +1,35 @@
+import { Module } from '@nestjs/common';
+import { HealthController } from '../controllers/health.controller';
+import { TodayController } from '../controllers/today.controller';
+import { StudyAttemptsController } from '../controllers/study-attempts.controller';
+import { ReviewGroupsController } from '../controllers/review-groups.controller';
+import { ReviewAttemptsController } from '../controllers/review-attempts.controller';
+import { SessionsController } from '../controllers/sessions.controller';
+import { CheckInsController } from '../controllers/check-ins.controller';
+import { SettlementsController } from '../controllers/settlements.controller';
+import { SecondarySummaryController } from '../controllers/secondary-summary.controller';
+import { FeedController } from '../controllers/feed.controller';
+import { ShopController } from '../controllers/shop.controller';
+import { InventoryController } from '../controllers/inventory.controller';
+import { EquipmentController } from '../controllers/equipment.controller';
+import { BackupController } from '../controllers/backup.controller';
+
+@Module({
+  controllers: [
+    HealthController,
+    TodayController,
+    StudyAttemptsController,
+    ReviewGroupsController,
+    ReviewAttemptsController,
+    SessionsController,
+    CheckInsController,
+    SettlementsController,
+    SecondarySummaryController,
+    FeedController,
+    ShopController,
+    InventoryController,
+    EquipmentController,
+    BackupController,
+  ],
+})
+export class RoutesModule {}

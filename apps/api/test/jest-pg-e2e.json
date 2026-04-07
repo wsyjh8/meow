@@ -1,0 +1,19 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testEnvironment": "node",
+  "transform": {
+    "^.+\\.ts$": "ts-jest"
+  },
+  "testRegex": "pg-regression.e2e-spec.ts$",
+  "moduleNameMapper": {
+    "^@/(.*)$": "<rootDir>/../src/$1",
+    "^@domain/(.*)$": "<rootDir>/../src/domain/$1",
+    "^@config/(.*)$": "<rootDir>/../src/config/$1",
+    "^@lib/(.*)$": "<rootDir>/../src/lib/$1",
+    "^@middleware/(.*)$": "<rootDir>/../src/middleware/$1",
+    "^@routes/(.*)$": "<rootDir>/../src/routes/$1",
+    "^@controllers/(.*)$": "<rootDir>/../src/controllers/$1",
+    "^@services/(.*)$": "<rootDir>/../src/services/$1"
+  }
+}

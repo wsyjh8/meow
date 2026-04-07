@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test:*)",
+      "Bash(flutter test:*)",
+      "Bash(npm run:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(npm install:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(DATABASE_URL=postgresql://postgres:jason123@localhost:5432/meow_dev npx ts-node -e \":*)",
+      "Bash(set DATABASE_URL=postgresql://postgres:jason123@localhost:5432/meow_dev)",
+      "Bash(PERSISTENCE_BACKEND=pg DATABASE_URL=postgresql://postgres:jason123@localhost:5432/meow_dev npx ts-node --compiler-options \"{\"\"strict\"\":false}\" -e \":*)",
+      "Bash(set PERSISTENCE_BACKEND=pg)",
+      "Bash(npx ts-node --compiler-options \"{\"\"strict\"\":false}\" -e \":*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx nest:*)",
+      "Bash(wc -l /d/code/AI/startUp/meow/apps/mobile/lib/core/router/*.dart /d/code/AI/startUp/meow/apps/mobile/lib/core/api/*.dart)",
+      "Bash(wc -l /d/code/AI/startUp/meow/apps/mobile/lib/features/*/*.dart)",
+      "Bash(wc -l /d/code/AI/startUp/meow/apps/mobile/test/*.dart)",
+      "Bash(grep -n \"^  //\" /d/code/AI/startUp/meow/apps/mobile/lib/core/api/api_client.dart)",
+      "Bash(grep -c \"''cat_hat_red\\\\|''cat_bow_blue\\\\|''cat_scarf_pink\\\\|''room_lamp_warm\\\\|''room_rug_soft\\\\|''cat_hat_straw\\\\|''cat_bow_yellow\\\\|''cat_scarf_stripe\\\\|''room_plant_small\\\\|''room_cushion_cloud\" apps/mobile/lib/features/customize/customize_page.dart)",
+      "Bash(grep -c \"''cat_hat_red\\\\|''cat_bow_blue\\\\|''cat_scarf_pink\\\\|''room_lamp_warm\\\\|''room_rug_soft\\\\|''cat_hat_straw\\\\|''cat_bow_yellow\\\\|''cat_scarf_stripe\\\\|''room_plant_small\\\\|''room_cushion_cloud\" apps/mobile/lib/features/meow_home/meow_home_page.dart)",
+      "Bash(find /d/code/AI/startUp/meow -name *export* -o -name *backup* -o -name *import*)",
+      "Bash(flutter pub:*)"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npm test)",
+      "Bash(npm run *)",
+      "Bash(timeout *)",
+      "Bash(curl *)",
+      "Bash(flutter *)",
+      "Bash(dir *)",
+      "Bash(sed *)",
+      "Bash(replace *)",
+      "Bash(set-content *)",
+      "Bash(powershell *)",
+      "Bash(select-object *)",
+      "Bash(convertfrom-json)",
+      "Bash(convertto-json *)",
+      "Bash(get-process)",
+      "Bash(where-object *)",
+      "WebSearch",
+      "WebFetch(github.com)"
+    ]
+  },
+  "$version": 3
+}
