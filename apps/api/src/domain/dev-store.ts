@@ -621,6 +621,16 @@ export class DevStore {
   /**
    * Get next new word
    */
+  /**
+   * Get all words for a book (for batch download to client cache).
+   * Supports offset/limit pagination.
+   */
+  getWordsByBook(bookId: string, offset: number = 0, limit: number = 500): { words: Word[], total: number } {
+    const allWords = this.wordPool.filter(w => w.book_id === bookId);
+    const words = allWords.slice(offset, offset + limit);
+    return { words, total: allWords.length };
+  }
+
   getNextNewWord(): Word | null {
     // Check daily limit: if today's target is reached, stop serving new words
     const state = this.getTodayState();

@@ -16,6 +16,7 @@ class LocalSettingsService {
   static const _keySoundEnabled = 'settings_sound_enabled';
   static const _keyTheme = 'settings_theme';
   static const _keyNotificationTime = 'settings_notification_time';
+  static const _keyDesiredRetention = 'settings_desired_retention';
 
   // ==================== Daily Goal ====================
   int get dailyGoal => _prefs.getInt(_keyDailyGoal) ?? 20;
@@ -28,6 +29,15 @@ class LocalSettingsService {
   // ==================== Theme ====================
   String get theme => _prefs.getString(_keyTheme) ?? 'light';
   Future<bool> setTheme(String value) => _prefs.setString(_keyTheme, value);
+
+  // ==================== Desired Retention (FSRS) ====================
+  /// FSRS desired retention rate. Default 0.9, range [0.85, 0.95].
+  /// Higher = more review but stronger memory.
+  /// Lower = less review but higher forgetting risk.
+  double get desiredRetention =>
+      _prefs.getDouble(_keyDesiredRetention) ?? 0.9;
+  Future<bool> setDesiredRetention(double value) =>
+      _prefs.setDouble(_keyDesiredRetention, value.clamp(0.85, 0.95));
 
   // ==================== Notification Time ====================
   /// Stored as "HH:mm" string. Default: "09:00".

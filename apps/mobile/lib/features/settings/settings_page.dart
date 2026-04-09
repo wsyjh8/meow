@@ -128,6 +128,9 @@ class _SettingsPageState extends State<SettingsPage> {
             if (P3FeatureGuard.isDailyGoalSettingEnabled)
               _buildDailyGoalSection(),
 
+            // ===== FSRS Memory Settings =====
+            _buildRetentionSection(),
+
             // ===== Backup Section =====
             _buildBackupSection(),
           ],
@@ -531,6 +534,144 @@ class _SettingsPageState extends State<SettingsPage> {
       return '${dt.month}/${dt.day} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     } catch (_) {
       return isoTime;
+    }
+  }
+
+  // ==================== FSRS Retention Setting ====================
+
+  Widget _buildRetentionSection() {
+    return FutureBuilder<SharedPreferences>(
+      future: SharedPreferences.getInstance(),
+      builder: (context, snap) {
+        if (!snap.hasData) return const SizedBox.shrink();
+        final settings = LocalSettingsService(snap.data!);
+        final current = settings.desiredRetention;
+
+        return MeowCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '\u8bb0\u5fc6\u8bbe\u7f6e', // 记忆设置
+                style: MeowTextStyles.label,
+              ),
+              const SizedBox(height: MeowSpacing.md),
+              InkWell(
+                onTap: () => _showRetentionDialog(settings, current),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '\u8bb0\u5fc6\u4fdd\u7559\u7387', // 记忆保留率
+                              style: MeowTextStyles.body,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '\u8c03\u9ad8\u2192\u590d\u4e60\u91cf\u589e\u52a0\u4f46\u8bb0\u5fc6\u66f4\u7262\uff1b\u8c03\u4f4e\u2192\u590d\u4e60\u91cf\u51cf\u5c11\u4f46\u53ef\u80fd\u9057\u5fd8\u66f4\u591a',
+                              // 调高→复习量增加但记忆更牢；调低→复习量减少但可能遗忘更多
+                              style: MeowTextStyles.caption.copyWith(
+                                  color: MeowColors.textHint),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        current.toStringAsFixed(2),
+                        style: MeowTextStyles.body
+                            .copyWith(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(Icons.chevron_right,
+                          size: 18, color: MeowColors.textHint),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showRetentionDialog(
+      LocalSettingsService settings, double current) async {
+    double tempValue = current;
+
+    final result = await showDialog<double>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              title: const Text('\u8bb0\u5fc6\u4fdd\u7559\u7387'), // 记忆保留率
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    tempValue.toStringAsFixed(2),
+                    style: Theme.of(ctx)
+                        .textTheme
+                        .headlineMedium
+                        ?.copyWith(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 8),
+                  Slider(
+                    value: tempValue,
+                    min: 0.85,
+                    max: 0.95,
+                    divisions: 10,
+                    label: tempValue.toStringAsFixed(2),
+                    onChanged: (v) {
+                      setDialogState(() => tempValue = v);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '\u9ed8\u8ba4 0.90\u3002\u8c03\u9ad8\u590d\u4e60\u66f4\u9891\u7e41\u4f46\u8bb0\u5fc6\u66f4\u7262\u56fa\uff0c\u8c03\u4f4e\u590d\u4e60\u91cf\u5c11\u4f46\u53ef\u80fd\u9057\u5fd8\u66f4\u591a\u3002',
+                    // 默认 0.90。调高复习更频繁但记忆更牢固，调低复习量少但可能遗忘更多。
+                    style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: Colors.grey[600]),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('\u53d6\u6d88'), // 取消
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, tempValue),
+                  child: const Text('\u786e\u8ba4'), // 确认
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result != null && mounted) {
+      await settings.setDesiredRetention(result);
+      setState(() {}); // rebuild to show new value
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                '\u8bb0\u5fc6\u4fdd\u7559\u7387\u5df2\u66f4\u65b0\u4e3a ${result.toStringAsFixed(2)}'),
+            // 记忆保留率已更新为 X.XX
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
     }
   }
 }

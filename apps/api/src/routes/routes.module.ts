@@ -14,6 +14,7 @@ import { InventoryController } from '../controllers/inventory.controller';
 import { EquipmentController } from '../controllers/equipment.controller';
 import { BackupController } from '../controllers/backup.controller';
 import { SettingsController } from '../controllers/settings.controller';
+import { WordsController } from '../controllers/words.controller';
 
 @Module({
   controllers: [
@@ -32,6 +33,7 @@ import { SettingsController } from '../controllers/settings.controller';
     EquipmentController,
     BackupController,
     SettingsController,
+    WordsController,
   ],
 })
 export class RoutesModule {}
