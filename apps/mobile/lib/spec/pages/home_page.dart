@@ -80,7 +80,9 @@ class _SpecHomePageState extends State<SpecHomePage> {
                 _buildGreeting(),
                 // 6.1.3 Mochi check-in card
                 _buildMochiCard(),
-                // 6.1.4 Main CTA
+                // P3.3: "背单词" primary entry
+                _buildStudyEntry(),
+                // 6.1.4 Main CTA (task progress)
                 _buildMainCTA(),
                 // 6.1.5 Number cards
                 _buildNumberCards(),
@@ -199,6 +201,49 @@ class _SpecHomePageState extends State<SpecHomePage> {
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ==================== P3.3: 背单词 Primary Entry ====================
+  // NOTE: Session launch mode pending Room 2/3 freeze — navigate only.
+  // Candidate copy ("背单词" / "开始今天的学习") is page-level UI text, not a persistence value.
+
+  Widget _buildStudyEntry() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(SpecSpacing.pageH, 0, SpecSpacing.pageH, 12),
+      child: SpecCardHero(
+        showPawPrint: true,
+        onTap: () => Navigator.pushNamed(context, '/study'),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  '背单词',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: SpecTypo.medium,
+                    color: Colors.white,
+                    height: 1.2,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  '开始今天的学习',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: SpecTypo.regular,
+                    color: Colors.white70,
+                  ),
+                ),
+              ],
+            ),
+            const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 18),
           ],
         ),
       ),

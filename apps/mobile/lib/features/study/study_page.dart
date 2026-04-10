@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../core/api/api_client.dart';
+import '../../core/memory/fsrs_service.dart';
+import '../../core/memory/review_rating.dart';
+import '../../core/memory/widgets/rating_buttons.dart';
 import '../../core/services/study_service.dart';
+import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_database.dart';
 
 /// StudyPage - 新词学习 (SQLite-first)
@@ -15,8 +19,10 @@ class StudyPage extends StatefulWidget {
 
 class _StudyPageState extends State<StudyPage> {
   late final StudyService _studyService;
+  late final FsrsService _fsrsService;
   Word? _currentWord;
   bool _isLoading = false;
+  bool _isSubmitting = false;
   String? _error;
 
   @override
@@ -26,6 +32,7 @@ class _StudyPageState extends State<StudyPage> {
       apiClient: ApiClient(),
       db: LocalDatabase.instance,
     );
+    _fsrsService = FsrsService(db: AppDatabase());
     // Sync any pending records from previous session
     _studyService.syncPendingAttempts();
     _loadNextWord();
@@ -64,21 +71,50 @@ class _StudyPageState extends State<StudyPage> {
 
       if (mounted) {
         setState(() => _isLoading = false);
-
-        // Immediate feedback — not waiting for API
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(actionResult == 'know' ? '已掌握 ✓' : '已标记模糊'),
-            duration: const Duration(milliseconds: 500),
-          ),
-        );
-
         // Load next word
         await _loadNextWord();
       }
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _isLoading = false; });
     }
+  }
+
+  // P3.3: 4-button rating handler.
+  // Three-layer mapping: ReviewRating (semantic) → FSRS grade (local) + binary string (cloud).
+  // CANDIDATE labels — final Chinese wording pending Room 3 + Room 5 freeze.
+  Future<void> _onRate(ReviewRating rating) async {
+    if (_isSubmitting || _currentWord == null) return;
+    if (mounted) setState(() { _isSubmitting = true; _error = null; });
+
+    try {
+      // Step 1: Ensure FSRS card exists (idempotent — no-op if already initialized)
+      await _fsrsService.initCardForWord(_currentWord!.wordId);
+
+      // Step 2: Apply FSRS rating — atomic local write (review_logs INSERT + card_states UPDATE)
+      await _fsrsService.rateCard(_currentWord!.wordId, rating);
+
+      // Step 3: Binary mapping for StudyService / cloud sync
+      // again/hard → 'forgot' | good/easy → 'know'
+      final binaryResult = (rating == ReviewRating.good || rating == ReviewRating.easy)
+          ? 'know'
+          : 'forgot';
+
+      // Step 4: StudyService — local-first write + async cloud sync
+      await _studyService.submitStudyAttempt(
+        wordId: _currentWord!.wordId,
+        bookId: _currentWord!.bookId,
+        studyType: 'new',
+        actionResult: binaryResult,
+      );
+
+      // Step 5: Load next word
+      await _loadNextWord();
+    } catch (e) {
+      if (mounted) setState(() { _error = e.toString(); _isSubmitting = false; });
+      return;
+    }
+
+    if (mounted) setState(() { _isSubmitting = false; });
   }
 
   @override
@@ -165,29 +201,10 @@ class _StudyPageState extends State<StudyPage> {
 
           const Spacer(),
 
-          // Action buttons
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _isLoading ? null : () => _submitStudy('forgot'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: const Text('模糊'),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : () => _submitStudy('know'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: const Text('掌握'),
-                ),
-              ),
-            ],
+          // P3.3: 4-button rating. CANDIDATE labels — final wording pending Room 3 + Room 5 freeze.
+          FsrsRatingButtons(
+            onRate: _onRate,
+            enabled: !_isSubmitting,
           ),
           const SizedBox(height: 16),
         ],

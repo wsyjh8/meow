@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../core/api/api_client.dart';
+import '../../core/memory/fsrs_service.dart';
+import '../../core/memory/review_rating.dart';
+import '../../core/memory/widgets/rating_buttons.dart';
+import '../../core/storage/drift/app_database.dart';
 
 /// ReviewPage - 复习
 ///
@@ -14,15 +18,18 @@ class ReviewPage extends StatefulWidget {
 
 class _ReviewPageState extends State<ReviewPage> {
   final ApiClient _apiClient = ApiClient();
+  late final FsrsService _fsrsService;
   ReviewGroup? _reviewGroup;
   ReviewGroupItem? _currentItem;
   bool _isLoading = false;
+  bool _isSubmitting = false;
   String? _error;
   bool _groupCompleted = false;
 
   @override
   void initState() {
     super.initState();
+    _fsrsService = FsrsService(db: AppDatabase());
     _loadReviewGroup();
   }
 
@@ -101,6 +108,65 @@ class _ReviewPageState extends State<ReviewPage> {
         _isLoading = false;
       });
     }
+  }
+
+  // P3.3: 4-button rating handler — bridge-first pattern.
+  // Cloud submit is primary (review_group contract preserved).
+  // FSRS local write is a best-effort side-effect bridge.
+  // CANDIDATE labels — final Chinese wording pending Room 3 + Room 5 freeze.
+  Future<void> _onRate(ReviewRating rating) async {
+    if (_isSubmitting || _currentItem == null || _reviewGroup == null) return;
+    if (mounted) setState(() { _isSubmitting = true; _error = null; });
+
+    try {
+      // Step 1: Idempotency key (existing pattern preserved exactly)
+      final idempotencyKey =
+          'review-${_reviewGroup!.reviewGroupId}-${_currentItem!.wordId}';
+
+      // Step 2: Binary mapping for cloud API (contract unchanged)
+      // again/hard → 'incorrect' | good/easy → 'correct'
+      final binaryResult = (rating == ReviewRating.good || rating == ReviewRating.easy)
+          ? 'correct'
+          : 'incorrect';
+
+      // Step 3: Cloud submit — PRIMARY; must succeed before bridge runs
+      final result = await _apiClient.submitReviewAttempt(
+        reviewGroupId: _reviewGroup!.reviewGroupId,
+        wordId: _currentItem!.wordId,
+        actionResult: binaryResult,
+        idempotencyKey: idempotencyKey,
+      );
+      if (mounted) setState(() { _groupCompleted = result.groupCompleted; });
+
+      // Step 4: FSRS bridge — best-effort side-effect
+      // Card may not exist in card_states if word was never studied in StudyPage.
+      // Silent failure is acceptable; cloud result already committed above.
+      try {
+        await _fsrsService.rateCard(_currentItem!.wordId, rating);
+      } catch (_) {}
+
+      // Step 5: Settlement handling (existing logic, preserved exactly)
+      if (result.groupCompleted && result.settlement != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '本组完成！奖励状态：${result.settlement!.rewardSettlementStatus}',
+              ),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+
+      // Step 6: Refresh group
+      await _loadReviewGroup();
+    } catch (e) {
+      if (mounted) setState(() { _error = e.toString(); _isSubmitting = false; });
+      return;
+    }
+
+    if (mounted) setState(() { _isSubmitting = false; });
   }
 
   @override
@@ -246,29 +312,11 @@ class _ReviewPageState extends State<ReviewPage> {
 
           const Spacer(),
 
-          // Action buttons
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _isLoading ? null : () => _submitReview('incorrect'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: const Text('忘记'),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : () => _submitReview('correct'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: const Text('正确'),
-                ),
-              ),
-            ],
+          // P3.3: 4-button rating. CANDIDATE labels — final wording pending Room 3 + Room 5 freeze.
+          // Bridge: again/hard → 'incorrect', good/easy → 'correct' (cloud contract unchanged).
+          FsrsRatingButtons(
+            onRate: _onRate,
+            enabled: !_isSubmitting,
           ),
           const SizedBox(height: 16),
         ],

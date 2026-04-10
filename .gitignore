@@ -10,6 +10,8 @@ build/
 *.dylib
 *.dll
 
+CLAUDE.md
+
 # Flutter
 .flutter-plugins
 .flutter-plugins-dependencies
