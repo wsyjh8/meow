@@ -79,9 +79,9 @@ class _StudyPageState extends State<StudyPage> {
     }
   }
 
-  // P3.3: 4-button rating handler.
+  // P3.3.1: 4-button rating handler.
   // Three-layer mapping: ReviewRating (semantic) → FSRS grade (local) + binary string (cloud).
-  // CANDIDATE labels — final Chinese wording pending Room 3 + Room 5 freeze.
+  // Final wording frozen: 不认识/模糊/记得/秒答.
   Future<void> _onRate(ReviewRating rating) async {
     if (_isSubmitting || _currentWord == null) return;
     if (mounted) setState(() { _isSubmitting = true; _error = null; });
@@ -201,7 +201,7 @@ class _StudyPageState extends State<StudyPage> {
 
           const Spacer(),
 
-          // P3.3: 4-button rating. CANDIDATE labels — final wording pending Room 3 + Room 5 freeze.
+          // P3.3.1: 4-button rating. Final wording frozen: 不认识/模糊/记得/秒答.
           FsrsRatingButtons(
             onRate: _onRate,
             enabled: !_isSubmitting,

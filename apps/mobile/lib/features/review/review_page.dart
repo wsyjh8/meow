@@ -110,10 +110,10 @@ class _ReviewPageState extends State<ReviewPage> {
     }
   }
 
-  // P3.3: 4-button rating handler — bridge-first pattern.
+  // P3.3.1: 4-button rating handler — bridge-first, controlled best-effort.
   // Cloud submit is primary (review_group contract preserved).
-  // FSRS local write is a best-effort side-effect bridge.
-  // CANDIDATE labels — final Chinese wording pending Room 3 + Room 5 freeze.
+  // FSRS local write: controlled best-effort bridge with idempotent init.
+  // Final wording frozen: 不认识/模糊/记得/秒答.
   Future<void> _onRate(ReviewRating rating) async {
     if (_isSubmitting || _currentItem == null || _reviewGroup == null) return;
     if (mounted) setState(() { _isSubmitting = true; _error = null; });
@@ -138,12 +138,20 @@ class _ReviewPageState extends State<ReviewPage> {
       );
       if (mounted) setState(() { _groupCompleted = result.groupCompleted; });
 
-      // Step 4: FSRS bridge — best-effort side-effect
-      // Card may not exist in card_states if word was never studied in StudyPage.
-      // Silent failure is acceptable; cloud result already committed above.
+      // Step 4: FSRS bridge — controlled best-effort (P3.3.1).
+      // Cloud submit succeeded above. Local bridge is a non-blocking side-effect.
+      // initCardForWord() is idempotent — reduces bridge misses for words not yet
+      // seen in StudyPage. Failure remains non-blocking and does NOT affect
+      // review_group continuation, group completion, or settlement.
+      // Observable via debugPrint for dev/test; no user-facing error.
       try {
+        await _fsrsService.initCardForWord(_currentItem!.wordId);
         await _fsrsService.rateCard(_currentItem!.wordId, rating);
-      } catch (_) {}
+      } catch (e) {
+        // Bridge fallback: non-blocking. Review main chain continues.
+        // Observable for dev/test — not user-facing.
+        debugPrint('[ReviewPage] FSRS bridge fallback: wordId=${_currentItem?.wordId}, error=$e');
+      }
 
       // Step 5: Settlement handling (existing logic, preserved exactly)
       if (result.groupCompleted && result.settlement != null) {
@@ -312,7 +320,7 @@ class _ReviewPageState extends State<ReviewPage> {
 
           const Spacer(),
 
-          // P3.3: 4-button rating. CANDIDATE labels — final wording pending Room 3 + Room 5 freeze.
+          // P3.3.1: 4-button rating. Final wording frozen: 不认识/模糊/记得/秒答.
           // Bridge: again/hard → 'incorrect', good/easy → 'correct' (cloud contract unchanged).
           FsrsRatingButtons(
             onRate: _onRate,

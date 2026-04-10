@@ -113,17 +113,33 @@ class FsrsRatingButtons extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // P3.3.1: 2×2 grid layout (frozen).
+    // Row 1: again (左上) | hard (右上)
+    // Row 2: good  (左下) | easy (右下)
+    final topRow = configs.take(2).toList();
+    final bottomRow = configs.skip(2).take(2).toList();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildRow(topRow),
+        const SizedBox(height: 8),
+        _buildRow(bottomRow),
+      ],
+    );
+  }
+
+  Row _buildRow(List<RatingButtonConfig> rowConfigs) {
     return Row(
-      children: configs.asMap().entries.map((entry) {
+      children: rowConfigs.asMap().entries.map((entry) {
         final i = entry.key;
         final config = entry.value;
         final preview = previewDurations?[config.rating];
-
         return Expanded(
           child: Padding(
             padding: EdgeInsets.only(
               left: i == 0 ? 0 : 4,
-              right: i == configs.length - 1 ? 0 : 4,
+              right: i == rowConfigs.length - 1 ? 0 : 4,
             ),
             child: _RatingButton(
               config: config,
