@@ -32,7 +32,14 @@
       "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"UPDATE user_book_settings SET daily_new_target = 6 WHERE user_id = 'dev-user-001'; SELECT daily_new_target FROM user_book_settings WHERE user_id = 'dev-user-001';\")",
       "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"SELECT local_date, new_completed, new_target, goal_status FROM daily_goal_progress ORDER BY local_date DESC LIMIT 5;\")",
       "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"SELECT COUNT\\(*\\) as total, date\\(created_at\\) as day FROM study_attempts WHERE action_result = 'know' GROUP BY day ORDER BY day;\")",
-      "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"UPDATE daily_goal_progress SET new_target = 6 WHERE user_id = 'dev-user-001' AND local_date = '2026-04-07';\")"
+      "Bash(PGPASSWORD=jason123 psql -U postgres -d meow_dev -c \"UPDATE daily_goal_progress SET new_target = 6 WHERE user_id = 'dev-user-001' AND local_date = '2026-04-07';\")",
+      "Bash(dart run:*)",
+      "Bash(gh pr create --title 'feat: FSRS integration + bug fixes + doc reconciliation' --body ':*)",
+      "Bash(where gh:*)",
+      "Bash(gh pr create --title 'feat: P3.3 home entry + 4-button FSRS integration \\(execution-entry delta\\)' --body ':*)",
+      "Bash(grep -E \"All tests passed|failed|FAILED|\\\\\\\\[E\\\\\\\\]\")",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
     ]
   }
 }
