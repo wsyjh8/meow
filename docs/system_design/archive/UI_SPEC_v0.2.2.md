@@ -1,0 +1,417 @@
+# 背单词喵喵 App UI SPEC v0.2.2
+
+- **Owner:** Room 5
+- **Project:** 背单词喵喵 App
+- **Version:** v0.2.2
+- **Date:** 2026-04-10
+- **Status:** incremental write-back patch / ready for Room 1 runtime-baseline update
+- **Purpose:** 在 `UI_SPEC_v0.2.1.md` 已成为当前 runtime active UI baseline 的前提下，按 **P3.3 First Pass Closed** 的已收口结果，对首页“背单词”入口、Study / Review 4 按钮交互、页面承接关系与文案事实边界做 **增量回写**。  
+  本稿不是重写整份 UI SPEC，也不是把 P3.3 preflight / candidate 全量升格；它只吸收 **已经被 Room 1 / Room 3 / Room 4 收口到足以影响后续开发、维护与新功能判断** 的 P3.3 页面现实。
+
+---
+
+## 0. 文档定位
+
+本稿是 **`UI_SPEC_v0.2.1.md` 的增量回写版**，用于把 **P3.3 First Pass Closed** 中已经足够稳定、且已通过 cross-room 对齐的 UI 现实，并入主 UI 文档。  
+它不是：
+- P3.3 preflight 原文复制
+- Room 2 / Room 4 的实现盘点文档
+- 最终高保真视觉稿
+- 把所有 pending candidate 一次性升格为 runtime truth 的版本
+
+本稿只做两件事：
+
+- **正式吸收进主 UI SPEC：**
+  - 首页新增“背单词”主入口后的页面现实
+  - Study / Review 已接入 4 按钮后的页面现实
+  - 4 按钮的 UI 层三分法（显示层 / 语义层 / 适配层）
+  - 与 P3.3 first-pass 相关的页面状态、提交反馈、防误报边界
+  - 已经通过 Room 4 第一拍实现与测试验证的最小 UI 事实
+
+- **继续保留为 pending / candidate，不直接升格：**
+  - 4 个两字中文按钮的最终 frozen wording
+  - 完整 review planning / 完整 SRS / 完整复习调度产品
+  - `previewDurations`
+  - 更强的 ReviewPage FSRS bridge contract
+  - 首页 CTA winner 的最终状态驱动收口
+
+### 0.1 运行时说明
+- 当前推进层 SSOT 中，**active UI baseline 仍是 `UI_SPEC_v0.2.1.md`**。
+- 本稿是 **推荐 next-step UI baseline candidate / runtime-baseline update candidate**。
+- 在 Room 1 将本稿正式吸收到 `Main / STATUS` 前，`v0.2.1` 仍是当前运行态依据。
+- 但从 Room 5 视角，后续开发、维护与新功能设计，**应开始优先参考本稿中的 P3.3 增量回写部分**，再向上服从当前 active PRD / BR / DB / API / ORG / Role Cards。
+## 1. 输入依据
+
+### 1.1 当前治理层 / 运行层依据
+- `ORG_v0.3.1.md`
+- `PROJECT_RULES_MASTER_v0.3.1.md`
+- `room5_v0.2.1.md`
+- `Main_updated_2026-04-10_v19.md`
+- `STATUS_updated_2026-04-10_v18.md`
+
+### 1.2 当前 active runtime basis
+- `背单词养猫app项目介绍书_v0.1.1_P3.1.md`
+- `背单词喵喵app_主机制prd_v0.3.1_P3.1.md`
+- `BR-OPP-001_v0.2.1.md`
+- `背单词喵喵app_DB设计草案_v0.2.1.md`
+- `背单词喵喵app_API设计草案_v0.2.1.md`
+- `UI_SPEC_v0.2.1.md`
+
+### 1.3 本轮增量吸收输入（P3.3）
+- `R1_P3_3_ScopePin_and_Handoff_Pack_v0.1.md`
+- `UI_SPEC_P3_3_HomeEntry_and_4Button_UI_Preflight_v0.1.1.md`
+- `R3_P3_3_FSRS_4Button_ReviewPlanning_Rules_Note_v0.1.md`
+- `R4_P3_3_Rating_Mapping_Matrix_v0.1.md`
+- `R4_P3_3_Session_Entry_Draft_v0.1.md`
+- `R4_P3_3_Submit_Flow_Draft_v0.1.md`
+- `R4_P3_3_Test_Draft_v0.1.md`
+- `R4_P3_3_Impact_Map_v0.1.md`
+
+### 1.4 吸收边界
+1. 只吸收 **P3.3 First Pass Closed** 已形成页面现实的内容
+2. 不把 preflight 中仍 pending 的 candidate 直接写成 frozen runtime truth
+3. 不让 Room 2 / Room 4 的实现级说明反向替代 UI owner 结论
+4. No silent UI drift
+## 2. Room 5 吸收原则
+
+### 2.1 可以正式吸收的内容
+1. 已经进入代码现实、并通过 Room 4 第一拍实现与测试验证的页面结构变化
+2. 已经影响后续开发与维护判断的入口、路由、按钮层级、页面承接关系
+3. 已经足以影响文案事实边界的交互变化（例如 4 按钮是 rating input，不是结果事实）
+4. 已经形成跨 Room 一致最小合同的 UI 层三分法（显示层 / 语义层 / 适配层）
+5. 已经能稳定复现、且会影响新功能判断的页面状态与防误报边界
+
+### 2.2 不能直接升格成正式 UI 事实的内容
+1. 尚未被 Room 1 pin 的产品结构变化
+2. Room 3 仍标注为 candidate 的最终按钮词面
+3. Room 2 / Room 4 负责的技术实现细节与性能折中
+4. 完整 SRS / 完整 review planning / 完整 CTA winner 算法
+5. 仍处于 deferred / bridge-first / best-effort 阶段的增强合同
+
+### 2.3 一句话原则
+> **把 P3.3 First Pass 已形成的页面现实吸收进主 UI SPEC；把仍未 pin 的按钮词面、完整 review planning、解释性增强与更强 contract 继续留在 Pending。**
+## 3. 总体信息架构（吸收后口径）
+
+### 3.1 当前推荐壳层结构
+应用当前推荐以 `SpecShell` 作为主壳，采用 **6-Tab 底部导航** 作为新的主入口结构：
+
+| Tab | 页面 | 定位 | 状态 |
+|---|---|---|---|
+| 首页 | `SpecHomePage` | 新默认首页 / 精简主入口 | 已实现 |
+| 词书 | placeholder | 词书域保留位 | 占位 |
+| Mochi | `SpecMochiPage` | 副机制聚合入口 | 已实现 |
+| 统计 | `SpecStatsPage` | 统计独立入口 | 已实现（数据仍有 mock） |
+| 我的 | `SpecProfilePage` | 设置 / 账号 / 数据入口 | 已实现 |
+| 原版 | `TodayPage` | Legacy 合约驱动页 / 开发参考 | 保留 |
+
+### 3.2 Room 5 对这套结构的正式表述
+- **本稿接受 `SpecShell 6-Tab` 作为当前代码现实下的主 UI 结构。**
+- 但 `TodayPage` 不视为废弃；它仍承载合约驱动、状态驱动更完整的主机制事实表达。
+- `SpecHomePage` 代表更轻、更新、更面向后续演进的首页方向，但当前仍存在 `主 CTA 静态跳转` 等未决项。
+- `SpecStatsPage` 与 `词书 Tab` 已进入正式信息架构，但各自状态不同：
+  - `Stats`: 结构存在，数据未 fully trustworthy
+  - `Books`: 位置存在，页面仍为 placeholder
+
+### 3.3 命名路由（正式吸收）
+| 路由 | 页面 | 作用 |
+|---|---|---|
+| `/` | `TodayPage` | Legacy 今日概览 |
+| `/study` | `StudyPage` | 新词学习 |
+| `/review` | `ReviewPage` | 复习 |
+| `/session` | `SessionPage` | 专注 Session |
+| `/check-in` | `CheckInPage` | 签到 |
+| `/settlement` | `SettlementPage` | 结算（当前仍为占位） |
+| `/meow-home` | `MeowHomePage` | 猫咪主页 |
+| `/inventory` | `InventoryPage` | 收藏与商店 |
+| `/customize` | `CustomizePage` | 装扮与小窝 |
+| `/settings` | `SettingsPage` | 设置 |
+
+---
+
+## 4. 设计系统结论（吸收后口径）
+
+### 4.1 当前并存现状
+当前代码现实中，UI 已存在三套系统并行：
+
+1. **SPEC 系统**  
+   适用于：`SpecHomePage / SpecMochiPage / SpecStatsPage / SpecProfilePage / SpecTabBar`
+
+2. **Legacy 系统**  
+   适用于：`TodayPage / MeowHomePage / CustomizePage / InventoryPage / SettingsPage`
+
+3. **原生 Material 极简系统**  
+   适用于：`StudyPage / ReviewPage / SessionPage / CheckInPage / SettlementPage`
+
+### 4.2 Room 5 正式判断
+- **这三套系统并存的现实，现在被正式记录为 UI baseline 现状。**
+- 后续新功能与维护开发，默认优先原则为：
+  1. 不制造第四套系统
+  2. 新页面优先向 **SPEC** 收敛
+  3. 仍在 Legacy 轨道上的页，优先保持低风险一致性，不做强行重皮
+  4. Material 极简页后续可逐步被更完整设计系统吸收，但不应因样式升级打断主学习低阻力
+
+### 4.3 SPEC Token 结论
+`SpecBg / SpecText / SpecBrand / SpecTypo / SpecRadius / SpecSpacing / SpecShadow` 体系已可视为当前新版 UI 的设计系统种子。  
+后续 Room 5 / Room 4 在新功能页上可直接复用，不需要再重新定义一套命名系统。
+
+---
+
+## 5. 页面级正式吸收结果
+
+## 5.1 SpecHomePage
+**定位：** 新首页 / 精简主入口 / P3.3 学习主线入口承接页  
+**正式吸收结论：**
+- 作为当前代码现实中的默认首页方向，继续保留为首页主容器。
+- P3.3 First Pass 已正式把 **独立“背单词”主入口** 接入到 `SpecHomePage`。
+- 当前首页关键信息层级更新为：
+  - 问候区
+  - 猫咪承接卡片
+  - **背单词主入口**
+  - 既有 `继续学习 / 今日任务` hero card
+  - 关键数字块
+  - `5 分钟快速复习` 入口
+- 当前页面承接现实：
+  - 点击 **“背单词”** → `/study`
+  - 既有 hero card 仍可 → `/study`
+  - `5 分钟快速复习` 仍可 → `/review`
+- 当前保留问题：
+  - 首页最终 **CTA winner** 仍未完成状态驱动化收口
+  - “背单词”主入口已是当前第一拍实现现实，但其是否长期保持最强主 CTA，仍需服从后续 Room 1 / Room 3 / Room 2 吸收
+- 因此，后续开发维护时：
+  - 可把 `SpecHomePage` 视为 P3.3 当前学习主线的首页承接基线
+  - 但**不能把当前首页存在两个都可进入 `/study` 的入口，误写成已冻结的长期 CTA 业务规则**
+## 5.2 SpecMochiPage
+**定位：** 副机制聚合入口  
+**正式吸收结论：**
+- 正式吸收为独立一级入口
+- 负责承接陪伴感、轻互动、弱收集欲，不反向主导主学习链路
+- `学单词，赚小鱼干` CTA 可以存在，但始终属于“引回主线”而不是“副线主导主线”
+
+## 5.3 SpecStatsPage
+**定位：** 统计独立入口  
+**正式吸收结论：**
+- 结构正式吸收，视为当前 IA 中真实存在的一级入口
+- 但页面数据可信度仍受限制：
+  - 当前存在 mock / 硬编码部分
+  - 不得把其中所有指标都当作 backend-confirmed truth
+- 后续开发维护可在此页继续做真实数据替换与 minimal stats deepening
+- 但 Room 5 口径仍是：**页面结构已吸收，数据事实仍需向 BR / DB / API / runtime 对齐**
+
+## 5.4 SpecProfilePage
+**定位：** 我的 / 设置 / 数据入口  
+**正式吸收结论：**
+- 正式吸收
+- 视为当前设置、同步与备份、个人/词书入口的上层容器
+- 与 `/settings` 的关系：`Profile` 是导航入口，`Settings` 是具体操作页
+
+## 5.5 TodayPage（Legacy）
+**定位：** 合约驱动更完整的今日页 / 保留参考页  
+**正式吸收结论：**
+- 不视为废弃
+- 继续保留为“主机制状态表达最完整”的参考基线之一
+- 后续如需迁移其合约驱动能力到 SpecHomePage，应明确做 sync patch，而不是默认认为两页已经等价
+
+## 5.6 StudyPage
+**定位：** 新词学习主页 / P3.3 FSRS 4 按钮接入页  
+**正式吸收结论：**
+- P3.3 First Pass 后，`StudyPage` 已不再以 2 按钮作为当前页面现实；**4 按钮 rating input 已进入本页当前代码现实**。
+- 当前页面应按以下三层理解：
+  1. **Display Layer**：两字中文按钮文案（当前仍是 candidate copy）
+  2. **Semantic Layer**：`again / hard / good / easy`
+  3. **Adapter Layer**：FSRS `1 / 2 / 3 / 4`
+- Room 5 当前正式吸收的是：
+  - **StudyPage 采用 4 按钮交互框架**
+  - 按钮顺序保持单调、稳定、与 ReviewPage 一致
+  - 按钮本质是 **rating input**
+  - 不得被页面文案写成“已掌握 / 已完成 / 已升级 / 已到账”
+- 当前页面交互现实：
+  - 4 按钮点击时进入 submitting 态
+  - 提交中按钮应 disable，不允许重复记分
+  - 不再展示旧的“已掌握 ✓”式 false-success snackbar
+  - 失败时应停留在当前卡片并给出错误反馈，而不是静默跳到下一词
+- 当前页面数据 / 交互边界：
+  - 本地 FSRS 写入已进入当前现实
+  - 同时仍保留 StudyService 的本地优先提交与后台同步路径
+  - 但页面层**不直接展示 FSRS grade int**
+- 因此，后续开发维护时：
+  - 应把 `StudyPage` 视为 **4 按钮 rating input 已落地** 的页面
+  - 但**不能把当前两字中文按钮文案误写成最终 frozen business copy，也不能把某一按钮点击写成结果事实**
+## 5.7 ReviewPage
+**定位：** 复习页 / P3.3 review-group 承接页  
+**正式吸收结论：**
+- P3.3 First Pass 后，`ReviewPage` 已接入与 `StudyPage` 同构的 **4 按钮 rating input** 交互框架。
+- 当前页面必须继续保留以下强边界：
+  - `review_group` 仍是 **ReviewPage 的云端 truth layer**
+  - 本地 FSRS 在本页只是 **bridge-first / side-effect**，不替代 `review_group`
+  - 本页不得用本地 FSRS due 列表取代当前 review queue
+- 当前页面已正式吸收的现实：
+  - 4 按钮顺序与 `StudyPage` 一致
+  - 评分提交仍先以云端 `submitReviewAttempt` 为主
+  - 本地 FSRS bridge 失败当前为 non-blocking / best-effort
+  - `group completion` 与既有 settlement 承接逻辑继续保留
+- 当前页面文案边界：
+  - `本组完成 != 今日复习完成`
+  - 任意一个 4 按钮点击都只是 rating input，不得直接写成“已掌握 / 今日已完成 / 奖励已到账”
+  - 只有实际 `groupCompleted` / settlement 条件满足时，才允许展示相应结果层反馈
+- 因此，后续开发维护时：
+  - 可把 `ReviewPage` 视为 **4 按钮已接入，但 review_group 仍是主真相源** 的页面
+  - 但**不能把当前 best-effort FSRS bridge 误写成长期最终 contract**
+## 5.8 SessionPage
+**定位：** 专注 Session  
+**正式吸收结论：**
+- 正式吸收三态结构：无 session / 进行中 / 已结束反馈
+- `valid / invalid / pending` 的最终展示必须继续以后端 `session_validation_status` 为准
+
+## 5.9 CheckInPage
+**定位：** 签到页  
+**正式吸收结论：**
+- 正式吸收当前精简版
+- 月历、节点奖励列表、节点奖励预告继续保持 Pending
+- 当前已吸收的强边界：
+  - `check_in != learning_day`
+  - `learning_day != streak`
+
+## 5.10 SettlementPage
+**定位：** 结算页  
+**正式吸收结论：**
+- 正式吸收它目前是 **占位页**
+- 不再假装已有完整结算体验
+- 后续所有结算相关开发，应以“当前未实现”作为依据，而不是沿用旧稿中的完整五区结算假设
+
+## 5.11 MeowHomePage
+**定位：** 猫咪主页  
+**正式吸收结论：**
+- 正式吸收
+- 当前已具备：
+  - 资源栏
+  - 成长区
+  - 亮点区
+  - companion 区
+  - 跳转 Customize / Inventory
+- 后续副机制维护和增强应以此页为真实基线，而不是回到最初仅摘要卡的抽象状态
+
+## 5.12 CustomizePage
+**定位：** 装扮与小窝  
+**正式吸收结论：**
+- 正式吸收
+- 当前“预览区 + 资源栏 + 攒钱目标 + 已拥有未装备提示 + tab + 物品卡片 + 槽位”结构可作为后续装扮维护基线
+
+## 5.13 InventoryPage
+**定位：** 收藏与商店  
+**正式吸收结论：**
+- 正式吸收
+- 当前已具备“余额卡片 + 收藏列表 + 商店列表 + 购买反馈”主结构
+- 后续开发可在此页继续扩商店与收藏，但不应引入超出当前主副机制边界的复杂运营逻辑
+
+## 5.14 SettingsPage
+**定位：** 设置 / 本地数据 / 备份恢复  
+**正式吸收结论：**
+- 正式吸收
+- 当前它已经是：
+  - daily goal 设置页
+  - desired retention 设置入口
+  - backup 上传入口
+  - restore gated 入口
+- 后续与 P3.1 相关的开发维护，默认以本页为入口基线，而不是重新发明一条数据设置路径
+
+## 5.15 词书 Tab
+**定位：** IA 保留位  
+**正式吸收结论：**
+- 正式记录“位置存在，但页面未设计”
+- 后续新功能若涉及词书域，可直接以此保留位继续展开
+- 但在当前版本，不应把它误写成已完成页面
+
+---
+
+## 6. 关键状态与文案边界（正式保留）
+
+以下边界继续作为正式 UI 口径保留，并适用于后续开发、维护、新功能：
+
+1. **部分完成 != 已完成**
+2. **本轮完成 / 本组完成 != 今日完成**
+3. **签到成功 != learning_day**
+4. **learning_day != streak 自动成立**
+5. **Session started / ended != valid session completed**
+6. **奖励展示 != 奖励到账**
+7. **displayed snapshot != fresh backend truth**
+8. **upload success != download success != restore success**
+9. **副机制反馈不得反向宣告主机制事实**
+10. **未 pin 的 candidate contract，前端不得自行补脑为已存在事实**
+11. **4 按钮 = rating input，不是结果事实**
+12. **两字中文按钮当前可显示，但仍属于 candidate wording，不自动等于 frozen business copy**
+13. **Study / Review 的 4 按钮显示层、语义层、适配层必须分开理解，不得把显示词面直接当作系统内部真相键**
+14. **ReviewPage 中本地 FSRS bridge != review_group 主真相源**
+15. **download / submit / rating completed 本身 != 已恢复 / 已掌握 / 已到账 / 今日已完成**
+## 7. 当前可直接作为下一步依据的内容
+
+以下内容现在就可以作为后续开发、维护、新功能的直接 UI 依据：
+
+### 7.1 IA / 导航层
+- `SpecShell 6-Tab`
+- `Profile -> Settings`
+- `Legacy Today` 保留
+- `MeowHome / Customize / Inventory` 作为真实副机制链路
+- `SpecHomePage` 当前已存在独立 **“背单词”** 入口
+- `SpecHomePage -> /study`、`快速复习 -> /review` 是当前已落地页面承接关系
+
+### 7.2 设计系统层
+- 新功能页优先向 SPEC 收敛
+- 旧页短期保持 Legacy，不强行重皮
+- 不再新增第四套视觉体系
+- Study / Review 当前虽仍属 Material 极简轨道，但其 4 按钮交互已成为必须维持的一致体验点
+
+### 7.3 页面事实层
+- `SettlementPage` 当前仍是占位
+- `Stats` 结构存在但数据未 fully trustworthy
+- `Study / Review` 当前已进入 **4 按钮 first-pass reality**
+- 两字中文按钮当前已显示，但仍是 **candidate wording**
+- `Settings` 已是数据设置与备份入口
+- `ReviewPage` 当前仍以 `review_group` 为主真相源，本地 FSRS 为 bridge
+
+### 7.4 新功能开发层
+- 若新增首页学习入口相关能力，默认加在 `SpecHomePage`
+- 若新增 FSRS / rating 相关 UI，默认以 `StudyPage / ReviewPage` 的 4 按钮框架为基线
+- 若新增副机制承接，默认看 `SpecMochiPage` 与 `MeowHomePage`
+- 若新增统计能力，默认加在 `SpecStatsPage`
+- 若新增账号/设置/备份项，默认加在 `SpecProfilePage -> SettingsPage`
+## 8. Pending / 风险（吸收后保留）
+
+### Critical
+1. Settlement 真正实现
+2. SpecHomePage 主 CTA / CTA winner 状态驱动化
+3. P3.3 第二拍 focus 尚未由 Room 1 / User 正式拍板
+
+### Major
+4. 4 个两字中文按钮的最终 frozen wording
+5. `previewDurations` / 即时可解释性增强仍为 deferred
+6. ReviewPage FSRS bridge 是否需要更强 contract
+7. `review_group` 与本地 FSRS 的长期权威边界 / planner owner
+8. Stats 真实数据接入与可信度对齐
+9. SPEC 设计系统进一步统一
+
+### Minor
+10. Mochi 页主 CTA 是否过强
+11. Stats Tab 与 feature guard 可见性一致性
+12. 词书页完整设计
+13. `StudyPage / ReviewPage` 是否长期收敛为统一学习承接页
+## 9. Appendix A — 代码现状附录（降级信息）
+
+以下内容保留为附录参考，不作为 Room 5 主结论：
+- 具体代码文件路径
+- 具体 route 注册方式
+- drift / SQLite / SharedPreferences / service 编排细节
+- 仅用于解释“为什么页面现在是这样”，不用于替代 PRD / BR / DB / API / UI 的正式层级
+
+---
+
+## 10. 下一步建议（Room 5）
+
+1. 由 Room 1 将本稿作为 **`UI_SPEC_v0.2.2.md` runtime-baseline update candidate** 吸收到 `Main / STATUS`
+2. Room 4 后续开发、维护、新功能默认优先参考本稿中的 **P3.3 增量回写部分**
+3. Room 3 / Room 5 / Room 1 需在下一轮优先收口 **4 个两字中文按钮最终词面**
+4. 若 Room 1 确认进入 P3.3 第二拍，应围绕：
+   - CTA winner 的状态驱动收口
+   - `previewDurations`
+   - ReviewPage FSRS bridge 强化
+   - review planning owner / planner 边界
+   做下一轮 UI delta，而不是回退到 preflight 状态
