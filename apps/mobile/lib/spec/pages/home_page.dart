@@ -207,9 +207,15 @@ class _SpecHomePageState extends State<SpecHomePage> {
     );
   }
 
-  // ==================== P3.3: 背单词 Primary Entry ====================
-  // NOTE: Session launch mode pending Room 2/3 freeze — navigate only.
-  // Candidate copy ("背单词" / "开始今天的学习") is page-level UI text, not a persistence value.
+  // ==================== P3.3 / P3.3.2: 背单词 Primary Entry ====================
+  // session_entry_policy_v1 (FROZEN, P3.3.2):
+  //   home_word_entry = study_default
+  //   "背单词" → StudyPage is the default entry, always.
+  //   This is NOT a review dispatcher. NOT a mixed/auto-routing dispatcher.
+  //   active review_group continuation is expressed via the independent
+  //   review CTA in _buildQuickReview(), NOT by rerouting this button.
+  //   If auto-routing / mixed dispatch is ever needed, it must be pinned
+  //   in a separate round — never silently added here.
 
   Widget _buildStudyEntry() {
     return Padding(
@@ -391,10 +397,25 @@ class _SpecHomePageState extends State<SpecHomePage> {
   }
 
   // ==================== 6.1.6 Quick Review Entry ====================
+  // session_entry_policy_v1 (FROZEN, P3.3.2):
+  //   This is the INDEPENDENT CTA承接 for active review_group continuation.
+  //   It is SEPARATE from "背单词". Its existence does NOT make "背单词"
+  //   a review dispatcher — both entries coexist independently.
+  //   Currently always shown (dev simplification). If future dynamic
+  //   show/hide based on active review_group state is needed, it requires
+  //   a separate contract pin with Room 1.
+  //
+  // review_priority_policy_v1 (FROZEN, P3.3.3):
+  //   Priority hierarchy: continuation > dueReview > highPriorityReview > newWords > session
+  //   This CTA承接 review_group continuation at the highest priority tier.
+  //   However, continuation priority ≠ silent reroute of "背单词".
+  //   dueReview / highPriorityReview ONLY count if cloud-confirmed (serving-confirmed).
+  //   Local FSRS due count MUST NOT be used as a priority signal here.
+  //   newWords (study_default) is the stable fallback — currently the default "背单词" path.
+  //   session continues at lowest priority — NOT auto-promoted.
 
   Widget _buildQuickReview() {
-    // Dynamic rule: show only in certain conditions
-    // Simplified for dev: always show
+    // Dev simplification: always show. Future: conditional on active review_group.
     return Padding(
       padding: const EdgeInsets.fromLTRB(SpecSpacing.pageH, 0, SpecSpacing.pageH, 18),
       child: SpecCardOutlined(

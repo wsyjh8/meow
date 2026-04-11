@@ -77,7 +77,14 @@ class ApiClient {
 
   // ========== Review Groups ==========
 
-  /// Get or create active review group
+  /// Get or create active review group.
+  ///
+  /// review_group_compatibility_contract_v1 (FROZEN, P3.3.5):
+  ///   CURRENT RUNTIME PATH — MUST continue to be called by ReviewPage.
+  ///   Future deprecation candidate (if local-serving cutover is pinned).
+  ///   Do NOT bypass, replace, or condition-gate this call without a
+  ///   Room 1 pin. RF-P3.3.5-015: `review_group` / cloud readiness
+  ///   enters staged deprecation — NOT "disappeared".
   Future<ReviewGroup> getNextReviewGroup() async {
     final response =
         await _client.get(Uri.parse('$baseUrl/me/review-groups/next'));
@@ -86,14 +93,24 @@ class ApiClient {
         json.decode(response.body) as Map<String, dynamic>,
       );
     }
+    // Include statusCode so ReviewPage can distinguish not_ready_now (404)
+    // from temporarily_unservable (network/server errors).
+    // review_readiness_policy_v1 (P3.3.3): truth source is cloud response.
     throw ApiException(
       'GET /me/review-groups/next failed: ${response.statusCode}',
+      statusCode: response.statusCode,
     );
   }
 
   // ========== Review Attempts ==========
 
-  /// Submit a review attempt
+  /// Submit a review attempt to the cloud fact/settlement layer.
+  ///
+  /// review_group_compatibility_contract_v1 (FROZEN, P3.3.5):
+  ///   CURRENT RUNTIME PATH — cloud-first submission is PRIMARY.
+  ///   Fact/settlement owner = cloud backend; NOT a cut candidate
+  ///   this round per RF-P3.3.5-003 (local owner shift does not
+  ///   automatically bring fact owner shift).
   Future<ReviewAttemptResult> submitReviewAttempt({
     required String reviewGroupId,
     required String wordId,
@@ -672,6 +689,14 @@ class RewardItemInfo {
   }
 }
 
+/// Review group fetched from the cloud serving layer.
+///
+/// review_group_compatibility_contract_v1 (FROZEN, P3.3.5):
+///   Current runtime: this DTO IS the ReviewPage serving truth shape.
+///   Future deprecation candidate — NOT deprecated in this round.
+///   MUST continue to be consumed in runtime. RF-P3.3.5-016: deprecated
+///   MUST NOT be written as active truth and MUST NOT be pretended
+///   fully migrated.
 class ReviewGroup {
   final String reviewGroupId;
   final String groupStatus;
@@ -1342,7 +1367,15 @@ class EquipResultData {
 
 class ApiException implements Exception {
   final String message;
-  ApiException(this.message);
+
+  /// HTTP status code, if available.
+  /// Used by ReviewPage to distinguish `not_ready_now` (404) from
+  /// `temporarily_unservable` (network/server errors).
+  /// schedule_source_contract_v1 (P3.3.3): readiness derivation uses cloud
+  /// signals — this statusCode is from the cloud response, not local FSRS.
+  final int? statusCode;
+
+  ApiException(this.message, {this.statusCode});
 
   @override
   String toString() => 'ApiException: $message';

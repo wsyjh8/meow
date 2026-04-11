@@ -240,6 +240,15 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
   }
 
   // ==================== 6.4.5 Data Settings ====================
+  //
+  // backup_restore_semantic_contract_v1 (FROZEN, P3.3.5):
+  //   Label is "备份与恢复" — NOT "同步与备份". There is no real-time
+  //   sync in the current regime (RF-P3.3.5-013: sync_success is NOT a
+  //   valid user-facing state). A row-level timestamp value like
+  //   "5 分钟前" is NOT shown here because:
+  //     1. Hardcoded timestamps imply sync_success (forbidden).
+  //     2. The authoritative backup status lives on /settings.
+  //   See `lib/core/backup/backup_restore_semantics.dart` for full contract.
 
   Widget _buildDataSettings() {
     return Padding(
@@ -251,8 +260,7 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
           SpecSettingsGroup(
             rows: [
               SpecSettingsRow(
-                label: '同步与备份',
-                value: '5 分钟前',
+                label: '备份与恢复',
                 onTap: () => Navigator.pushNamed(context, '/settings'),
               ),
               SpecSettingsRow(

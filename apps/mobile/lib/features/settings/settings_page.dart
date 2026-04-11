@@ -19,12 +19,26 @@ import '../../shared/widgets/meow_chip.dart';
 /// - "立即备份" button
 /// - Latest backup status display
 /// - Retry on failure
+/// - Restore from backup (P3.1 Phase 4, gated by feature flag)
 ///
 /// It does NOT provide:
-/// - Restore
 /// - Delete backup
 /// - Clear local data
 /// - Sync controls
+///
+/// backup_restore_semantic_contract_v1 (FROZEN, P3.3.5):
+///   Three-layer separation enforced:
+///     Layer 1 — backup_success:  source device only, NOT cross-device
+///     Layer 2 — restore_success: target device only, NOT cross-device
+///     Layer 3 — sync_success:    NOT a valid user-facing state this round
+///
+///   MUST NOT display:
+///     "已同步" / "云端与本地已统一" / "跨设备已一致" /
+///     "恢复后所有设备自动更新" / "无需担心冲突" / "无冲突" /
+///     "现在所有设备的学习计划都一样"
+///
+///   See `lib/core/backup/backup_restore_semantics.dart` for the full
+///   forbidden list and frozen rule references (RF-P3.3.5-012/013/014).
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -182,11 +196,15 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
 
-          // Note: not sync
+          // Note: not sync.
+          // backup_restore_semantic_contract_v1 (FROZEN, P3.3.5):
+          //   Layer 1 backup_success is SOURCE-device only. The note must
+          //   explicitly disclaim real-time sync AND cross-device consistency,
+          //   so the user cannot misread "backup success" as "other devices
+          //   have been updated". See backup_restore_semantics.dart.
           const SizedBox(height: MeowSpacing.sm),
           Text(
-            '\u5907\u4efd\u4f1a\u5c06\u5f53\u524d\u8fdb\u5ea6\u4fdd\u5b58\u5230\u4e91\u7aef\uff0c\u4e0d\u662f\u5b9e\u65f6\u540c\u6b65',
-            // 备份会将当前进度保存到云端，不是实时同步
+            '备份会将当前进度保存到云端，不是实时同步，也不代表其他设备自动一致',
             style: MeowTextStyles.caption.copyWith(color: MeowColors.textHint),
           ),
 

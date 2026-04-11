@@ -25,6 +25,12 @@ class _StudyPageState extends State<StudyPage> {
   bool _isSubmitting = false;
   String? _error;
 
+  /// preview_durations_reentry_contract_v1 (FROZEN, P3.3.4):
+  /// Source: local FSRS candidate only (FsrsService.previewSchedule).
+  /// NOT cloud serving truth. NOT a stable plan fact.
+  /// Null when: word not yet loaded, during submission, or FSRS card absent/error.
+  Map<ReviewRating, Duration>? _previewDurations;
+
   @override
   void initState() {
     super.initState();
@@ -49,33 +55,31 @@ class _StudyPageState extends State<StudyPage> {
 
     try {
       final word = await _studyService.getNextWord();
-      if (mounted) setState(() { _currentWord = word; _isLoading = false; });
+      if (mounted) {
+        setState(() { _currentWord = word; _isLoading = false; });
+        // Load preview after word is set — non-blocking, best-effort.
+        if (word != null) await _loadPreviewForWord(word.wordId);
+      }
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _isLoading = false; });
     }
   }
 
-  Future<void> _submitStudy(String actionResult) async {
-    if (_currentWord == null) return;
-
-    setState(() { _isLoading = true; _error = null; });
-
+  /// preview_durations_reentry_contract_v1 (FROZEN, P3.3.4):
+  /// Loads local FSRS scheduling candidate durations for the current word.
+  ///
+  /// - Source: local FSRS only (NOT cloud serving truth)
+  /// - Not a stable plan fact — just a rough interval hint
+  /// - initCardForWord() is idempotent: no-op if card already exists
+  /// - All errors silently ignored — preview is strictly optional
+  Future<void> _loadPreviewForWord(String wordId) async {
     try {
-      // LOCAL FIRST: writes to SQLite immediately, returns instantly
-      await _studyService.submitStudyAttempt(
-        wordId: _currentWord!.wordId,
-        bookId: _currentWord!.bookId,
-        studyType: 'new',
-        actionResult: actionResult,
-      );
-
-      if (mounted) {
-        setState(() => _isLoading = false);
-        // Load next word
-        await _loadNextWord();
-      }
-    } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _isLoading = false; });
+      await _fsrsService.initCardForWord(wordId);
+      final preview = await _fsrsService.previewSchedule(wordId);
+      if (mounted) setState(() => _previewDurations = preview);
+    } catch (_) {
+      // Preview is best-effort / reference-only — silently clear on any error.
+      if (mounted) setState(() => _previewDurations = null);
     }
   }
 
@@ -84,7 +88,8 @@ class _StudyPageState extends State<StudyPage> {
   // Final wording frozen: 不认识/模糊/记得/秒答.
   Future<void> _onRate(ReviewRating rating) async {
     if (_isSubmitting || _currentWord == null) return;
-    if (mounted) setState(() { _isSubmitting = true; _error = null; });
+    // Clear preview during submission — buttons are disabled anyway.
+    if (mounted) setState(() { _isSubmitting = true; _error = null; _previewDurations = null; });
 
     try {
       // Step 1: Ensure FSRS card exists (idempotent — no-op if already initialized)
@@ -202,10 +207,26 @@ class _StudyPageState extends State<StudyPage> {
           const Spacer(),
 
           // P3.3.1: 4-button rating. Final wording frozen: 不认识/模糊/记得/秒答.
+          // preview_durations_reentry_contract_v1 (FROZEN, P3.3.4):
+          //   previewDurations = local FSRS candidate hint — NOT cloud serving truth.
+          //   Null during submission or when card state unavailable.
           FsrsRatingButtons(
             onRate: _onRate,
             enabled: !_isSubmitting,
+            previewDurations: _previewDurations,
           ),
+          // Disclaimer shown only when preview is loaded.
+          // "仅供参考" is load-bearing: must not be changed to a confirmed-fact expression.
+          // MUST NOT contain: "下次将在X天后复习", "系统已安排", "已更新计划".
+          if (_previewDurations != null)
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text(
+                '预计间隔（仅供参考）',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 10, color: Color(0xFFAAAAAA)),
+              ),
+            ),
           const SizedBox(height: 16),
         ],
       ),
