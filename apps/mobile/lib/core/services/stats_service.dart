@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:drift/drift.dart' show Variable;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -210,6 +212,152 @@ class StatsService {
       ));
     }
     return cells;
+  }
+
+  // ── Tab 2: 记忆分析 ────────────────────────────────────────────────────────
+
+  /// 遗忘曲线 / 记忆留存率：基于 `review_logs.elapsed_days` 分 7 桶。
+  ///
+  /// 每桶: userRetention = COUNT(rating ≥ 3) / COUNT(*)；样本 < 3 时为 null。
+  /// 同时给出艾宾浩斯标准曲线值 R(t) = exp(-t / 1.0) 在桶中点的取值。
+  Future<List<RetentionBucket>> getRetentionCurve() async {
+    final rows = await _driftDb.customSelect(
+      'SELECT elapsed_days, rating FROM review_logs WHERE elapsed_days > 0',
+    ).get();
+
+    // 桶定义：(label, midDays, lower, upper)
+    const buckets = [
+      ('20分', 0.014, 0.0, 0.021),
+      ('1时', 0.042, 0.021, 0.083),
+      ('9时', 0.292, 0.083, 0.5),
+      ('1天', 1.0, 0.5, 1.5),
+      ('2天', 2.5, 1.5, 4.0),
+      ('6天', 9.0, 4.0, 15.0),
+      ('31天', 30.0, 15.0, double.infinity),
+    ];
+    // 累加每桶 (correct, total)
+    final counts = List<List<int>>.generate(buckets.length, (_) => [0, 0]);
+    for (final r in rows) {
+      final ed = r.read<double>('elapsed_days');
+      final rating = r.read<int>('rating');
+      for (var i = 0; i < buckets.length; i++) {
+        final (_, _, lo, hi) = buckets[i];
+        if (ed > lo && ed <= hi) {
+          counts[i][1] += 1; // total
+          if (rating >= 3) counts[i][0] += 1; // correct
+          break;
+        }
+      }
+    }
+    return List.generate(buckets.length, (i) {
+      final (label, mid, _, _) = buckets[i];
+      final correct = counts[i][0];
+      final total = counts[i][1];
+      // Ebbinghaus R(t) = exp(-t / S), S=1.0 (天)
+      final ebb = _ebbinghaus(mid);
+      return RetentionBucket(
+        label: label,
+        midDays: mid,
+        userRetention: total >= 3 ? correct / total : null,
+        ebbinghaus: ebb,
+        sampleCount: total,
+      );
+    });
+  }
+
+  /// 词汇掌握等级分布（环形图）：陌生 / 学习中 / 熟悉 / 牢记。
+  ///
+  /// 阈值（FROZEN）：
+  ///   陌生 = active book 总词数 - card_states 中本书命中数
+  ///   学习中 = state IN (1, 3) 或 stability < 7
+  ///   熟悉 = state == 2 AND 7 ≤ stability < 30
+  ///   牢记 = state == 2 AND stability ≥ 30
+  Future<MasteryDistribution> getMasteryDistribution() async {
+    final activeBook = LocalSettingsService(_prefs).activeWordbook;
+    final total = await _driftDb.countWordsInBook(activeBook);
+    if (total == 0) return MasteryDistribution.empty;
+
+    final bookIds = await _driftDb.getWordIdsForBook(activeBook);
+
+    // 全量 SELECT card_states，内存交集（避免 SQLite IN 999 限制）
+    final csRows = await _driftDb.customSelect(
+      'SELECT word_id, state, stability FROM card_states',
+    ).get();
+
+    var learning = 0, familiar = 0, mastered = 0;
+    final hitIds = <String>{};
+    for (final r in csRows) {
+      final wid = r.read<String>('word_id');
+      if (!bookIds.contains(wid)) continue;
+      hitIds.add(wid);
+      final state = r.read<int>('state');
+      final stability = r.readNullable<double>('stability') ?? 0.0;
+      if (state == 1 || state == 3 || stability < 7) {
+        learning++;
+      } else if (state == 2 && stability < 30) {
+        familiar++;
+      } else if (state == 2 && stability >= 30) {
+        mastered++;
+      } else {
+        learning++; // fallback
+      }
+    }
+    final unfamiliar = total - hitIds.length;
+    return MasteryDistribution(
+      unfamiliar: unfamiliar < 0 ? 0 : unfamiliar,
+      learning: learning,
+      familiar: familiar,
+      mastered: mastered,
+    );
+  }
+
+  /// 测试正确率趋势：近 [days] 天每天 review_logs 的 (rating ≥ 3) 占比。
+  Future<List<DailyAccuracy>> getAccuracyTrend({int days = 14}) async {
+    final now = DateTime.now();
+    final todayLocal = DateTime(now.year, now.month, now.day);
+    final startLocal = todayLocal.subtract(Duration(days: days - 1));
+    final startUtcMs = startLocal.toUtc().millisecondsSinceEpoch;
+
+    final rows = await _driftDb.customSelect(
+      'SELECT review_time_utc, rating FROM review_logs WHERE review_time_utc >= ?',
+      variables: [Variable.withInt(startUtcMs)],
+    ).get();
+
+    // 按本地日累加 (correct, total)
+    final byDay = <String, List<int>>{};
+    for (final r in rows) {
+      final ms = r.read<int>('review_time_utc');
+      final localDate =
+          DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+      final key = _dateKey(localDate);
+      final entry = byDay.putIfAbsent(key, () => [0, 0]);
+      entry[1] += 1; // total
+      if (r.read<int>('rating') >= 3) entry[0] += 1; // correct
+    }
+
+    final result = <DailyAccuracy>[];
+    for (var i = 0; i < days; i++) {
+      final d = startLocal.add(Duration(days: i));
+      final key = _dateKey(d);
+      final entry = byDay[key];
+      if (entry == null || entry[1] == 0) {
+        result.add(DailyAccuracy(localDate: d, accuracy: null, sampleCount: 0));
+      } else {
+        result.add(DailyAccuracy(
+          localDate: d,
+          accuracy: entry[0] / entry[1],
+          sampleCount: entry[1],
+        ));
+      }
+    }
+    return result;
+  }
+
+  /// 艾宾浩斯遗忘曲线：R(t) = exp(-t / S)，S=1.0 (默认稳定常数，单位天)。
+  static double _ebbinghaus(double days, {double s = 1.0}) {
+    final r = -days / s;
+    if (r < -100) return 0.0;
+    return math.exp(r).clamp(0.0, 1.0);
   }
 
   // ── 私有辅助 ───────────────────────────────────────────────────────────────
