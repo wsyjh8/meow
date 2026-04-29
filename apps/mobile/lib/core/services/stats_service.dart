@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../storage/drift/app_database.dart';
 import '../storage/local_database.dart';
 import '../storage/local_settings_service.dart';
+import '../util/pos_label.dart';
 import '../../spec/pages/stats/models/stats_models.dart';
 
 /// 统计服务 — 集中所有统计页跨表查询。
@@ -351,6 +352,83 @@ class StatsService {
       }
     }
     return result;
+  }
+
+  // ── Tab 3: 重点难点 ────────────────────────────────────────────────────────
+
+  /// Top N 顽固单词：按 lapses DESC, reps ASC 排序。
+  ///
+  /// 跨 card_states + word_entries / cached_words 查 word_text + meaning。
+  /// lapses=0 不入榜。
+  Future<List<StubbornWord>> getTopStubbornWords({int limit = 10}) async {
+    final csRows = await _driftDb.customSelect(
+      'SELECT word_id, lapses, reps FROM card_states '
+      'WHERE lapses > 0 '
+      'ORDER BY lapses DESC, reps ASC '
+      'LIMIT ?',
+      variables: [Variable.withInt(limit)],
+    ).get();
+    if (csRows.isEmpty) return [];
+
+    final wordIds = csRows.map((r) => r.read<String>('word_id')).toList();
+    // 批量取 wordText + meaning（word_entries 优先，cached_words 兜底）
+    final wePh = wordIds.map((_) => '?').join(', ');
+    final weRows = await _driftDb.customSelect(
+      'SELECT word_id, word_text, meaning FROM word_entries WHERE word_id IN ($wePh)',
+      variables: wordIds.map(Variable.withString).toList(),
+    ).get();
+    final wordMap = <String, (String, String)>{};
+    for (final r in weRows) {
+      wordMap[r.read<String>('word_id')] =
+          (r.read<String>('word_text'), r.read<String>('meaning'));
+    }
+    final remaining = wordIds.where((id) => !wordMap.containsKey(id)).toList();
+    if (remaining.isNotEmpty) {
+      final cwPh = remaining.map((_) => '?').join(', ');
+      final cwRows = await _driftDb.customSelect(
+        'SELECT word_id, word_text, meaning FROM cached_words WHERE word_id IN ($cwPh)',
+        variables: remaining.map(Variable.withString).toList(),
+      ).get();
+      for (final r in cwRows) {
+        wordMap[r.read<String>('word_id')] =
+            (r.read<String>('word_text'), r.read<String>('meaning'));
+      }
+    }
+
+    return csRows
+        .map((r) {
+          final wid = r.read<String>('word_id');
+          final tuple = wordMap[wid];
+          if (tuple == null) return null;
+          return StubbornWord(
+            wordId: wid,
+            wordText: tuple.$1,
+            meaning: tuple.$2,
+            lapses: r.read<int>('lapses'),
+            reps: r.read<int>('reps'),
+          );
+        })
+        .whereType<StubbornWord>()
+        .toList();
+  }
+
+  /// 词性雷达图（4 项）：基于已掌握单词集 (word_records WHERE action_result='know')。
+  Future<PosRadarData> getPosRadar() async {
+    final masteredIds = (await _localDb.getMasteredWordIds()).toList();
+    if (masteredIds.isEmpty) return PosRadarData.empty;
+
+    final translations = await _driftDb.getTranslationsForIds(masteredIds);
+    var noun = 0, verb = 0, adj = 0, adv = 0;
+    for (final t in translations.values) {
+      switch (posCategoryOf(t)) {
+        case PosCategory.noun: noun++; break;
+        case PosCategory.verb: verb++; break;
+        case PosCategory.adj: adj++; break;
+        case PosCategory.adv: adv++; break;
+        case PosCategory.other: break;
+      }
+    }
+    return PosRadarData(noun: noun, verb: verb, adj: adj, adv: adv);
   }
 
   /// 艾宾浩斯遗忘曲线：R(t) = exp(-t / S)，S=1.0 (默认稳定常数，单位天)。

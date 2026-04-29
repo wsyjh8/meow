@@ -373,6 +373,38 @@ class AppDatabase extends _$AppDatabase {
     return result;
   }
 
+  /// Batch-resolve word_id → translation for a list of word IDs.
+  ///
+  /// Same lookup order as [getWordTextsForIds]: word_entries first, then
+  /// cached_words for remaining. Used by stats page to compute POS radar.
+  /// Words with NULL translation are still in the result map with null value.
+  Future<Map<String, String?>> getTranslationsForIds(List<String> wordIds) async {
+    if (wordIds.isEmpty) return {};
+    final result = <String, String?>{};
+    final wePh = wordIds.map((_) => '?').join(', ');
+    final weRows = await customSelect(
+      'SELECT word_id, translation FROM word_entries WHERE word_id IN ($wePh)',
+      variables: wordIds.map(Variable.withString).toList(),
+      readsFrom: {wordEntries},
+    ).get();
+    for (final r in weRows) {
+      result[r.read<String>('word_id')] = r.readNullable<String>('translation');
+    }
+    final remaining = wordIds.where((id) => !result.containsKey(id)).toList();
+    if (remaining.isNotEmpty) {
+      final cwPh = remaining.map((_) => '?').join(', ');
+      final cwRows = await customSelect(
+        'SELECT word_id, translation FROM cached_words WHERE word_id IN ($cwPh)',
+        variables: remaining.map(Variable.withString).toList(),
+        readsFrom: {cachedWords},
+      ).get();
+      for (final r in cwRows) {
+        result[r.read<String>('word_id')] = r.readNullable<String>('translation');
+      }
+    }
+    return result;
+  }
+
   /// Open the database connection.
   /// Uses the same file name as the old sqflite database for seamless upgrade.
   static QueryExecutor _openConnection() {
