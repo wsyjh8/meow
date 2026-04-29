@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/audio/pronunciation_service.dart';
+import '../../core/util/pos_label.dart';
 import '../../core/memory/fsrs_service.dart';
 import '../../core/memory/review_rating.dart';
 import '../../core/memory/word_cache_service.dart';
@@ -307,35 +308,6 @@ class _StudyPageState extends State<StudyPage> {
     if (mounted) setState(() { _isSubmitting = false; });
   }
 
-  // ── UI helpers ────────────────────────────────────────────────────────────
-
-  /// Splits translation into individual lines, stripping blanks.
-  static List<String> _translationLines(String? translation) {
-    if (translation == null || translation.trim().isEmpty) return [];
-    return translation
-        .split('\n')
-        .map((l) => l.trim())
-        .where((l) => l.isNotEmpty)
-        .toList();
-  }
-
-  /// Extracts the first POS abbreviation from translation and maps it to Chinese.
-  static String _posLabel(String? translation) {
-    if (translation == null || translation.isEmpty) return '';
-    final first = _translationLines(translation).firstOrNull ?? '';
-    const map = {
-      'vt.': '及物动词', 'vi.': '不及物动词', 'v.': '动词',
-      'n.': '名词',     'a.': '形容词',      'adj.': '形容词',
-      'adv.': '副词',   'prep.': '介词',     'conj.': '连词',
-      'pron.': '代词',  'num.': '数词',      'int.': '感叹词',
-      'art.': '冠词',
-    };
-    for (final entry in map.entries) {
-      if (first.startsWith(entry.key)) return entry.value;
-    }
-    return '';
-  }
-
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
@@ -426,8 +398,8 @@ class _StudyPageState extends State<StudyPage> {
 
   Widget _buildWordCard() {
     final word = _currentWord!;
-    final pos = _posLabel(word.translation);
-    final lines = _translationLines(word.translation);
+    final pos = posLabel(word.translation);
+    final lines = translationLines(word.translation);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -828,7 +800,7 @@ class _StudyPageState extends State<StudyPage> {
             const Divider(color: _kBorderColor, thickness: 0.5, height: 1),
             const SizedBox(height: 12),
             // All translation lines
-            ..._translationLines(translation).map(
+            ...translationLines(translation).map(
               (line) => Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Text(

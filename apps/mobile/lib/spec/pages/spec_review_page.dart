@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/api/api_client.dart' show Word, WordExample;
 import '../../core/audio/pronunciation_service.dart';
+import '../../core/util/pos_label.dart';
 import '../../core/memory/card_state_data.dart';
 import '../../core/memory/fsrs_service.dart';
 import '../../core/memory/review_rating.dart';
@@ -276,31 +277,6 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  static List<String> _translationLines(String? translation) {
-    if (translation == null || translation.trim().isEmpty) return [];
-    return translation
-        .split('\n')
-        .map((l) => l.trim())
-        .where((l) => l.isNotEmpty)
-        .toList();
-  }
-
-  static String _posLabel(String? translation) {
-    if (translation == null || translation.isEmpty) return '';
-    final first = _translationLines(translation).firstOrNull ?? '';
-    const map = {
-      'vt.': '及物动词', 'vi.': '不及物动词', 'v.': '动词',
-      'n.': '名词',     'a.': '形容词',      'adj.': '形容词',
-      'adv.': '副词',   'prep.': '介词',     'conj.': '连词',
-      'pron.': '代词',  'num.': '数词',      'int.': '感叹词',
-      'art.': '冠词',
-    };
-    for (final entry in map.entries) {
-      if (first.startsWith(entry.key)) return entry.value;
-    }
-    return '';
-  }
-
   void _showComingSoon(String feature) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -349,7 +325,7 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
             const SizedBox(height: 16),
             const Divider(color: _kBorderColor, thickness: 0.5, height: 1),
             const SizedBox(height: 12),
-            ..._translationLines(translation).map(
+            ...translationLines(translation).map(
               (line) => Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Text(line, style: const TextStyle(fontSize: 14, color: _kTextMedium, height: 1.5)),
@@ -444,8 +420,8 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
 
   Widget _buildWordCard() {
     final word = _currentWord!;
-    final pos = _posLabel(word.translation);
-    final lines = _translationLines(word.translation);
+    final pos = posLabel(word.translation);
+    final lines = translationLines(word.translation);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),

@@ -6,7 +6,7 @@ import '../widgets/spec_tab_bar.dart';
 import 'books_page.dart';
 import 'home_page.dart';
 import 'mochi_page.dart';
-import 'stats_page.dart';
+import 'stats/stats_page.dart';
 import 'profile_page.dart';
 
 /// SPEC App Shell — Tab Bar + Page Switcher
