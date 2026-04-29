@@ -64,6 +64,10 @@ coverage/
 # Dev store persistence data
 apps/api/data/
 
+# Claude Code local config (per-machine, not shared)
+.claude/settings.local.json
+CLAUDE_backup.md
+
 # Misc
 *.pem
 *.key
