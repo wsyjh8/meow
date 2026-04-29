@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:meow_mobile/core/gate/cutover_vs_fact_owner_boundary_v3.dart';
-import 'package:meow_mobile/core/gate/db_api_uplift_readiness.dart';
-import 'package:meow_mobile/core/gate/fuller_cutover_execution_subset.dart';
-import 'package:meow_mobile/core/gate/phase5_writeback_order.dart';
-import 'package:meow_mobile/core/gate/retained_anchor_narrowing_guardrail.dart';
-import 'package:meow_mobile/core/gate/review_group_exit_candidate.dart';
-import 'package:meow_mobile/core/gate/review_group_exit_gate_v2.dart';
-import 'package:meow_mobile/core/gate/review_group_retained_anchor.dart';
+import 'package:meow_mobile/core/gate/cutover_subset.dart';
+import 'package:meow_mobile/core/gate/db_api_uplift.dart';
+import 'package:meow_mobile/core/gate/fact_owner_boundary.dart';
+import 'package:meow_mobile/core/gate/review_group_lifecycle.dart';
+import 'package:meow_mobile/core/gate/round_gates_and_guardrails.dart';
+import 'package:meow_mobile/core/gate/writeback_order.dart';
 import 'package:meow_mobile/core/guards/p3_feature_guard.dart';
 import 'package:meow_mobile/core/serving/review_serving_seam.dart';
 
@@ -481,7 +479,7 @@ void main() {
       expect(P3FeatureGuard.isPhase3GateEvaluationEnabled, isFalse);
       expect(P3FeatureGuard.isLimitedCutoverExecutionEnabled, isFalse);
       expect(P3FeatureGuard.isDbApiCandidateMigrationEnabled, isFalse);
-      expect(P3FeatureGuard.isReviewPageNonContinuationCutoverEnabled, isFalse);
+      expect(P3FeatureGuard.isReviewPageNonContinuationCutoverEnabled, isTrue); // P3.3.16 flipped
       expect(P3FeatureGuard.isStrongerIngestCandidatePathEnabled, isFalse);
     });
 

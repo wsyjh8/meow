@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../models/content_models.dart';
+export '../models/content_models.dart' show WordExample;
+
 /// API Client for Phase 1 / Phase 2 / Phase 3
 ///
 /// Minimal API client for Today / New Study / Review / Settlement / Session / Check-in flows.
@@ -139,6 +142,41 @@ class ApiClient {
       );
     }
     throw ApiException('POST /review-attempts failed: ${response.statusCode}');
+  }
+
+  /// Submit a completed local-origin review session batch.
+  ///
+  /// P3.3.16 — Real cutover path. Called when ReviewPage is serving from
+  /// the local FSRS queue (non-continuation sessions). No backend-issued
+  /// reviewGroupId is required — the backend creates an ephemeral group.
+  /// Returns the same [ReviewAttemptResult] shape as [submitReviewAttempt].
+  /// Route: POST /review-attempts/local-batch
+  Future<ReviewAttemptResult> submitLocalReviewBatch({
+    required List<LocalWordAttempt> attempts,
+    String? idempotencyKey,
+  }) async {
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+    };
+    if (idempotencyKey != null) {
+      headers['X-Idempotency-Key'] = idempotencyKey;
+    }
+    final response = await _client.post(
+      Uri.parse('$baseUrl/review-attempts/local-batch'),
+      headers: headers,
+      body: json.encode({
+        'word_attempts': attempts
+            .map((a) => {'word_id': a.wordId, 'action_result': a.actionResult})
+            .toList(),
+      }),
+    );
+    if (response.statusCode == 200) {
+      return ReviewAttemptResult.fromJson(
+        json.decode(response.body) as Map<String, dynamic>,
+      );
+    }
+    throw ApiException(
+        'POST /review-attempts/local-batch failed: ${response.statusCode}');
   }
 
   // ========== Phase 3: Session ==========
@@ -424,6 +462,34 @@ class TodayState {
     this.reviewSummary,
   });
 
+  /// Offline fallback — built entirely from local data when [getToday()] fails.
+  ///
+  /// Only [todayNewTarget] and [todayNewCompleted] carry real information;
+  /// all other fields use safe zero-defaults. Review fields are omitted
+  /// (unknown offline). syncStatus = 'offline'.
+  factory TodayState.offline({
+    required int todayNewTarget,
+    required int todayNewCompleted,
+    int todayReviewCompleted = 0,
+  }) {
+    final goalMet = todayNewTarget > 0 && todayNewCompleted >= todayNewTarget;
+    return TodayState(
+      currentBookName: 'CET-4',
+      todayNewTarget: todayNewTarget,
+      todayNewCompleted: todayNewCompleted,
+      todayReviewTarget: 0,
+      todayReviewPending: 0,
+      todayReviewCompleted: todayReviewCompleted,
+      dailyGoalStatus: goalMet
+          ? 'completed'
+          : todayNewCompleted > 0 ? 'in_progress' : 'not_started',
+      activeReviewGroupRemaining: 0,
+      syncStatus: 'offline',
+      sessionStartedToday: todayNewCompleted > 0,
+      learningDayToday: todayNewCompleted > 0,
+    );
+  }
+
   // Phase 0 guard: all fields use null-safe defaults to prevent crash
   // when backend omits fields (contract-absent scenario).
   // Defaults are conservative — never imply completion or availability.
@@ -585,6 +651,9 @@ class Word {
   final String? tags;
   final int? frequencyRank;
   final String? wordForms;
+  // Local-only: example sentences from bundled assets (word_entries / example_sentences tables).
+  // Null for cloud-served words that have no local content entry.
+  final List<WordExample>? examples;
 
   Word({
     required this.wordId,
@@ -599,6 +668,7 @@ class Word {
     this.tags,
     this.frequencyRank,
     this.wordForms,
+    this.examples,
   });
 
   factory Word.fromJson(Map<String, dynamic> json) {
@@ -781,6 +851,15 @@ class ReviewAttemptResult {
           : null,
     );
   }
+}
+
+/// One word rating in a local-origin review session batch.
+/// Used with [ApiClient.submitLocalReviewBatch]. P3.3.16.
+class LocalWordAttempt {
+  final String wordId;
+  final String actionResult; // 'correct' | 'incorrect'
+
+  const LocalWordAttempt({required this.wordId, required this.actionResult});
 }
 
 // ========== Phase 3: Session / Check-in Models ==========

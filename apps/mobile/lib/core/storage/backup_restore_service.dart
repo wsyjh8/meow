@@ -16,6 +16,12 @@ import 'snapshot_export_service.dart';
 /// - restore success != all devices consistent
 /// - restore success != future auto-sync enabled
 /// - has backup != restore completed
+///
+/// Supported schema versions:
+///   p3_2_snapshot_v1 — full restore (word_records + card_states + settings)
+///   p3_1_snapshot_v2 — partial restore (word_records + settings, no card_states)
+///
+/// Conflict policy: last-write-wins (the restored backup overwrites local data).
 class BackupRestoreService {
   final String baseUrl;
   final LocalSettingsService _settings;
@@ -30,6 +36,12 @@ class BackupRestoreService {
   })  : _settings = settings,
         _progress = progress,
         _db = db;
+
+  /// Accepted schema versions for restore.
+  static const _acceptedSchemas = {
+    SnapshotExportService.schemaVersion,       // p3_2_snapshot_v1
+    SnapshotExportService.legacySchemaVersion, // p3_1_snapshot_v2
+  };
 
   /// Pre-check: is there a restorable backup?
   Future<RestorePreCheckResult> preCheck() async {
@@ -49,17 +61,24 @@ class BackupRestoreService {
       }
 
       final schemaVersion = data['schema_version'] as String?;
-      if (schemaVersion != SnapshotExportService.schemaVersion) {
+      if (!_acceptedSchemas.contains(schemaVersion)) {
         return RestorePreCheckResult(
           status: RestorePreCheckStatus.versionNotSupported,
           backupSchemaVersion: schemaVersion,
         );
       }
 
+      // Extract device info from snapshot if present
+      final snapshot = data['snapshot'] as Map<String, dynamic>?;
+      final deviceId = snapshot?['device']?['device_id'] as String?;
+      final deviceModel = snapshot?['device']?['device_model'] as String?;
+
       return RestorePreCheckResult(
         status: RestorePreCheckStatus.restorable,
         backupSchemaVersion: schemaVersion,
         uploadedAt: data['uploaded_at'] as String?,
+        deviceId: deviceId,
+        deviceModel: deviceModel,
       );
     } catch (e) {
       return const RestorePreCheckResult(status: RestorePreCheckStatus.temporarilyUnavailable);
@@ -94,11 +113,13 @@ class BackupRestoreService {
 
       // Validate schema
       final schemaVersion = snapshot['schema_version'] as String?;
-      if (schemaVersion != SnapshotExportService.schemaVersion) {
+      if (!_acceptedSchemas.contains(schemaVersion)) {
         return RestoreResult(
           status: RestoreStatus.versionNotSupported,
           errorCode: 'SCHEMA_MISMATCH',
-          errorMessage: 'Expected ${SnapshotExportService.schemaVersion}, got $schemaVersion',
+          errorMessage:
+              'Unsupported schema: $schemaVersion. '
+              'Accepted: ${_acceptedSchemas.join(', ')}',
         );
       }
 
@@ -124,40 +145,65 @@ class BackupRestoreService {
     // 1. Restore settings
     final settings = snapshot['settings'] as Map<String, dynamic>?;
     if (settings != null) {
-      if (settings['daily_goal'] is num) await _settings.setDailyGoal((settings['daily_goal'] as num).toInt());
-      if (settings['sound_enabled'] is bool) await _settings.setSoundEnabled(settings['sound_enabled'] as bool);
-      if (settings['theme'] is String) await _settings.setTheme(settings['theme'] as String);
-      if (settings['notification_time'] is String) await _settings.setNotificationTime(settings['notification_time'] as String);
+      if (settings['daily_goal'] is num) {
+        await _settings.setDailyGoal((settings['daily_goal'] as num).toInt());
+      }
+      if (settings['sound_enabled'] is bool) {
+        await _settings.setSoundEnabled(settings['sound_enabled'] as bool);
+      }
+      if (settings['theme'] is String) {
+        await _settings.setTheme(settings['theme'] as String);
+      }
+      if (settings['notification_time'] is String) {
+        await _settings.setNotificationTime(
+            settings['notification_time'] as String);
+      }
     }
 
     // 2. Restore progress — full replace each entity
     final progress = snapshot['progress'] as Map<String, dynamic>?;
     if (progress != null) {
+      // word_records (SQLite source of truth)
       if (progress['word_records'] is List) {
         final records = (progress['word_records'] as List)
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
-        // Write to SharedPreferences (backward compat)
         await _progress.setWordRecords(records);
-        // Write to SQLite (source of truth)
         await _db.replaceAllWordRecords(records);
       }
+
+      // card_states (FSRS scheduling — present in p3_2_snapshot_v1 only)
+      if (progress['card_states'] is List) {
+        final cardStateRecords = (progress['card_states'] as List)
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        await _db.replaceAllInTable('card_states', cardStateRecords);
+      }
+
+      // SharedPreferences-backed progress entities
       if (progress['wordbook_progress'] is Map) {
-        await _progress.setWordbookProgress(Map<String, dynamic>.from(progress['wordbook_progress'] as Map));
+        await _progress.setWordbookProgress(
+            Map<String, dynamic>.from(progress['wordbook_progress'] as Map));
       }
       if (progress['daily_checkins'] is List) {
         await _progress.setDailyCheckins(
-          (progress['daily_checkins'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList(),
+          (progress['daily_checkins'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList(),
         );
       }
       if (progress['custom_wordbooks'] is List) {
         await _progress.setCustomWordbooks(
-          (progress['custom_wordbooks'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList(),
+          (progress['custom_wordbooks'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList(),
         );
       }
       if (progress['vocabulary_notebook'] is List) {
         await _progress.setVocabularyNotebook(
-          (progress['vocabulary_notebook'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList(),
+          (progress['vocabulary_notebook'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList(),
         );
       }
     }
@@ -169,8 +215,18 @@ class RestorePreCheckResult {
   final RestorePreCheckStatus status;
   final String? backupSchemaVersion;
   final String? uploadedAt;
+  /// Device ID from the backup (last 8 chars shown in UI for identification).
+  final String? deviceId;
+  /// Device model from the backup (informational).
+  final String? deviceModel;
 
-  const RestorePreCheckResult({required this.status, this.backupSchemaVersion, this.uploadedAt});
+  const RestorePreCheckResult({
+    required this.status,
+    this.backupSchemaVersion,
+    this.uploadedAt,
+    this.deviceId,
+    this.deviceModel,
+  });
 
   bool get isRestorable => status == RestorePreCheckStatus.restorable;
 }
@@ -192,7 +248,13 @@ class RestoreResult {
   final String? errorCode;
   final String? errorMessage;
 
-  const RestoreResult({required this.status, this.restoredAt, this.schemaVersion, this.errorCode, this.errorMessage});
+  const RestoreResult({
+    required this.status,
+    this.restoredAt,
+    this.schemaVersion,
+    this.errorCode,
+    this.errorMessage,
+  });
 
   bool get isSuccess => status == RestoreStatus.restoreSucceeded;
 }

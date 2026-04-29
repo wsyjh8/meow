@@ -168,6 +168,32 @@ class LocalDatabase {
     await _db!.update('word_records', {'synced': 1}, where: 'id = ?', whereArgs: [id]);
   }
 
+  /// Count new words successfully studied today.
+  /// Used as offline fallback for [TodayState.todayNewCompleted].
+  ///
+  /// "Today" means the user's LOCAL calendar day. Since [created_at] is stored
+  /// as UTC ISO-8601 strings, we convert local midnight boundaries to UTC and
+  /// do a range query — this is correct for every timezone.
+  ///
+  /// Using a LIKE '{localDate}%' pattern here is WRONG: in UTC+8, records
+  /// written during local 00:00–07:59 have UTC dates of the previous day,
+  /// so a LIKE match against the local date misses them and progress
+  /// silently resets to 0 for several hours each morning.
+  Future<int> countTodayNewCompleted() async {
+    final now = DateTime.now();
+    final localMidnight = DateTime(now.year, now.month, now.day);
+    final nextLocalMidnight = localMidnight.add(const Duration(days: 1));
+    final startUtcIso = localMidnight.toUtc().toIso8601String();
+    final endUtcIso = nextLocalMidnight.toUtc().toIso8601String();
+    final rows = await _db!.rawQuery(
+      "SELECT COUNT(*) AS cnt FROM word_records "
+      "WHERE study_type = 'new' AND action_result = 'know' "
+      "AND created_at >= ? AND created_at < ?",
+      [startUtcIso, endUtcIso],
+    );
+    return (rows.first['cnt'] as int?) ?? 0;
+  }
+
   /// Get all word records (for export).
   Future<List<Map<String, dynamic>>> getAllWordRecords() async {
     return await _db!.query('word_records', orderBy: 'created_at ASC');

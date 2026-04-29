@@ -1,51 +1,167 @@
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../api/api_client.dart';
+import '../storage/drift/app_database.dart';
 import '../storage/local_database.dart';
+import '../storage/local_settings_service.dart';
 
 /// P3.1 — Local-first study service.
 ///
 /// Write flow: SQLite FIRST → UI feedback → background API sync
-/// Read flow: API for next word → cache locally
+/// Read flow: LOCAL cached_words → fallback to API if empty
 ///
-/// This service sits between StudyPage and both LocalDatabase + ApiClient.
-/// The user sees immediate feedback; API sync happens in background.
+/// P3.3.17: Words are now served from the pre-bundled local cache
+/// ([cached_words] drift table, populated from assets/words/book-001.json).
+/// No network is needed to get the next word.  API sync still happens in
+/// the background so daily-goal / settlement / cloud progress stay updated.
+///
+/// v3: Multi-wordbook support. When [activeWordbook] ≠ 'book-001', words are
+/// served from [word_entries] + [word_book_assignments] (ZK / GK content layer).
+/// Example sentences are fetched from [example_sentences] and attached to
+/// the returned [Word] in all paths.
 class StudyService {
   final ApiClient _apiClient;
   final LocalDatabase _db;
+  final AppDatabase _driftDb;
+  // Optional injected settings (for testability). If null, reads SharedPreferences.
+  final LocalSettingsService? _settings;
 
-  StudyService({required ApiClient apiClient, required LocalDatabase db})
-      : _apiClient = apiClient,
-        _db = db;
+  /// Legacy CET-4 book ID — used when activeWordbook is 'book-001'.
+  static const String _legacyBookId = 'book-001';
+
+  StudyService({
+    required ApiClient apiClient,
+    required LocalDatabase db,
+    AppDatabase? driftDb,
+    LocalSettingsService? settings,
+  })  : _apiClient = apiClient,
+        _db = db,
+        _driftDb = driftDb ?? AppDatabase(),
+        _settings = settings;
+
+  /// Resolve the currently active wordbook slug.
+  Future<String> _activeWordbook() async {
+    if (_settings != null) return _settings!.activeWordbook;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return LocalSettingsService(prefs).activeWordbook;
+    } catch (_) {
+      return _legacyBookId;
+    }
+  }
 
   /// Get the next word to study.
   ///
-  /// 1. Try API first (it has the full word pool)
-  /// 2. If API fails, return null (no offline word pool yet)
-  Future<Word?> getNextWord() async {
-    try {
-      // Get mastered word IDs from local SQLite
-      final masteredIds = await _db.getMasteredWordIds();
+  /// Routing:
+  ///   activeWordbook == 'book-001' → legacy [cached_words] path (CET-4)
+  ///   activeWordbook == 'zk'/'gk'  → [word_entries] + [word_book_assignments]
+  ///
+  /// In both paths, up to 3 example sentences are fetched from
+  /// [example_sentences] and attached to [Word.examples] if available.
+  ///
+  /// Fallback to API only when local cache is empty (edge-case / fresh install).
+  Future<Word?> getNextWord({Set<String> extraExclude = const {}}) async {
+    // DB operations are NOT wrapped in a blanket catch.
+    // A real DB error (e.g. closed connection) propagates to the caller's
+    // catch block (StudyPage._loadNextWord), which shows an error state
+    // instead of falsely displaying the "all done" completion screen.
 
-      // Get next word from API
-      final word = await _apiClient.getNextNewWord();
+    // 1. Get mastered word IDs from local SQLite (word_records)
+    final bookSlug = await _activeWordbook();
+    final masteredIds = await _db.getMasteredWordIds();
 
-      if (word == null) {
-        // API says no more words — but check if local has unmastered words
-        // that the API might not know about (e.g., forgot words not yet synced)
-        return null;
+    // 2. Merge mastered + session-seen exclusions
+    final allExclude = masteredIds.union(extraExclude);
+
+    Word? word;
+
+    if (bookSlug == _legacyBookId) {
+      // ── Legacy CET-4 path ────────────────────────────────────────────
+      final cached =
+          await _driftDb.getNextUnstudiedWord(_legacyBookId, allExclude);
+      if (cached != null) {
+        word = Word(
+          wordId: cached.wordId,
+          wordText: cached.wordText,
+          meaning: cached.meaning,
+          phonetic: cached.phonetic,
+          bookId: cached.bookId,
+          translation: cached.translation,
+        );
       }
-
-      // If this word is already mastered locally (but API doesn't know yet),
-      // skip it and try again
-      if (masteredIds.contains(word.wordId)) {
-        // This shouldn't happen normally, but defensive check
-        return word; // Let user see it anyway — API is the word pool authority
+    } else {
+      // ── ZK / GK path ─────────────────────────────────────────────────
+      final entry =
+          await _driftDb.getNextWordFromWordbook(bookSlug, allExclude);
+      if (entry != null) {
+        word = Word(
+          wordId: entry.wordId,
+          wordText: entry.wordText,
+          meaning: entry.meaning,
+          phonetic: entry.phonetic,
+          bookId: bookSlug,
+          translation: entry.translation,
+          definition: entry.definition,
+          frequencyRank: entry.frequencyRank,
+          wordForms: entry.wordForms,
+        );
       }
+    }
 
+    // 3. Attach examples (both paths — best-effort, silently ignored on failure)
+    if (word != null) {
+      try {
+        final exRows =
+            await _driftDb.getExamplesForWord(word.wordId, limit: 3);
+        if (exRows.isNotEmpty) {
+          word = _withExamples(word, exRows);
+        }
+      } catch (_) {}
       return word;
-    } catch (e) {
-      // API unavailable — no offline word pool, return null
+    }
+
+    // 4. No local words — try API. Network failures return null (not a DB
+    //    error, so don't propagate — "no network + no local words" is treated
+    //    as "nothing available right now", not a crash-worthy error).
+    try {
+      return await _apiClient.getNextNewWord();
+    } catch (_) {
       return null;
     }
+  }
+
+  /// Rebuild a [Word] with example sentences attached.
+  Word _withExamples(Word w, List<ExampleSentence> rows) => Word(
+        wordId: w.wordId,
+        wordText: w.wordText,
+        meaning: w.meaning,
+        phonetic: w.phonetic,
+        bookId: w.bookId,
+        translation: w.translation,
+        definition: w.definition,
+        difficultyLevel: w.difficultyLevel,
+        isCore: w.isCore,
+        tags: w.tags,
+        frequencyRank: w.frequencyRank,
+        wordForms: w.wordForms,
+        examples: rows
+            .map((e) =>
+                WordExample(sense: e.sense, en: e.en, cn: e.cn))
+            .toList(),
+      );
+
+  /// Peek at the word_text values of the next [count] unstudied words.
+  ///
+  /// Used by the study page to prefetch pronunciation audio ahead of time.
+  /// Does NOT consume or mark any words — purely a read-ahead.
+  Future<List<String>> peekNextWordTexts(
+    int count, {
+    Set<String> extraExclude = const {},
+  }) async {
+    final bookSlug = await _activeWordbook();
+    final masteredIds = await _db.getMasteredWordIds();
+    final allExclude = masteredIds.union(extraExclude);
+    return _driftDb.peekNextWordTexts(bookSlug, allExclude, count);
   }
 
   /// Submit a study attempt — LOCAL FIRST.

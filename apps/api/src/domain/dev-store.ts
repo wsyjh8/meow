@@ -182,6 +182,10 @@ export class DevStore {
   private equippedOutfit: Record<string, string | null> = {};
   private equippedRoom: Record<string, string | null> = {};
 
+  // P3.2 — Cloud backup storage (persisted, last-write-wins)
+  private latestBackup: any | null = null;
+  private backupSnapshot: any | null = null;
+
   constructor(persistenceOverride?: IDevStorePersistence | string) {
     if (typeof persistenceOverride === 'string') {
       // Direct file path — use JSON persistence (for tests)
@@ -248,6 +252,8 @@ export class DevStore {
       equippedOutfit: this.equippedOutfit,
       equippedRoom: this.equippedRoom,
       idempotencyKeys: idempotencyKeysObj,
+      latestBackup: this.latestBackup,
+      backupSnapshot: this.backupSnapshot,
     };
   }
 
@@ -287,6 +293,10 @@ export class DevStore {
         this.idempotencyKeys.set(k, v);
       }
     }
+
+    // P3.2 backup state (optional fields — may not be present in old snapshots)
+    this.latestBackup = snapshot.latestBackup ?? null;
+    this.backupSnapshot = snapshot.backupSnapshot ?? null;
   }
 
   // Serialized save chain — only one PG save runs at a time
@@ -929,6 +939,67 @@ export class DevStore {
   }
 
   /**
+   * Submit a local-origin review session batch.
+   *
+   * Called by POST /review-attempts/local-batch when the mobile client
+   * serves from the local FSRS queue (non-continuation cutover path).
+   * No backend-issued reviewGroupId is needed — the group is ephemeral.
+   *
+   * Returns: { success, alreadyExists, localGroupId }
+   */
+  submitLocalReviewBatch(
+    wordAttempts: { word_id: string; action_result: 'correct' | 'incorrect' }[],
+    idempotencyKey: string,
+  ): { success: boolean; alreadyExists: boolean; localGroupId: string } {
+    const localGroupId = `local_batch_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+    if (idempotencyKey) {
+      const existing = this.getIdempotencyKey(idempotencyKey);
+      if (existing) {
+        return { success: true, alreadyExists: true, localGroupId };
+      }
+    }
+
+    // Record all attempts under the ephemeral local group ID
+    for (const attempt of wordAttempts) {
+      const ra: ReviewAttempt = {
+        id: `ra-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        user_id: this.userId,
+        review_group_id: localGroupId,
+        word_id: attempt.word_id,
+        action_result: attempt.action_result,
+        created_at: new Date().toISOString(),
+      };
+      this.reviewAttempts.push(ra);
+    }
+
+    // Update daily goal state (same logic as single-word group completion)
+    const state = this.getTodayState();
+    const reviewCompleted = state.today_review_completed + 1;
+    let dailyGoalStatus: DailyGoalStatus = state.daily_goal_status;
+    const newGoalMet = state.today_new_completed >= state.today_new_target;
+    const reviewGoalMet = reviewCompleted >= state.today_review_target;
+    if (newGoalMet && reviewGoalMet) {
+      dailyGoalStatus = 'completed';
+    } else if (newGoalMet || reviewGoalMet) {
+      dailyGoalStatus = 'partially_completed';
+    } else {
+      dailyGoalStatus = 'in_progress';
+    }
+
+    this.updateTodayState({
+      active_review_group_status: 'completed',
+      active_review_group_remaining: 0,
+      today_review_completed: reviewCompleted,
+      today_review_pending: 0,
+      daily_goal_status: dailyGoalStatus,
+    });
+
+    this.saveToDisk();
+    return { success: true, alreadyExists: false, localGroupId };
+  }
+
+  /**
    * Idempotency key management
    */
   getIdempotencyKey(key: string): IdempotencyKeyRecord | null {
@@ -949,6 +1020,44 @@ export class DevStore {
     };
     this.idempotencyKeys.set(key, record);
     this.saveToDisk();
+  }
+
+  // ==================== P3.2 Backup Storage ====================
+
+  /**
+   * Store a backup snapshot (last-write-wins).
+   * Persisted via the normal saveToDisk() chain.
+   */
+  storeBackup(
+    backupId: string,
+    schemaVersion: string,
+    uploadedAt: string,
+    snapshotSizeBytes: number,
+    snapshot: Record<string, any>,
+    deviceId?: string,
+    deviceModel?: string,
+  ): void {
+    this.latestBackup = {
+      backup_id: backupId,
+      schema_version: schemaVersion,
+      uploaded_at: uploadedAt,
+      snapshot_size: snapshotSizeBytes,
+      status: 'succeeded',
+      device_id: deviceId ?? null,
+      device_model: deviceModel ?? null,
+    };
+    this.backupSnapshot = snapshot;
+    this.saveToDisk();
+  }
+
+  /** Get latest backup metadata. Null if no backup stored. */
+  getLatestBackupMeta(): any | null {
+    return this.latestBackup;
+  }
+
+  /** Get the full backup snapshot. Null if no backup stored. */
+  getBackupSnapshot(): any | null {
+    return this.backupSnapshot;
   }
 
   /**

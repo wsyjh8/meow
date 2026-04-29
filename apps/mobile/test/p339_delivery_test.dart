@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:meow_mobile/core/gate/fact_owner_guardrail.dart';
-import 'package:meow_mobile/core/gate/first_cutover_subset.dart';
-import 'package:meow_mobile/core/gate/review_group_retained_anchor.dart';
-import 'package:meow_mobile/core/gate/runtime_truth_switch_boundary.dart';
+import 'package:meow_mobile/core/gate/cutover_subset.dart';
+import 'package:meow_mobile/core/gate/fact_owner_boundary.dart';
+import 'package:meow_mobile/core/gate/review_group_lifecycle.dart';
+import 'package:meow_mobile/core/gate/round_gates_and_guardrails.dart';
 import 'package:meow_mobile/core/guards/p3_feature_guard.dart';
 import 'package:meow_mobile/core/review/review_group_compatibility.dart';
 import 'package:meow_mobile/core/serving/review_serving_observability.dart';
@@ -362,36 +362,38 @@ void main() {
     });
 
     test(
-        'seam returns cloudReviewGroup + local-path-not-wired fallback when flag ON + no continuation',
+        'seam returns localNonContinuation when flag ON + no continuation (P3.3.16 wired)',
         () {
+      // P3.3.9: asserted cloud fallback with 'local_path_not_yet_wired'.
+      // P3.3.16 wired the local path — seam now returns localNonContinuation.
       final selection = ReviewServingSeam.selectSource(
         isCutoverEnabled: true,
         hasActiveContinuation: false,
       );
-      expect(selection.source, ReviewServingSourceKind.cloudReviewGroup);
-      expect(
-          selection.reason, equals('local_path_not_yet_wired_fallback_to_cloud'));
-      expect(selection.isFallbackToRetainedAnchor, isTrue);
+      expect(selection.source, ReviewServingSourceKind.localNonContinuation);
+      expect(selection.reason, equals('cutover_flag_enabled_local_serving_active'));
+      expect(selection.isFallbackToRetainedAnchor, isFalse);
     });
 
-    test('all selections this round return cloudReviewGroup (never local)',
+    test('flag OFF always returns cloudReviewGroup (flag-OFF path unchanged)',
         () {
-      for (final flagOn in [true, false]) {
-        for (final hasContinuation in [true, false]) {
-          final sel = ReviewServingSeam.selectSource(
-            isCutoverEnabled: flagOn,
-            hasActiveContinuation: hasContinuation,
-          );
-          expect(sel.source, ReviewServingSourceKind.cloudReviewGroup,
-              reason:
-                  'P3.3.9: seam must NEVER return localNonContinuation '
-                  '(flagOn=$flagOn, hasContinuation=$hasContinuation)');
-        }
+      // P3.3.9 asserted all combinations return cloud. P3.3.16 wired
+      // the flag-ON+no-continuation path to localNonContinuation.
+      // Only the flag-OFF invariant is preserved here.
+      for (final hasContinuation in [true, false]) {
+        final sel = ReviewServingSeam.selectSource(
+          isCutoverEnabled: false,
+          hasActiveContinuation: hasContinuation,
+        );
+        expect(sel.source, ReviewServingSourceKind.cloudReviewGroup,
+            reason:
+                'flag OFF must always route to cloud '
+                '(hasContinuation=$hasContinuation)');
       }
     });
 
     test(
-        'isFallbackToRetainedAnchor: true for continuation/local-not-wired, false for simple flag-off',
+        'isFallbackToRetainedAnchor: true for continuation, false for flag-off and local path',
         () {
       // Simple flag-off: default cloud, not a fallback
       expect(
@@ -405,12 +407,12 @@ void main() {
                   isCutoverEnabled: false, hasActiveContinuation: true)
               .isFallbackToRetainedAnchor,
           isTrue);
-      // Local path not wired: fallback to retained anchor
+      // P3.3.16: flag ON + no continuation → localNonContinuation, NOT a fallback
       expect(
           ReviewServingSeam.selectSource(
                   isCutoverEnabled: true, hasActiveContinuation: false)
               .isFallbackToRetainedAnchor,
-          isTrue);
+          isFalse);
     });
   });
 
@@ -418,8 +420,9 @@ void main() {
   // Group G: flags + regression (6 tests)
   // ==========================================================================
   group('P3.3.9 flags + regression', () {
-    test('both P3.3.9 flags are false', () {
-      expect(P3FeatureGuard.isReviewPageNonContinuationCutoverEnabled, isFalse);
+    test('P3.3.9 flags: cutover flipped true by P3.3.16; ingest candidate still false', () {
+      // isReviewPageNonContinuationCutoverEnabled: P3.3.16 flipped to true
+      expect(P3FeatureGuard.isReviewPageNonContinuationCutoverEnabled, isTrue);
       expect(P3FeatureGuard.isStrongerIngestCandidatePathEnabled, isFalse);
     });
 

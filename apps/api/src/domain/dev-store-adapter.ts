@@ -50,6 +50,12 @@ class DevStoreReviewAdapter implements IReviewRepository {
   ) {
     return devStore.submitReviewAttempt(reviewGroupId, wordId, actionResult, idempotencyKey);
   }
+  submitLocalReviewBatch(
+    wordAttempts: { word_id: string; action_result: 'correct' | 'incorrect' }[],
+    idempotencyKey: string,
+  ) {
+    return devStore.submitLocalReviewBatch(wordAttempts, idempotencyKey);
+  }
   hasReviewGroupCompletedEvent(reviewGroupId: string) {
     return devStore.hasReviewGroupCompletedEvent(reviewGroupId);
   }

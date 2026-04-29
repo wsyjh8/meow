@@ -233,6 +233,24 @@ class FsrsService {
     return result.read<int>('cnt');
   }
 
+  /// Count distinct words reviewed today (from local review_logs).
+  ///
+  /// "Today" is the calendar day of [nowLocal] (00:00 ~ 23:59:59 local).
+  /// Used as offline fallback for todayReviewCompleted.
+  Future<int> countTodayReviewCompleted({DateTime? nowLocal}) async {
+    final now = nowLocal ?? DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final startMs = todayStart.toUtc().millisecondsSinceEpoch;
+
+    final result = await _db.customSelect(
+      'SELECT COUNT(DISTINCT word_id) AS cnt FROM review_logs '
+      'WHERE review_time_utc >= ?',
+      variables: [Variable.withInt(startMs)],
+    ).getSingle();
+
+    return result.read<int>('cnt');
+  }
+
   /// Preview scheduling for all 4 ratings without persisting.
   ///
   /// Returns a map of rating → duration until next review.

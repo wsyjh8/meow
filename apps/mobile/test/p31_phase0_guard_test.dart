@@ -22,12 +22,13 @@ void main() {
   // ==================== Group 1: P3.1 feature guard assertions ====================
 
   group('P3.1 feature guards all disabled', () {
+    // P3.2 BACKUP CUTOVER: local, cloud, and settings-entry flags are now true.
     test('local backup is not enabled', () {
-      expect(P3FeatureGuard.isLocalBackupEnabled, false);
+      expect(P3FeatureGuard.isLocalBackupEnabled, true); // P3.2: enabled
     });
 
     test('cloud backup is not enabled', () {
-      expect(P3FeatureGuard.isCloudBackupEnabled, false);
+      expect(P3FeatureGuard.isCloudBackupEnabled, true); // P3.2: enabled
     });
 
     test('restore is not enabled', () {
@@ -35,7 +36,7 @@ void main() {
     });
 
     test('backup settings entry is not enabled', () {
-      expect(P3FeatureGuard.isBackupSettingsEntryEnabled, false);
+      expect(P3FeatureGuard.isBackupSettingsEntryEnabled, true); // P3.2: enabled
     });
   });
 
@@ -167,11 +168,12 @@ void main() {
     });
 
     test('BackupOperationStatus.succeeded exists but no code path produces it', () {
-      // Phase 0 has no implementation — succeeded can only come from future phases
+      // P3.2: flags are now true — backup operations can run.
+      // This test is kept as a landmark (name preserved for traceability).
       expect(BackupOperationStatus.succeeded, isNotNull);
-      // All 4 P3.1 guards are false → no backup operation can run
-      expect(P3FeatureGuard.isLocalBackupEnabled, false);
-      expect(P3FeatureGuard.isCloudBackupEnabled, false);
+      // P3.2: backup flags are now enabled
+      expect(P3FeatureGuard.isLocalBackupEnabled, true);
+      expect(P3FeatureGuard.isCloudBackupEnabled, true);
     });
 
     test('no sync-implying text in backup type names', () {

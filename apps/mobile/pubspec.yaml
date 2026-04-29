@@ -18,6 +18,8 @@ dependencies:
   drift_sqflite: ^2.0.1
   fsrs: ^2.0.1
   path_provider: ^2.1.5
+  device_info_plus: ^10.0.0
+  audioplayers: ^6.0.0
 
 dev_dependencies:
   flutter_test:
@@ -29,3 +31,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/words/book-001.json
+    - assets/words/zk.json
+    - assets/words/gk.json

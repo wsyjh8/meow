@@ -105,4 +105,37 @@ class WordCacheService {
     if (count > 0) return count;
     return await downloadAndCacheBook(bookId);
   }
+
+  /// Cache a single word (fetched from backend) into local cached_words.
+  ///
+  /// Uses INSERT OR REPLACE semantics — safe to call repeatedly for the same
+  /// word. Idempotent: a second call just refreshes [cachedAt].
+  ///
+  /// Call this fire-and-forget whenever StudyPage receives a new word from the
+  /// backend, so the local review queue can find the word text later.
+  Future<void> insertWord({
+    required String wordId,
+    required String bookId,
+    required String wordText,
+    required String meaning,
+    String? phonetic,
+    String? translation,
+    int? frequencyRank,
+  }) async {
+    final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
+    await _db.into(_db.cachedWords).insertOnConflictUpdate(
+      CachedWordsCompanion.insert(
+        wordId: wordId,
+        bookId: bookId,
+        wordText: wordText,
+        meaning: meaning,
+        phonetic: Value(phonetic),
+        translation: Value(translation),
+        // frequencyRank is non-nullable with default 0; use absent() when unknown.
+        frequencyRank:
+            frequencyRank != null ? Value(frequencyRank) : const Value.absent(),
+        cachedAt: nowMs,
+      ),
+    );
+  }
 }

@@ -8,6 +8,7 @@ import '../../core/storage/snapshot_export_service.dart';
 import '../../core/storage/backup_upload_service.dart';
 import '../../core/storage/backup_restore_service.dart';
 import '../../core/storage/local_database.dart';
+import '../../core/device/device_info_service.dart';
 import '../../core/guards/p3_feature_guard.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/meow_card.dart';
@@ -17,7 +18,7 @@ import '../../shared/widgets/meow_chip.dart';
 ///
 /// This is NOT a full backup center. It provides:
 /// - "立即备份" button
-/// - Latest backup status display
+/// - Latest backup status display (with device info)
 /// - Retry on failure
 /// - Restore from backup (P3.1 Phase 4, gated by feature flag)
 ///
@@ -39,6 +40,9 @@ import '../../shared/widgets/meow_chip.dart';
 ///
 ///   See `lib/core/backup/backup_restore_semantics.dart` for the full
 ///   forbidden list and frozen rule references (RF-P3.3.5-012/013/014).
+///
+/// Multi-device conflict policy: last-write-wins.
+/// device_id + device_model are informational only.
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -52,10 +56,15 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _isUploading = false;
   String? _error;
 
+  // Device info (loaded async in initState)
+  String? _deviceId;
+  String? _deviceModel;
+
   @override
   void initState() {
     super.initState();
     _loadLatestStatus();
+    _loadDeviceInfo();
   }
 
   Future<void> _loadLatestStatus() async {
@@ -73,6 +82,19 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _loadDeviceInfo() async {
+    final prefs = await SharedPreferences.getInstance();
+    final deviceInfo = DeviceInfoService();
+    final id = await deviceInfo.getDeviceId(prefs);
+    final model = await deviceInfo.getDeviceModel();
+    if (mounted) {
+      setState(() {
+        _deviceId = id;
+        _deviceModel = model;
+      });
+    }
+  }
+
   Future<void> _performBackup() async {
     if (_isUploading) return;
     setState(() { _isUploading = true; _error = null; });
@@ -81,17 +103,25 @@ class _SettingsPageState extends State<SettingsPage> {
       final prefs = await SharedPreferences.getInstance();
       final settings = LocalSettingsService(prefs);
       final progress = LocalProgressRepository(prefs);
-      final exportService = SnapshotExportService(settings: settings, progress: progress, db: LocalDatabase.instance);
+      final deviceInfo = DeviceInfoService();
+
+      final exportService = SnapshotExportService(
+        settings: settings,
+        progress: progress,
+        db: LocalDatabase.instance,
+        deviceInfo: deviceInfo,
+        prefs: prefs,
+      );
       final uploadService = BackupUploadService(
         baseUrl: 'http://10.0.2.2:3000/api/v1',
         prefs: prefs,
       );
 
-      // Step 1: Export snapshot locally (async — reads SQLite)
+      // Step 1: Export snapshot locally (async — reads SQLite + drift + device_info)
       final exportResult = await exportService.export();
       if (!exportResult.isSuccess) {
         setState(() {
-          _error = '\u5bfc\u51fa\u5931\u8d25'; // 导出失败
+          _error = '导出失败';
           _isUploading = false;
         });
         return;
@@ -111,8 +141,8 @@ class _SettingsPageState extends State<SettingsPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(uploadResult.isSuccess
-                ? '\u5907\u4efd\u6210\u529f' // 备份成功
-                : '\u5907\u4efd\u5931\u8d25\uff0c\u53ef\u91cd\u8bd5' // 备份失败，可重试
+                ? '备份成功'
+                : '备份失败，可重试',
             ),
           ),
         );
@@ -132,7 +162,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: MeowColors.background,
-      appBar: AppBar(title: const Text('\u8bbe\u7f6e')), // 设置
+      appBar: AppBar(title: const Text('设置')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(MeowSpacing.lg),
         child: Column(
@@ -161,12 +191,16 @@ class _SettingsPageState extends State<SettingsPage> {
           // Header
           Row(
             children: [
-              const Text('\u{1f4be}', style: TextStyle(fontSize: 18)), // 💾
+              const Text('💾', style: TextStyle(fontSize: 18)),
               const SizedBox(width: 8),
-              Text('\u6570\u636e\u5907\u4efd', style: MeowTextStyles.label), // 数据备份
+              Text('数据备份', style: MeowTextStyles.label),
             ],
           ),
           const SizedBox(height: MeowSpacing.md),
+
+          // Device info row (informational)
+          _buildDeviceInfoRow(),
+          const SizedBox(height: MeowSpacing.sm),
 
           // Latest backup status
           _buildLatestStatus(),
@@ -179,10 +213,10 @@ class _SettingsPageState extends State<SettingsPage> {
               key: const Key('settings-backup-button'),
               onPressed: _isUploading ? null : _performBackup,
               child: Text(_isUploading
-                  ? '\u5907\u4efd\u4e2d...' // 备份中...
+                  ? '备份中...'
                   : _backupStatus == BackupUploadStatus.uploadFailed
-                      ? '\u91cd\u8bd5\u5907\u4efd' // 重试备份
-                      : '\u7acb\u5373\u5907\u4efd' // 立即备份
+                      ? '重试备份'
+                      : '立即备份',
               ),
             ),
           ),
@@ -191,7 +225,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (_error != null) ...[
             const SizedBox(height: MeowSpacing.sm),
             Text(
-              '\u5907\u4efd\u5931\u8d25: $_error', // 备份失败:
+              '备份失败: $_error',
               style: MeowTextStyles.caption.copyWith(color: MeowColors.error),
             ),
           ],
@@ -199,9 +233,7 @@ class _SettingsPageState extends State<SettingsPage> {
           // Note: not sync.
           // backup_restore_semantic_contract_v1 (FROZEN, P3.3.5):
           //   Layer 1 backup_success is SOURCE-device only. The note must
-          //   explicitly disclaim real-time sync AND cross-device consistency,
-          //   so the user cannot misread "backup success" as "other devices
-          //   have been updated". See backup_restore_semantics.dart.
+          //   explicitly disclaim real-time sync AND cross-device consistency.
           const SizedBox(height: MeowSpacing.sm),
           Text(
             '备份会将当前进度保存到云端，不是实时同步，也不代表其他设备自动一致',
@@ -218,6 +250,27 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Widget _buildDeviceInfoRow() {
+    final shortId = _deviceId != null && _deviceId!.length >= 8
+        ? '…${_deviceId!.substring(_deviceId!.length - 8)}'
+        : (_deviceId ?? '加载中…');
+    final model = _deviceModel ?? '加载中…';
+
+    return Row(
+      children: [
+        const Text('📱', style: TextStyle(fontSize: 14)),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            '设备: $model · ID: $shortId',
+            style: MeowTextStyles.caption.copyWith(color: MeowColors.textSecondary),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
   // ==================== Restore Section (P3.1 Phase 4) ====================
 
   bool _isRestoring = false;
@@ -228,15 +281,14 @@ class _SettingsPageState extends State<SettingsPage> {
       children: [
         Row(
           children: [
-            const Text('\u{1f504}', style: TextStyle(fontSize: 16)), // 🔄
+            const Text('🔄', style: TextStyle(fontSize: 16)),
             const SizedBox(width: 8),
-            Text('\u6062\u590d\u5907\u4efd', style: MeowTextStyles.label), // 恢复备份
+            Text('恢复备份', style: MeowTextStyles.label),
           ],
         ),
         const SizedBox(height: MeowSpacing.sm),
         Text(
-          '\u4ece\u4e91\u7aef\u5907\u4efd\u6062\u590d\u6570\u636e\u5230\u5f53\u524d\u8bbe\u5907',
-          // 从云端备份恢复数据到当前设备
+          '从云端备份恢复数据到当前设备',
           style: MeowTextStyles.caption.copyWith(color: MeowColors.textSecondary),
         ),
         const SizedBox(height: MeowSpacing.md),
@@ -249,10 +301,7 @@ class _SettingsPageState extends State<SettingsPage> {
               foregroundColor: MeowColors.warning,
               side: BorderSide(color: MeowColors.warning.withValues(alpha: 0.5)),
             ),
-            child: Text(_isRestoring
-                ? '\u6062\u590d\u4e2d...' // 恢复中...
-                : '\u6062\u590d\u5907\u4efd' // 恢复备份
-            ),
+            child: Text(_isRestoring ? '恢复中...' : '恢复备份'),
           ),
         ),
       ],
@@ -278,44 +327,61 @@ class _SettingsPageState extends State<SettingsPage> {
       String msg;
       switch (preCheck.status) {
         case RestorePreCheckStatus.noBackupFound:
-          msg = '\u6ca1\u6709\u53ef\u6062\u590d\u7684\u5907\u4efd'; // 没有可恢复的备份
+          msg = '没有可恢复的备份';
           break;
         case RestorePreCheckStatus.versionNotSupported:
-          msg = '\u5907\u4efd\u7248\u672c\u6682\u4e0d\u652f\u6301\u6062\u590d'; // 备份版本暂不支持恢复
+          msg = '备份版本暂不支持恢复';
           break;
         default:
-          msg = '\u670d\u52a1\u6682\u4e0d\u53ef\u7528\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5'; // 服务暂不可用，请稍后再试
+          msg = '服务暂不可用，请稍后再试';
       }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       return;
     }
 
+    // Show source device info in confirmation dialog (if available)
+    final sourceDevice = preCheck.deviceModel != null
+        ? '来自设备: ${preCheck.deviceModel}'
+        : '';
+    final sourceId = preCheck.deviceId != null && preCheck.deviceId!.length >= 8
+        ? '设备ID: …${preCheck.deviceId!.substring(preCheck.deviceId!.length - 8)}'
+        : '';
+
     // Confirmation dialog — HIGH RISK action
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('\u786e\u8ba4\u6062\u590d'), // 确认恢复
-        content: const Text(
-          '\u5c06\u4f7f\u7528\u6700\u8fd1\u4e00\u6b21\u4e91\u7aef\u5907\u4efd\u6062\u590d\u5f53\u524d\u8bbe\u5907\u6570\u636e\u3002\n\n'
-          '\u2022 \u8fd9\u53ef\u80fd\u8986\u76d6\u5f53\u524d\u8bbe\u5907\u4e0a\u7684\u672c\u5730\u5b66\u4e60\u8fdb\u5ea6\n'
-          '\u2022 \u4e5f\u53ef\u80fd\u8986\u76d6\u8bbe\u7f6e\u9879\uff08\u5982\u6bcf\u65e5\u5b66\u4e60\u76ee\u6807\uff09\n'
-          '\u2022 \u8fd9\u4e0d\u662f\u5b9e\u65f6\u540c\u6b65\uff0c\u4e0d\u4ee3\u8868\u5176\u4ed6\u8bbe\u5907\u4e5f\u81ea\u52a8\u4e00\u81f4\n'
-          '\u2022 \u5efa\u8bae\u5148\u624b\u52a8\u5907\u4efd\u5f53\u524d\u8bbe\u5907',
-          // 将使用最近一次云端备份恢复当前设备数据。
-          // • 这可能覆盖当前设备上的本地学习进度
-          // • 也可能覆盖设置项（如每日学习目标）
-          // • 这不是实时同步，不代表其他设备也自动一致
-          // • 建议先手动备份当前设备
+        title: const Text('确认恢复'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (sourceDevice.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '$sourceDevice\n$sourceId',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+            const Text(
+              '将使用最近一次云端备份恢复当前设备数据。\n\n'
+              '• 这可能覆盖当前设备上的本地学习进度\n'
+              '• 也可能覆盖设置项（如每日学习目标）\n'
+              '• 这不是实时同步，不代表其他设备也自动一致\n'
+              '• 建议先手动备份当前设备',
+            ),
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('\u53d6\u6d88'), // 取消
+            child: const Text('取消'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: MeowColors.warning),
-            child: const Text('\u786e\u8ba4\u6062\u590d'), // 确认恢复
+            child: const Text('确认恢复'),
           ),
         ],
       ),
@@ -333,8 +399,8 @@ class _SettingsPageState extends State<SettingsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(result.isSuccess
-              ? '\u6062\u590d\u6210\u529f\uff0c\u5f53\u524d\u8bbe\u5907\u6570\u636e\u5df2\u66f4\u65b0' // 恢复成功，当前设备数据已更新
-              : '\u6062\u590d\u5931\u8d25: ${result.errorCode ?? ""}' // 恢复失败:
+              ? '恢复成功，当前设备数据已更新'
+              : '恢复失败: ${result.errorCode ?? ""}',
           ),
         ),
       );
@@ -348,7 +414,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _buildDailyGoalSection() {
     if (!_dailyGoalLoaded) {
-      // Load current value asynchronously on first build
       SharedPreferences.getInstance().then((prefs) {
         if (mounted) {
           setState(() {
@@ -367,9 +432,9 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             Row(
               children: [
-                const Text('\u{1f4d6}', style: TextStyle(fontSize: 18)), // 📖
+                const Text('📖', style: TextStyle(fontSize: 18)),
                 const SizedBox(width: 8),
-                Text('\u6bcf\u65e5\u5b66\u4e60\u76ee\u6807', style: MeowTextStyles.label), // 每日学习目标
+                Text('每日学习目标', style: MeowTextStyles.label),
               ],
             ),
             const SizedBox(height: MeowSpacing.md),
@@ -377,7 +442,7 @@ class _SettingsPageState extends State<SettingsPage> {
               children: [
                 Expanded(
                   child: Text(
-                    '\u6bcf\u65e5\u5b66\u4e60\u5355\u8bcd\u6570\u91cf', // 每日学习单词数量
+                    '每日学习单词数量',
                     style: MeowTextStyles.bodySmall,
                   ),
                 ),
@@ -387,7 +452,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: Row(
                     children: [
                       Text(
-                        '$_currentDailyGoal \u4e2a', // N 个
+                        '$_currentDailyGoal 个',
                         style: MeowTextStyles.subtitle.copyWith(color: MeowColors.primary),
                       ),
                       const SizedBox(width: 4),
@@ -399,8 +464,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             const SizedBox(height: MeowSpacing.sm),
             Text(
-              '\u4fee\u6539\u540e\u5f53\u5929\u751f\u6548\uff0c\u4e0d\u4f1a\u56de\u7b97\u5386\u53f2\u65e5',
-              // 修改后当天生效，不会回算历史日
+              '修改后当天生效，不会回算历史日',
               style: MeowTextStyles.caption.copyWith(color: MeowColors.textHint),
             ),
           ],
@@ -413,13 +477,12 @@ class _SettingsPageState extends State<SettingsPage> {
     final result = await showDialog<int>(
       context: context,
       builder: (ctx) {
-        // Controller lives inside the dialog builder — disposed when dialog closes
         final controller = TextEditingController(text: '$_currentDailyGoal');
         String? errorText;
 
         return StatefulBuilder(
           builder: (ctx, setDialogState) => AlertDialog(
-            title: const Text('\u8bbe\u7f6e\u6bcf\u65e5\u5b66\u4e60\u5355\u8bcd\u6570\u91cf'), // 设置每日学习单词数量
+            title: const Text('设置每日学习单词数量'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -428,15 +491,15 @@ class _SettingsPageState extends State<SettingsPage> {
                   keyboardType: TextInputType.number,
                   autofocus: true,
                   decoration: InputDecoration(
-                    labelText: '\u5355\u8bcd\u6570\u91cf', // 单词数量
+                    labelText: '单词数量',
                     hintText: '1 - 500',
                     errorText: errorText,
-                    suffixText: '\u4e2a', // 个
+                    suffixText: '个',
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '\u5efa\u8bae\u8303\u56f4: 1 - 500', // 建议范围: 1 - 500
+                  '建议范围: 1 - 500',
                   style: MeowTextStyles.caption.copyWith(color: MeowColors.textHint),
                 ),
               ],
@@ -444,31 +507,31 @@ class _SettingsPageState extends State<SettingsPage> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('\u53d6\u6d88'), // 取消
+                child: const Text('取消'),
               ),
               TextButton(
                 onPressed: () {
                   final text = controller.text.trim();
                   if (text.isEmpty) {
-                    setDialogState(() => errorText = '\u8bf7\u8f93\u5165\u6570\u5b57'); // 请输入数字
+                    setDialogState(() => errorText = '请输入数字');
                     return;
                   }
                   final value = int.tryParse(text);
                   if (value == null) {
-                    setDialogState(() => errorText = '\u8bf7\u8f93\u5165\u6574\u6570'); // 请输入整数
+                    setDialogState(() => errorText = '请输入整数');
                     return;
                   }
                   if (value <= 0) {
-                    setDialogState(() => errorText = '\u5fc5\u987b\u5927\u4e8e 0'); // 必须大于 0
+                    setDialogState(() => errorText = '必须大于 0');
                     return;
                   }
                   if (value > 500) {
-                    setDialogState(() => errorText = '\u5efa\u8bae\u4e0d\u8d85\u8fc7 500'); // 建议不超过 500
+                    setDialogState(() => errorText = '建议不超过 500');
                     return;
                   }
                   Navigator.pop(ctx, value);
                 },
-                child: const Text('\u786e\u8ba4'), // 确认
+                child: const Text('确认'),
               ),
             ],
           ),
@@ -481,7 +544,6 @@ class _SettingsPageState extends State<SettingsPage> {
       final settings = LocalSettingsService(prefs);
       await settings.setDailyGoal(result);
 
-      // Sync to backend so today_new_target updates immediately
       try {
         await ApiClient().updateDailyGoal(result);
       } catch (_) {
@@ -493,7 +555,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('\u5df2\u66f4\u65b0\u4e3a $result \u4e2a/\u5929'), // 已更新为 N 个/天
+            content: Text('已更新为 $result 个/天'),
             duration: const Duration(seconds: 1),
           ),
         );
@@ -508,24 +570,24 @@ class _SettingsPageState extends State<SettingsPage> {
     switch (_backupStatus) {
       case BackupUploadStatus.noBackupYet:
         variant = MeowChipVariant.neutral;
-        statusText = '\u5c1a\u672a\u5907\u4efd'; // 尚未备份
+        statusText = '尚未备份';
         break;
       case BackupUploadStatus.uploadInProgress:
       case BackupUploadStatus.retrying:
         variant = MeowChipVariant.info;
-        statusText = '\u5907\u4efd\u4e2d'; // 备份中
+        statusText = '备份中';
         break;
       case BackupUploadStatus.uploadSucceeded:
         variant = MeowChipVariant.success;
-        statusText = '\u5df2\u5907\u4efd'; // 已备份
+        statusText = '已备份';
         break;
       case BackupUploadStatus.uploadFailed:
         variant = MeowChipVariant.warning;
-        statusText = '\u5907\u4efd\u5931\u8d25'; // 备份失败
+        statusText = '备份失败';
         break;
       case BackupUploadStatus.temporarilyUnavailable:
         variant = MeowChipVariant.neutral;
-        statusText = '\u670d\u52a1\u6682\u4e0d\u53ef\u7528'; // 服务暂不可用
+        statusText = '服务暂不可用';
         break;
     }
 
@@ -536,7 +598,7 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '\u6700\u8fd1\u4e00\u6b21: ${_formatTime(_lastBackupTime!)}', // 最近一次:
+              '最近一次: ${_formatTime(_lastBackupTime!)}',
               style: MeowTextStyles.caption.copyWith(color: MeowColors.textSecondary),
               overflow: TextOverflow.ellipsis,
             ),
@@ -549,7 +611,9 @@ class _SettingsPageState extends State<SettingsPage> {
   String _formatTime(String isoTime) {
     try {
       final dt = DateTime.parse(isoTime).toLocal();
-      return '${dt.month}/${dt.day} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+      return '${dt.month}/${dt.day} '
+          '${dt.hour.toString().padLeft(2, '0')}:'
+          '${dt.minute.toString().padLeft(2, '0')}';
     } catch (_) {
       return isoTime;
     }
@@ -570,7 +634,7 @@ class _SettingsPageState extends State<SettingsPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '\u8bb0\u5fc6\u8bbe\u7f6e', // 记忆设置
+                '记忆设置',
                 style: MeowTextStyles.label,
               ),
               const SizedBox(height: MeowSpacing.md),
@@ -586,13 +650,12 @@ class _SettingsPageState extends State<SettingsPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '\u8bb0\u5fc6\u4fdd\u7559\u7387', // 记忆保留率
+                              '记忆保留率',
                               style: MeowTextStyles.body,
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              '\u8c03\u9ad8\u2192\u590d\u4e60\u91cf\u589e\u52a0\u4f46\u8bb0\u5fc6\u66f4\u7262\uff1b\u8c03\u4f4e\u2192\u590d\u4e60\u91cf\u51cf\u5c11\u4f46\u53ef\u80fd\u9057\u5fd8\u66f4\u591a',
-                              // 调高→复习量增加但记忆更牢；调低→复习量减少但可能遗忘更多
+                              '调高→复习量增加但记忆更牢；调低→复习量减少但可能遗忘更多',
                               style: MeowTextStyles.caption.copyWith(
                                   color: MeowColors.textHint),
                             ),
@@ -628,7 +691,7 @@ class _SettingsPageState extends State<SettingsPage> {
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
             return AlertDialog(
-              title: const Text('\u8bb0\u5fc6\u4fdd\u7559\u7387'), // 记忆保留率
+              title: const Text('记忆保留率'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -652,8 +715,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '\u9ed8\u8ba4 0.90\u3002\u8c03\u9ad8\u590d\u4e60\u66f4\u9891\u7e41\u4f46\u8bb0\u5fc6\u66f4\u7262\u56fa\uff0c\u8c03\u4f4e\u590d\u4e60\u91cf\u5c11\u4f46\u53ef\u80fd\u9057\u5fd8\u66f4\u591a\u3002',
-                    // 默认 0.90。调高复习更频繁但记忆更牢固，调低复习量少但可能遗忘更多。
+                    '默认 0.90。调高复习更频繁但记忆更牢固，调低复习量少但可能遗忘更多。',
                     style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
                         color: Colors.grey[600]),
                     textAlign: TextAlign.center,
@@ -663,11 +725,11 @@ class _SettingsPageState extends State<SettingsPage> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(ctx),
-                  child: const Text('\u53d6\u6d88'), // 取消
+                  child: const Text('取消'),
                 ),
                 TextButton(
                   onPressed: () => Navigator.pop(ctx, tempValue),
-                  child: const Text('\u786e\u8ba4'), // 确认
+                  child: const Text('确认'),
                 ),
               ],
             );
@@ -683,9 +745,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-                '\u8bb0\u5fc6\u4fdd\u7559\u7387\u5df2\u66f4\u65b0\u4e3a ${result.toStringAsFixed(2)}'),
-            // 记忆保留率已更新为 X.XX
+            content: Text('记忆保留率已更新为 ${result.toStringAsFixed(2)}'),
             duration: const Duration(seconds: 1),
           ),
         );

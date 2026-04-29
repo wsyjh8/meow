@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meow_mobile/features/today/today_page.dart';
 import 'package:meow_mobile/core/api/api_client.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Mock API client for testing
 class MockApiClient implements ApiClient {
@@ -127,9 +128,24 @@ class MockApiClient implements ApiClient {
     required String itemId,
     String? idempotencyKey,
   }) => throw UnimplementedError();
+
+  @override
+  Future<void> updateDailyGoal(int dailyNewTarget) =>
+      throw UnimplementedError();
+
+  @override
+  Future<ReviewAttemptResult> submitLocalReviewBatch({
+    required List<LocalWordAttempt> attempts,
+    String? idempotencyKey,
+  }) =>
+      throw UnimplementedError();
 }
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets('TodayPage renders loading state', (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(

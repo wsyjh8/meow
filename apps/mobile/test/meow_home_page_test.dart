@@ -6,6 +6,7 @@ import 'package:meow_mobile/core/api/api_client.dart';
 import 'package:meow_mobile/core/router/app_router.dart';
 import 'package:meow_mobile/features/meow_home/meow_home_page.dart';
 import 'package:meow_mobile/features/today/today_page.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class TestApiClient implements ApiClient {
   TestApiClient({
@@ -186,10 +187,23 @@ class TestApiClient implements ApiClient {
   }
 
   @override
+  Future<void> updateDailyGoal(int dailyNewTarget) => throw UnimplementedError();
+
+  @override
+  Future<ReviewAttemptResult> submitLocalReviewBatch({
+    required List<LocalWordAttempt> attempts,
+    String? idempotencyKey,
+  }) => throw UnimplementedError();
+
+  @override
   void dispose() {}
 }
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets('MeowHomePage renders loading state', (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -229,11 +243,18 @@ void main() {
   testWidgets('MeowHomePage renders error state and retry button', (
     WidgetTester tester,
   ) async {
+    // Error state requires getToday() to fail AND the local offline fallback
+    // to also fail (LocalDatabase not initialised in unit tests). Secondary
+    // summary failure alone is silently absorbed by the page.
+    // Mock SharedPreferences so the fallback chain completes quickly
+    // (then LocalDatabase.instance throws → error state).
+    SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
       MaterialApp(
         home: MeowHomePage(
           apiClient: TestApiClient(
             secondaryException: ApiException('secondary summary failed'),
+            todayException: ApiException('today failed'),
           ),
         ),
       ),

@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:meow_mobile/core/gate/cutover_vs_fact_owner_boundary_v2.dart';
-import 'package:meow_mobile/core/gate/db_api_uplift_judgment.dart';
-import 'package:meow_mobile/core/gate/fuller_cutover_subset.dart';
-import 'package:meow_mobile/core/gate/retained_anchor_to_exit_transition.dart';
-import 'package:meow_mobile/core/gate/review_group_exit_gate.dart';
-import 'package:meow_mobile/core/gate/review_group_exit_gate_v2.dart';
-import 'package:meow_mobile/core/gate/review_group_retained_anchor.dart';
-import 'package:meow_mobile/core/gate/stronger_ingest_judgment_ready.dart';
+import 'package:meow_mobile/core/gate/cutover_subset.dart';
+import 'package:meow_mobile/core/gate/db_api_uplift.dart';
+import 'package:meow_mobile/core/gate/fact_owner_boundary.dart';
+import 'package:meow_mobile/core/gate/review_group_lifecycle.dart';
 import 'package:meow_mobile/core/guards/p3_feature_guard.dart';
 import 'package:meow_mobile/core/serving/review_serving_seam.dart';
 
@@ -464,8 +460,9 @@ void main() {
       expect(P3FeatureGuard.isDbApiUpliftJudgmentEnabled, isFalse);
     });
 
-    test('P3.3.9 flags still false (regression)', () {
-      expect(P3FeatureGuard.isReviewPageNonContinuationCutoverEnabled, isFalse);
+    test('P3.3.9 flags regression (cutover flag now true per P3.3.16)', () {
+      // isReviewPageNonContinuationCutoverEnabled: P3.3.16 flipped to true
+      expect(P3FeatureGuard.isReviewPageNonContinuationCutoverEnabled, isTrue);
       expect(P3FeatureGuard.isStrongerIngestCandidatePathEnabled, isFalse);
     });
 

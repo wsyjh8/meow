@@ -16,6 +16,11 @@ export interface IReviewRepository {
     idempotencyKey: string,
   ): { success: boolean; groupCompleted: boolean; alreadyExists: boolean };
 
+  submitLocalReviewBatch(
+    wordAttempts: { word_id: string; action_result: 'correct' | 'incorrect' }[],
+    idempotencyKey: string,
+  ): { success: boolean; alreadyExists: boolean; localGroupId: string };
+
   hasReviewGroupCompletedEvent(reviewGroupId: string): boolean;
 
   getReviewGroups(): ReviewGroup[];

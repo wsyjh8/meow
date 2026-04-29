@@ -51,6 +51,10 @@ export interface DevStoreSnapshot {
 
   // Idempotency keys
   idempotencyKeys: Record<string, any>;
+
+  // P3.2 Backup persistence — optional for backward compat with existing state files
+  latestBackup?: any | null;
+  backupSnapshot?: any | null;
 }
 
 const DEFAULT_PERSIST_DIR = path.resolve(__dirname, '..', '..', 'data');

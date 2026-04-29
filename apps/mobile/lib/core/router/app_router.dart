@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 import '../../features/today/today_page.dart';
 import '../../features/study/study_page.dart';
-import '../../features/review/review_page.dart';
 import '../../features/session/session_page.dart';
+import '../../spec/pages/spec_review_page.dart';
 import '../../features/check_in/check_in_page.dart';
 import '../../features/settlement/settlement_page.dart';
 import '../../features/meow_home/meow_home_page.dart';
 import '../../features/inventory/inventory_page.dart';
 import '../../features/customize/customize_page.dart';
 import '../../features/settings/settings_page.dart';
+import '../../spec/pages/books_page.dart';
 
 class AppRouter {
   static const String today = '/';
@@ -21,6 +22,7 @@ class AppRouter {
   static const String inventory = '/inventory';
   static const String customize = '/customize';
   static const String settings = '/settings';
+  static const String books = '/books';
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -29,7 +31,7 @@ class AppRouter {
       case study:
         return _buildPage(const StudyPage(), settings);
       case review:
-        return _buildPage(const ReviewPage(), settings);
+        return _buildPage(const SpecReviewPage(), settings);
       case session:
         return _buildPage(const SessionPage(), settings);
       case checkIn:
@@ -44,6 +46,8 @@ class AppRouter {
         return _buildPage(const CustomizePage(), settings);
       case AppRouter.settings:
         return _buildPage(const SettingsPage(), settings);
+      case books:
+        return _buildPage(const BooksPage(), settings);
       default:
         return _buildPage(
           Scaffold(

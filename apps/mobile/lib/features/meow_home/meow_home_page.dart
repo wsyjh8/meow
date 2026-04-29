@@ -1,8 +1,14 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/memory/fsrs_service.dart';
 import '../../core/router/app_router.dart';
+import '../../core/services/local_today_service.dart';
+import '../../core/storage/drift/app_database.dart';
+import '../../core/storage/local_database.dart';
+import '../../core/storage/local_settings_service.dart';
 import '../../shared/theme.dart';
 import '../../shared/animations.dart';
 import '../../shared/widgets/meow_card.dart';
@@ -118,20 +124,50 @@ class _MeowHomePageState extends State<MeowHomePage>
 
   Future<void> _loadSummary() async {
     setState(() { _isLoading = true; _error = null; });
+
+    // Secondary summary: always has a graceful fallback — never blocks the page.
+    SecondarySummary summary;
     try {
-      final results = await Future.wait([
-        _apiClient.getSecondarySummary(),
-        _apiClient.getToday(),
-      ]);
-      if (mounted) {
-        setState(() {
-          _summary = results[0] as SecondarySummary;
-          _todayState = results[1] as TodayState;
-          _isLoading = false;
-        });
+      summary = await _apiClient.getSecondarySummary();
+    } catch (_) {
+      summary = SecondarySummary(
+        coins: 0, fishTreats: 0, exp: 0,
+        catSummary: CatSummary(
+          nickname: 'Mimi', level: 1, mood: 60, bond: 0, energy: 'medium'),
+      );
+    }
+
+    // Today state: local-first via LocalTodayService, cloud API as fallback.
+    // future: cloud verification — getToday() retained for hybrid mode.
+    TodayState? todayState;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      try {
+        final appDb = AppDatabase();
+        final localService = LocalTodayService(
+          prefs: prefs,
+          localDb: LocalDatabase.instance,
+          fsrs: FsrsService(db: appDb),
+          driftDb: appDb,
+        );
+        todayState = await localService.getTodayState();
+      } catch (_) {
+        // Local service failed (e.g., drift unavailable) — cloud fallback.
+        todayState = await _apiClient.getToday();
       }
-    } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _isLoading = false; });
+    } catch (_) {
+      // SharedPreferences or all paths failed — todayState stays null.
+    }
+
+    if (!mounted) return;
+    if (todayState == null) {
+      setState(() { _error = 'offline'; _isLoading = false; });
+    } else {
+      setState(() {
+        _summary = summary;
+        _todayState = todayState;
+        _isLoading = false;
+      });
     }
   }
 

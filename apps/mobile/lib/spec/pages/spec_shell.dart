@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../features/today/today_page.dart';
 import '../theme/tokens.dart';
 import '../widgets/spec_tab_bar.dart';
+import 'books_page.dart';
 import 'home_page.dart';
 import 'mochi_page.dart';
 import 'stats_page.dart';
@@ -22,6 +23,10 @@ class SpecShell extends StatefulWidget {
 class _SpecShellState extends State<SpecShell> {
   SpecTab _currentTab = SpecTab.home;
 
+  // Incremented each time we return to the home tab so SpecHomePage
+  // rebuilds and reloads data (e.g. after switching active wordbook).
+  int _homeEpoch = 0;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -29,7 +34,14 @@ class _SpecShellState extends State<SpecShell> {
       body: _buildCurrentPage(),
       bottomNavigationBar: SpecTabBar(
         currentTab: _currentTab,
-        onTabChanged: (tab) => setState(() => _currentTab = tab),
+        onTabChanged: (tab) {
+          setState(() {
+            if (tab == SpecTab.home && _currentTab != SpecTab.home) {
+              _homeEpoch++;
+            }
+            _currentTab = tab;
+          });
+        },
       ),
     );
   }
@@ -37,9 +49,9 @@ class _SpecShellState extends State<SpecShell> {
   Widget _buildCurrentPage() {
     switch (_currentTab) {
       case SpecTab.home:
-        return const SpecHomePage();
+        return SpecHomePage(key: ValueKey(_homeEpoch));
       case SpecTab.books:
-        return _placeholder('词书', '词书页尚未设计（SPEC 9.1 范围外）');
+        return const BooksPage();
       case SpecTab.mochi:
         return const SpecMochiPage();
       case SpecTab.stats:
@@ -49,25 +61,6 @@ class _SpecShellState extends State<SpecShell> {
       case SpecTab.legacy:
         return _buildLegacyTab();
     }
-  }
-
-  /// Temporary placeholder for pages not yet implemented
-  Widget _placeholder(String title, String subtitle) {
-    return Scaffold(
-      backgroundColor: SpecBg.canvas,
-      body: SafeArea(
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(title, style: SpecTypo.pageTitle),
-              const SizedBox(height: 8),
-              Text(subtitle, style: SpecTypo.cardSmall),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   /// SPEC 5.1.6 — Legacy tab: existing TodayPage, NOT rewritten/modified/beautified.

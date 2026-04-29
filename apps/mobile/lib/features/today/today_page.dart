@@ -1,8 +1,14 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/memory/fsrs_service.dart';
 import '../../core/router/app_router.dart';
+import '../../core/services/local_today_service.dart';
+import '../../core/storage/drift/app_database.dart';
+import '../../core/storage/local_database.dart';
+import '../../core/storage/local_settings_service.dart';
 import '../../shared/theme.dart';
 import '../../shared/animations.dart';
 import '../../shared/widgets/meow_card.dart';
@@ -46,18 +52,39 @@ class _TodayPageState extends State<TodayPage> {
   Future<void> _loadData() async {
     setState(() { _isLoading = true; _error = null; });
     try {
-      // Load today + secondary summary in parallel (B23-B: minimal data flow addition)
-      final results = await Future.wait([
-        _apiClient.getToday(),
-        _apiClient.getSecondarySummary().catchError((_) => SecondarySummary(
+      // Today state: local-first via LocalTodayService.
+      // future: cloud verification — getToday() retained for hybrid mode.
+      final prefs = await SharedPreferences.getInstance();
+      late TodayState todayState;
+      try {
+        final appDb = AppDatabase();
+        final localService = LocalTodayService(
+          prefs: prefs,
+          localDb: LocalDatabase.instance,
+          fsrs: FsrsService(db: appDb),
+          driftDb: appDb,
+        );
+        todayState = await localService.getTodayState();
+      } catch (_) {
+        // Local service failed — fall back to cloud API.
+        todayState = await _apiClient.getToday();
+      }
+
+      // Secondary summary: cloud-only (rewards/cat state — not migrated).
+      SecondarySummary? secondary;
+      try {
+        secondary = await _apiClient.getSecondarySummary();
+      } catch (_) {
+        secondary = SecondarySummary(
           coins: 0, fishTreats: 0, exp: 0,
           catSummary: CatSummary(nickname: 'Mimi', level: 1, mood: 60, bond: 0, energy: 'medium'),
-        )),
-      ]);
+        );
+      }
+
       if (mounted) {
         setState(() {
-          _todayState = results[0] as TodayState;
-          _secondarySummary = results[1] as SecondarySummary;
+          _todayState = todayState;
+          _secondarySummary = secondary;
           _isLoading = false;
         });
       }

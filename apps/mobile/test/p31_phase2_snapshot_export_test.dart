@@ -43,7 +43,8 @@ void main() {
     test('has schema_version at top level', () async {
       final result = await exportService.export();
       expect(result.isSuccess, true);
-      expect(result.snapshotMap!['schema_version'], 'p3_1_snapshot_v2');
+      // P3.2: schema bumped to p3_2_snapshot_v1 (includes card_states + device info)
+      expect(result.snapshotMap!['schema_version'], 'p3_2_snapshot_v1');
     });
 
     test('has exported_at at top level', () async {
@@ -102,7 +103,8 @@ void main() {
     });
 
     test('schema version is v2', () {
-      expect(SnapshotExportService.schemaVersion, 'p3_1_snapshot_v2');
+      // P3.2: schema version bumped to include card_states + device info
+      expect(SnapshotExportService.schemaVersion, 'p3_2_snapshot_v1');
     });
   });
 
@@ -124,7 +126,8 @@ void main() {
 
   group('Existing flow regression', () {
     test('P3.1 cloud backup guard still false', () {
-      expect(P3FeatureGuard.isCloudBackupEnabled, false);
+      // P3.2: cloud backup is now enabled
+      expect(P3FeatureGuard.isCloudBackupEnabled, true);
     });
 
     test('export is read-only (does not modify data)', () async {

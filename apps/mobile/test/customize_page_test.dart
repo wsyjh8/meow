@@ -107,6 +107,13 @@ class CustomizeTestApiClient implements ApiClient {
   @override
   Future<FeedResponse> feedCat({String? idempotencyKey}) => throw UnimplementedError();
   @override
+  Future<void> updateDailyGoal(int dailyNewTarget) => throw UnimplementedError();
+  @override
+  Future<ReviewAttemptResult> submitLocalReviewBatch({
+    required List<LocalWordAttempt> attempts,
+    String? idempotencyKey,
+  }) => throw UnimplementedError();
+  @override
   void dispose() {}
 }
 

@@ -29,23 +29,29 @@ abstract final class P3FeatureGuard {
   static const bool isStreakExplanationEnabled = false;
 
   // ==================== P3.1 — Local Progress + Cloud Backup ====================
+  //
+  // P3.2 BACKUP CUTOVER — flags flipped true.
+  // card_states (FSRS scheduling) now included in snapshots (schema p3_2_snapshot_v1).
+  // Device model + device_id added to backup metadata.
+  // Auto-backup on app background + post-review-session (>30min interval).
+  // Multi-device conflict policy: last-write-wins.
 
   /// P3.1 — Local snapshot export.
-  /// When false: no local export functionality is available.
-  static const bool isLocalBackupEnabled = false;
+  /// P3.2: ENABLED — includes card_states (FSRS) + device metadata.
+  static const bool isLocalBackupEnabled = true;
 
   /// P3.1 — Cloud backup upload.
-  /// When false: no cloud upload functionality is available.
-  /// Note: upload success != sync success. Cloud is backup container, NOT sync endpoint.
-  static const bool isCloudBackupEnabled = false;
+  /// P3.2: ENABLED — cloud is backup container, NOT sync endpoint.
+  /// Note: upload success != sync success.
+  static const bool isCloudBackupEnabled = true;
 
   /// P3.1 — Restore from backup.
   /// Phase 4: enabled. Restore is gated with pre-check + confirmation dialog.
   static const bool isRestoreEnabled = true;
 
   /// P3.1 — Backup settings entry (settings/my page visibility).
-  /// When false: no backup-related entry point is visible in any navigation.
-  static const bool isBackupSettingsEntryEnabled = false;
+  /// P3.2: ENABLED — backup section visible in settings page.
+  static const bool isBackupSettingsEntryEnabled = true;
 
   // ==================== P3.1 Delta — Download / Manual Upload / Daily Goal ====================
 
@@ -201,10 +207,11 @@ abstract final class P3FeatureGuard {
   //                unchanged.
 
   /// P3.3.9 — ReviewPage non-continuation serving cutover.
-  /// When true (NOT this round): would allow the serving seam to return
-  /// `localNonContinuation` when no active continuation exists.
-  /// Stays false; the seam ALWAYS returns cloudReviewGroup this round.
-  static const bool isReviewPageNonContinuationCutoverEnabled = false;
+  /// P3.3.16 — REAL CUTOVER: flag flipped true.
+  /// S3 resolved (Option A: POST /review-attempts/local-batch).
+  /// Non-continuation sessions now served from local FSRS queue.
+  /// Active continuations still protected by Priority 1 (cloud retained anchor).
+  static const bool isReviewPageNonContinuationCutoverEnabled = true;
 
   /// P3.3.9 — Stronger ingest candidate path.
   /// When true (NOT this round): would enable the stronger ingest
@@ -294,4 +301,98 @@ abstract final class P3FeatureGuard {
   /// seam family evaluation. Stays false; active DB/API baselines stay
   /// at v0.2.1.
   static const bool isDbApiUpliftAbsorbJudgmentEnabled = false;
+
+  // ==================== P3.3.13 — Fuller-Cutover Execution / True-Exit-Candidate / DB-API Uplift-Absorb-Readiness Round (DISABLED) ====================
+  //
+  // Execution-preflight layer flags. All flags MUST remain false.
+  // This round is PURE ANCHOR WORK — no runtime wiring.
+  //
+  // RF-P3.3.13-004: execution-subset-v2 ≠ fuller cutover completed.
+  // RF-P3.3.13-009: true-exit-candidate ≠ true exit started.
+  // RF-P3.3.13-012: absorb-readiness ≠ active baseline uplift absorbed.
+
+  /// P3.3.13 — Fuller cutover execution-subset-v2.
+  /// When true (NOT this round): would enable widened execution-
+  /// subset-v2 evaluation. Stays false; anchors are test-only.
+  static const bool isFullerCutoverExecutionSubsetV2Enabled = false;
+
+  /// P3.3.13 — review_group true-exit-candidate.
+  /// When true (NOT this round): would enable true-exit-candidate
+  /// evaluation. Stays false; `review_group` keeps all 4 roles.
+  static const bool isReviewGroupTrueExitCandidateEnabled = false;
+
+  /// P3.3.13 — DB/API uplift-absorb-readiness.
+  /// When true (NOT this round): would enable uplift-absorb-readiness
+  /// seam family evaluation. Stays false; active DB/API baselines
+  /// stay at v0.2.1.
+  static const bool isDbApiUpliftAbsorbReadinessEnabled = false;
+
+  // ==================== P3.3.14 — Final Cutover Program Round (A/B/C) ====================
+  //
+  // Final Cutover Program Round — A-checkpoint judgment lock + B-checkpoint
+  // narrow real execution + C-checkpoint absorb / cleanup gate. The 3 flags
+  // below remain false because this round is ADDITIVE (new adapter family,
+  // new neutral copy, new minimal binding seam) — nothing flips user-visible
+  // runtime truth. Flipping any flag to true would require a separate Room 1
+  // pin for either true-exit absorption, uplift absorption, or cleanup closeout.
+  //
+  // RF-P3.3.14-004: A checkpoint pass gate — judgment lock pinned, not
+  //                 runtime truth advanced.
+  // RF-P3.3.14-008: B checkpoint pass gate — real execution stays additive,
+  //                 no homepage route / active continuation / final fact
+  //                 owner touch.
+  // RF-P3.3.14-018: C entry conditions — must hold before same-round cleanup
+  //                 can be absorbed.
+
+  /// P3.3.14 — Final cutover judgment lock enforcement.
+  /// When true (NOT this round): would enable runtime enforcement of
+  /// the A-checkpoint judgment lock. Stays false; the lock is pinned
+  /// as an anchor contract only.
+  static const bool isFinalCutoverJudgmentLockEnabled = false;
+
+  /// P3.3.14 — Real cutover execution subset activation.
+  /// When true (NOT this round): would mark the B-checkpoint real
+  /// execution subset as active runtime truth. Stays false; B members
+  /// are delivered additively alongside the existing runtime and do
+  /// NOT replace or reroute anything.
+  static const bool isRealCutoverExecutionSubsetEnabled = false;
+
+  /// P3.3.14 — Same-round cleanup gate enabled.
+  /// When true (NOT this round): would open the C-checkpoint cleanup
+  /// closeout path. Stays false; the gate is pinned but NOT open.
+  /// Default state this round: `notReady`.
+  static const bool isSameRoundCleanupGateEnabled = false;
+
+  // ==================== P3.3.15 — Direct Cutover Scaffolding (flag stays false) ====================
+  //
+  // Per R1_to_R4_P3_3_15_DirectCutover_Execution_Handoff_v0.1.md, this
+  // round was handed off as a "direct cutover round" but analysis
+  // revealed a hard contradiction with the out-of-scope list: a real
+  // runtime source switch on ReviewPage's narrow subset cannot
+  // coexist with (a) "no API core semantics rewrite" and (b) "final
+  // fact / settlement owner stays at backend". A local-origin group
+  // ID cannot round-trip through submitReviewAttempt, which is keyed
+  // on a backend-issued group ID and returns settlement +
+  // dailyGoalStatus.
+  //
+  // User decision this round: build the missing local-serving
+  // infrastructure as real runtime code, but leave
+  // `isReviewPageNonContinuationCutoverEnabled` at false. Flipping
+  // the flag is parked on a future Room 1 decision about settlement
+  // ownership for local-origin sessions (S3).
+  //
+  // S1 (LocalReviewQueueBuilder) + S2 (ReviewPage branching) +
+  // S4 (RollbackHoldFallbackRuntimeWatcher) are all landed but
+  // DORMANT. The existing cutover flag is NOT touched.
+  //
+  // The landed-marker flag below is TRUE (not a behavior gate, a
+  // presence assertion) so tests can verify the scaffolding is
+  // present without needing to introspect individual files.
+
+  /// P3.3.15 — Direct-cutover scaffolding present (landed-marker, not
+  /// a behavior gate). Always true once S1/S2/S4 are in the tree;
+  /// flipping this to false would be a regression. Does NOT enable
+  /// any user-visible behavior — that remains gated by
+  /// `isReviewPageNonContinuationCutoverEnabled`, which stays false.
+  static const bool isP3315DirectCutoverScaffoldingLanded = true;
 }

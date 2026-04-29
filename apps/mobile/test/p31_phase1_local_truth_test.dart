@@ -234,10 +234,11 @@ void main() {
     });
 
     test('P3.1 backup guards still all false', () {
-      expect(P3FeatureGuard.isLocalBackupEnabled, false);
-      expect(P3FeatureGuard.isCloudBackupEnabled, false);
+      // P3.2 BACKUP CUTOVER: all backup flags now enabled.
+      expect(P3FeatureGuard.isLocalBackupEnabled, true); // P3.2: enabled
+      expect(P3FeatureGuard.isCloudBackupEnabled, true); // P3.2: enabled
       expect(P3FeatureGuard.isRestoreEnabled, true); // Phase 4: now enabled
-      expect(P3FeatureGuard.isBackupSettingsEntryEnabled, false);
+      expect(P3FeatureGuard.isBackupSettingsEntryEnabled, true); // P3.2: enabled
     });
   });
 

@@ -1,10 +1,47 @@
 import 'package:flutter/material.dart';
 import '../core/router/app_router.dart';
+import '../core/storage/auto_backup_service.dart';
 import '../spec/pages/spec_shell.dart';
 import '../spec/theme/tokens.dart';
 
-class MeowApp extends StatelessWidget {
+/// Root application widget.
+///
+/// Responsibilities:
+///   - Configure MaterialApp theme and routing.
+///   - Observe app lifecycle to trigger auto-backup on background.
+///
+/// Auto-backup policy:
+///   When app moves to [AppLifecycleState.paused] (background/minimized),
+///   [AutoBackupService.triggerIfNeeded()] is called fire-and-forget.
+///   The service only runs if >30min since the last backup.
+///   Failures are silent — the user can always backup manually from Settings.
+class MeowApp extends StatefulWidget {
   const MeowApp({super.key});
+
+  @override
+  State<MeowApp> createState() => _MeowAppState();
+}
+
+class _MeowAppState extends State<MeowApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      // App going to background — trigger auto-backup (fire-and-forget).
+      AutoBackupService.triggerIfNeeded();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

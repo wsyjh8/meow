@@ -17,6 +17,7 @@ class LocalSettingsService {
   static const _keyTheme = 'settings_theme';
   static const _keyNotificationTime = 'settings_notification_time';
   static const _keyDesiredRetention = 'settings_desired_retention';
+  static const _keyActiveWordbook = 'settings_active_wordbook';
 
   // ==================== Daily Goal ====================
   int get dailyGoal => _prefs.getInt(_keyDailyGoal) ?? 20;
@@ -43,6 +44,14 @@ class LocalSettingsService {
   /// Stored as "HH:mm" string. Default: "09:00".
   String get notificationTime => _prefs.getString(_keyNotificationTime) ?? '09:00';
   Future<bool> setNotificationTime(String value) => _prefs.setString(_keyNotificationTime, value);
+
+  // ==================== Active Wordbook ====================
+  /// Which wordbook the user is currently studying.
+  /// 'book-001' = CET-4 (default), 'zk' = 中考, 'gk' = 高考.
+  String get activeWordbook =>
+      _prefs.getString(_keyActiveWordbook) ?? 'book-001';
+  Future<bool> setActiveWordbook(String slug) =>
+      _prefs.setString(_keyActiveWordbook, slug);
 
   /// Clear all settings (for testing / debug only).
   Future<bool> clearAll() => _prefs.clear();

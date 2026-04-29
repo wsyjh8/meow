@@ -15,6 +15,7 @@ import { EquipmentController } from '../controllers/equipment.controller';
 import { BackupController } from '../controllers/backup.controller';
 import { SettingsController } from '../controllers/settings.controller';
 import { WordsController } from '../controllers/words.controller';
+import { PronunciationController } from '../controllers/pronunciation.controller';
 
 @Module({
   controllers: [
@@ -34,6 +35,7 @@ import { WordsController } from '../controllers/words.controller';
     BackupController,
     SettingsController,
     WordsController,
+    PronunciationController,
   ],
 })
 export class RoutesModule {}

@@ -1,6 +1,11 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/api/api_client.dart';
+import '../../core/memory/fsrs_service.dart';
+import '../../core/services/local_today_service.dart';
+import '../../core/storage/drift/app_database.dart';
+import '../../core/storage/local_database.dart';
 import '../theme/tokens.dart';
 import '../icons/mochi_illustrations.dart';
 import '../widgets/spec_cards.dart';
@@ -43,14 +48,34 @@ class _SpecStatsPageState extends State<SpecStatsPage> {
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      final results = await Future.wait([
-        _apiClient.getSecondarySummary(),
-        _apiClient.getToday(),
-      ]);
+      // Today state: local-first.
+      // future: cloud verification — getToday() retained for hybrid mode.
+      final prefs = await SharedPreferences.getInstance();
+      late TodayState todayState;
+      try {
+        final appDb = AppDatabase();
+        final localService = LocalTodayService(
+          prefs: prefs,
+          localDb: LocalDatabase.instance,
+          fsrs: FsrsService(db: appDb),
+          driftDb: appDb,
+        );
+        todayState = await localService.getTodayState();
+      } catch (_) {
+        // Local service failed — fall back to cloud API.
+        todayState = await _apiClient.getToday();
+      }
+
+      // Secondary summary: cloud-only (rewards/cat/stats — not migrated).
+      SecondarySummary? summary;
+      try {
+        summary = await _apiClient.getSecondarySummary();
+      } catch (_) {}
+
       if (mounted) {
         setState(() {
-          _summary = results[0] as SecondarySummary;
-          _todayState = results[1] as TodayState;
+          _summary = summary;
+          _todayState = todayState;
           _isLoading = false;
         });
       }

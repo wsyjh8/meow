@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/api/api_client.dart';
+import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_settings_service.dart';
 import '../theme/tokens.dart';
 import '../icons/mochi_illustrations.dart';
@@ -25,6 +26,8 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
   final ApiClient _apiClient = ApiClient();
   SecondarySummary? _summary;
   int _dailyGoal = 20;
+  String _activeWordbook = 'book-001';
+  int _wordbookTotal = 0;
   bool _isLoading = true;
 
   @override
@@ -41,22 +44,26 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
+
+    // Always read local settings (no network needed).
     try {
-      final results = await Future.wait([
-        _apiClient.getSecondarySummary(),
-        SharedPreferences.getInstance(),
-      ]);
-      if (mounted) {
-        final prefs = results[1] as SharedPreferences;
-        setState(() {
-          _summary = results[0] as SecondarySummary;
-          _dailyGoal = LocalSettingsService(prefs).dailyGoal;
-          _isLoading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
-    }
+      final prefs = await SharedPreferences.getInstance();
+      final settings = LocalSettingsService(prefs);
+      _dailyGoal = settings.dailyGoal;
+      _activeWordbook = settings.activeWordbook;
+
+      final driftDb = AppDatabase();
+      _wordbookTotal = await driftDb.countWordsInBook(_activeWordbook);
+      // Do not close driftDb: sqflite uses a per-path singleton.
+    } catch (_) {} // stays at previous values on error
+
+    // Secondary summary: best-effort, silent fallback.
+    try {
+      final summary = await _apiClient.getSecondarySummary();
+      if (mounted) _summary = summary;
+    } catch (_) {}
+
+    if (mounted) setState(() => _isLoading = false);
   }
 
   @override
@@ -169,9 +176,9 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
                   style: TextStyle(fontSize: 12, color: SpecText.secondary),
                 ),
                 GestureDetector(
-                  onTap: () {
-                    // Textbook switch — out of scope (SPEC 9.3)
-                    debugPrint('Switch textbook tapped — page not designed yet');
+                  onTap: () async {
+                    await Navigator.pushNamed(context, '/books');
+                    if (mounted) _loadData();
                   },
                   child: const Text(
                     '切换 →',
@@ -181,13 +188,13 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
               ],
             ),
             const SizedBox(height: 8),
-            const Text(
-              'CET-4 核心词汇',
-              style: TextStyle(fontSize: 15, fontWeight: SpecTypo.medium, color: SpecText.primary),
+            Text(
+              _displayNameFor(_activeWordbook),
+              style: const TextStyle(fontSize: 15, fontWeight: SpecTypo.medium, color: SpecText.primary),
             ),
             const SizedBox(height: 4),
             Text(
-              '已学 $wordsLearned / 20 词',
+              '已学 $wordsLearned / $_wordbookTotal 词',
               style: const TextStyle(fontSize: 11, color: SpecText.tertiary),
             ),
           ],
@@ -303,4 +310,13 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
       ),
     );
   }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  String _displayNameFor(String slug) => switch (slug) {
+    'book-001' => 'CET-4 核心词汇',
+    'zk'       => '中考',
+    'gk'       => '高考',
+    _          => slug,
+  };
 }

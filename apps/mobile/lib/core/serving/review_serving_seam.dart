@@ -1,10 +1,9 @@
-/// review_serving_seam (FROZEN, P3.3.9)
+/// review_serving_seam (FROZEN, P3.3.9; CUTOVER WIRED, P3.3.16)
 ///
 /// The decision layer that sits between `ReviewPage._loadReviewGroup()`
-/// and `ApiClient.getNextReviewGroup()`. This round: the seam is
-/// consulted for observability, but ALWAYS returns `cloudReviewGroup`
-/// because `P3FeatureGuard.isReviewPageNonContinuationCutoverEnabled`
-/// is false.
+/// and the serving source (cloud or local). P3.3.16: the flag is now
+/// true and Priority 3 returns `localNonContinuation` — non-continuation
+/// sessions are served from the local FSRS queue.
 ///
 /// ============================================================================
 /// Frozen rules referenced
@@ -116,14 +115,13 @@ abstract final class ReviewServingSeam {
       );
     }
 
-    // Priority 3: flag ON + no continuation — local path would be
-    // eligible, but this round the local path is not yet wired.
-    // Fall back to cloud with a distinct reason so tests can verify
-    // the fallback branch is observable.
+    // Priority 3: flag ON + no continuation → local path is now wired.
+    // P3.3.16 real cutover: non-continuation sessions serve from
+    // LocalReviewQueueBuilder. isFallbackToRetainedAnchor is false —
+    // this is NOT a cloud fallback, it is the new primary path.
     return const ServingSourceSelection(
-      source: ReviewServingSourceKind.cloudReviewGroup,
-      reason: 'local_path_not_yet_wired_fallback_to_cloud',
-      isFallbackToRetainedAnchor: true,
+      source: ReviewServingSourceKind.localNonContinuation,
+      reason: 'cutover_flag_enabled_local_serving_active',
     );
   }
 

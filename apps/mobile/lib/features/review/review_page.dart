@@ -5,7 +5,13 @@ import '../../core/memory/fsrs_service.dart';
 import '../../core/memory/review_rating.dart';
 import '../../core/memory/widgets/rating_buttons.dart';
 import '../../core/review/review_readiness_state.dart';
+import '../../core/serving/local_review_queue_builder.dart';
+import '../../core/serving/review_serving_adapter_family.dart';
 import '../../core/serving/review_serving_seam.dart';
+import '../../core/serving/rollback_hold_fallback_orchestration.dart';
+import '../../core/serving/rollback_hold_fallback_runtime_watcher.dart';
+import '../../core/serving/source_neutral_helper_copy.dart';
+import '../../core/serving/stronger_ingest_minimal_binding_seam.dart';
 import '../../core/storage/drift/app_database.dart';
 
 /// ReviewPage - 复习
@@ -86,6 +92,73 @@ class _ReviewPageState extends State<ReviewPage> {
   @visibleForTesting
   int reviewServingSeamHitCount = 0;
 
+  /// Dev/test observable adapter-family hit counter (P3.3.14 B additive).
+  /// Incremented each time `_loadReviewGroup()` consults the adapter
+  /// family. The family ALWAYS routes to cloud; this counter is
+  /// observability-only. real_cutover_execution_subset_v1 Member 1.
+  @visibleForTesting
+  int reviewServingAdapterFamilyHitCount = 0;
+
+  /// Dev/test observable stronger-ingest minimal binding consultation
+  /// counter (P3.3.14 B additive). Incremented each time `_onRate()`
+  /// consults the minimal binding seam post-cloud-commit. No final
+  /// fact write is performed. real_cutover_execution_subset_v1 Member 5.
+  @visibleForTesting
+  int strongerIngestMinimalBindingHitCount = 0;
+
+  /// Dev/test observable local-review-queue-builder hit counter
+  /// (P3.3.15 — dormant scaffolding). Incremented each time
+  /// `_loadReviewGroup()` actually invokes
+  /// `LocalReviewQueueBuilder.build()`. In prod this stays at 0
+  /// because `isReviewPageNonContinuationCutoverEnabled` is false and
+  /// the branch is never taken.
+  @visibleForTesting
+  int localReviewQueueBuilderHitCount = 0;
+
+  /// Dev/test observable rollback/hold/fallback runtime watcher
+  /// counter (P3.3.15 — first runtime consumer of the P3.3.14
+  /// orchestration contract). Incremented each time
+  /// `_loadReviewGroup()` consults the watcher. In prod the watcher
+  /// always returns `normalServing` or `fallback` (under active
+  /// continuation); rollback transitions only happen in test.
+  @visibleForTesting
+  int rollbackHoldFallbackWatcherHitCount = 0;
+
+  /// Dev/test observable last watcher state (P3.3.15). Captures the
+  /// most recent `RollbackHoldFallbackState` returned by the watcher
+  /// so tests can assert on it without reflection.
+  @visibleForTesting
+  RollbackHoldFallbackState? lastRollbackHoldFallbackState;
+
+  /// Test-only injection point for `AppDatabase` used by the local
+  /// review queue builder. When null, the builder uses its own
+  /// `AppDatabase()` instance. Tests set this to a fake drift DB.
+  @visibleForTesting
+  AppDatabase? debugDatabaseOverride;
+
+  /// Accumulated ratings for the current local-origin session.
+  /// Populated word-by-word in [_handleLocalSessionRating()] and
+  /// submitted as a batch when all items are completed.
+  /// Cleared at the start of each [_loadReviewGroup()] call. P3.3.16.
+  final List<LocalWordAttempt> _localSessionAttempts = [];
+
+  // ── Intra-session requeue (session_requeue_v1) ───────────────────────────
+  // Works for both local-origin and cloud-origin review sessions.
+  //
+  // _sessionQueue: ordered list of items still to be shown in the current
+  //   session. Words rated 'incorrect'/'hard' for the FIRST time are moved
+  //   to the END of this list; on their second showing they are finalised.
+  // _sessionRequeued: word IDs already requeued once this session, so the
+  //   re-show is handled at most once per word (no infinite loop).
+  //
+  // For LOCAL sessions: items are finalised into _localSessionAttempts;
+  //   the batch is submitted when _sessionQueue is empty.
+  // For CLOUD sessions: items are submitted to the cloud only on final
+  //   rating (correct OR second incorrect). _loadReviewGroup() is called
+  //   only when _sessionQueue is empty.
+  List<ReviewGroupItem> _sessionQueue = [];
+  Set<String> _sessionRequeued = {};
+
   @override
   void initState() {
     super.initState();
@@ -124,24 +197,125 @@ class _ReviewPageState extends State<ReviewPage> {
         'reason=${servingSelection.reason}, '
         'fallbackToAnchor=${servingSelection.isFallbackToRetainedAnchor}');
 
+    // real_cutover_execution_subset_v1 Member 1 (FROZEN, P3.3.14):
+    // Additively consult the continuity-adjacent serving-adapter family.
+    // The family ALWAYS routes to cloud this round. This call is
+    // observability-only and does NOT change which source is used —
+    // the delegate to apiClient.getNextReviewGroup() below is still
+    // the only runtime-truth path.
+    final adapterResult = hasActiveContinuation
+        ? ReviewServingAdapterFamily.consultContinuationPriority(
+            isCutoverEnabled:
+                P3FeatureGuard.isReviewPageNonContinuationCutoverEnabled,
+            hasActiveContinuation: true,
+          )
+        : ReviewServingAdapterFamily.consultFirstLoad(
+            isCutoverEnabled:
+                P3FeatureGuard.isReviewPageNonContinuationCutoverEnabled,
+          );
+    reviewServingAdapterFamilyHitCount++;
+    debugPrint('[ReviewPage] adapter family hit '
+        '#$reviewServingAdapterFamilyHitCount: '
+        'kind=${adapterResult.kind.name}, '
+        'tag=${adapterResult.additiveTag}, '
+        'source=${adapterResult.selection.source.name}');
+
+    // P3.3.16: clear local session accumulator on every load (fresh session).
+    _localSessionAttempts.clear();
+
     setState(() {
       _isLoading = true;
       _error = null;
       _noGroupAvailable = false;   // reset on every load attempt
     });
 
+    // P3.3.15 — dormant scaffolding:
+    // Flag-gated branching. In prod the flag is false, so
+    // servingSelection.source is always cloudReviewGroup and we take
+    // the cloud path. Tests may flip the flag (via an override path
+    // or by re-running the seam's decision themselves) to exercise
+    // the local-origin branch.
+    //
+    // The RollbackHoldFallbackRuntimeWatcher is consulted once per
+    // load; its result is recorded for observability and does not
+    // affect routing this round (rollback is only acted on
+    // implicitly via the cloud fallback below).
+    bool localBuilderFailed = false;
     try {
-      // runtime_truth_switch_boundary_v1 (FROZEN, P3.3.9):
-      // Regardless of the seam's selection above, this round always
-      // delegates to the cloud `review_group` path — the seam flag is
-      // OFF and the local path is not yet wired.
-      final group = await _apiClient.getNextReviewGroup();
-      setState(() {
-        _reviewGroup = group;
-        _currentItem = group.items.where((i) => !i.completed).firstOrNull;
-        _groupCompleted = group.groupCompleted;
-        _isLoading = false;
-      });
+      if (servingSelection.source ==
+          ReviewServingSourceKind.localNonContinuation) {
+        // P3.3.15 — LOCAL-ORIGIN BRANCH (dormant in prod).
+        // Reached only when the cutover flag is true AND no active
+        // continuation exists. The builder reads local FSRS due
+        // cards + joins cached_words.
+        ReviewGroup group;
+        try {
+          group = await LocalReviewQueueBuilder.build(
+            db: debugDatabaseOverride ?? AppDatabase(),
+            fsrs: _fsrsService,
+            nowLocal: DateTime.now(),
+          );
+          localReviewQueueBuilderHitCount++;
+          debugPrint(
+              '[ReviewPage] local review queue builder hit '
+              '#$localReviewQueueBuilderHitCount: '
+              'groupId=${group.reviewGroupId}, '
+              'itemCount=${group.items.length}');
+        } on LocalReviewQueueEmptyException {
+          // No local due cards — map to notReadyNow, same as the
+          // cloud 404 path.
+          setState(() {
+            _noGroupAvailable = true;
+            _isLoading = false;
+          });
+          _consultRollbackWatcher(
+            seamSelection: servingSelection,
+            localBuilderFailed: false,
+          );
+          return;
+        } catch (e) {
+          // Local builder failure — show error (no cloud fallback in local-first mode).
+          // future: cloud verification — cloud rollback path retained in cloud-origin branch.
+          localBuilderFailed = true;
+          debugPrint('[ReviewPage] local builder failed: $e');
+          if (mounted) {
+            setState(() { _error = e.toString(); _isLoading = false; });
+          }
+          _consultRollbackWatcher(
+            seamSelection: servingSelection,
+            localBuilderFailed: true,
+          );
+          return;
+        }
+        setState(() {
+          _reviewGroup = group;
+          _currentItem = group.items.where((i) => !i.completed).firstOrNull;
+          _groupCompleted = group.groupCompleted;
+          _isLoading = false;
+        });
+        // session_requeue_v1: initialise session queue for this group.
+        _sessionQueue = group.items.where((i) => !i.completed).toList();
+        _sessionRequeued = {};
+      } else {
+        // runtime_truth_switch_boundary_v1 (FROZEN, P3.3.9):
+        // Cloud path. This is the only branch that runs in prod this
+        // round — every selection path returns cloudReviewGroup
+        // because the cutover flag is false.
+        final group = await _apiClient.getNextReviewGroup();
+        setState(() {
+          _reviewGroup = group;
+          _currentItem = group.items.where((i) => !i.completed).firstOrNull;
+          _groupCompleted = group.groupCompleted;
+          _isLoading = false;
+        });
+        // session_requeue_v1: initialise session queue for this group.
+        _sessionQueue = group.items.where((i) => !i.completed).toList();
+        _sessionRequeued = {};
+      }
+      _consultRollbackWatcher(
+        seamSelection: servingSelection,
+        localBuilderFailed: localBuilderFailed,
+      );
     } catch (e) {
       // review_readiness_policy_v1 (P3.3.3):
       // Distinguish not_ready_now (404) from temporarily_unservable (other errors).
@@ -153,6 +327,121 @@ class _ReviewPageState extends State<ReviewPage> {
         _noGroupAvailable = is404;
         _isLoading = false;
       });
+    }
+  }
+
+  /// P3.3.15 — consults the `RollbackHoldFallbackRuntimeWatcher` and
+  /// records the result. Pure-observability this round: the result
+  /// does not alter routing. Rollback detection in prod is still
+  /// implicitly handled by the cloud fallback inside `_loadReviewGroup`.
+  void _consultRollbackWatcher({
+    required ServingSourceSelection seamSelection,
+    required bool localBuilderFailed,
+  }) {
+    final state = RollbackHoldFallbackRuntimeWatcher.detect(
+      seamSelection: seamSelection,
+      localBuilderFailed: localBuilderFailed,
+    );
+    rollbackHoldFallbackWatcherHitCount++;
+    lastRollbackHoldFallbackState = state;
+    debugPrint(
+      '[ReviewPage] rollback/hold/fallback watcher hit '
+      '#$rollbackHoldFallbackWatcherHitCount: state=${state.name}, '
+      'seamSource=${seamSelection.source.name}, '
+      'seamReason=${seamSelection.reason}, '
+      'localBuilderFailed=$localBuilderFailed',
+    );
+  }
+
+  /// P3.3.16 — Handles one word rating for a local-origin session.
+  ///
+  /// Local sessions do not call `submitReviewAttempt` per word.
+  /// Instead, ratings are accumulated in `_localSessionAttempts`.
+  /// FSRS is updated locally per word (primary FSRS update for local sessions).
+  /// When all items in the current group have been rated, the full batch
+  /// is submitted via `POST /review-attempts/local-batch` to trigger
+  /// settlement + daily_goal + learning_day updates on the backend.
+  Future<void> _handleLocalSessionRating(ReviewRating rating) async {
+    if (mounted) setState(() { _isSubmitting = true; _error = null; });
+    try {
+      final wordId = _currentItem!.wordId;
+      final binaryResult =
+          (rating == ReviewRating.good || rating == ReviewRating.easy)
+              ? 'correct'
+              : 'incorrect';
+
+      // 1. Update local FSRS state (primary FSRS update for local sessions).
+      // Non-blocking: session continues even if FSRS fails.
+      try {
+        await _fsrsService.initCardForWord(wordId);
+        await _fsrsService.rateCard(wordId, rating);
+      } catch (e) {
+        reviewBridgeFallbackCount++;
+        debugPrint('[ReviewPage] local FSRS update fallback '
+            '#$reviewBridgeFallbackCount: wordId=$wordId, error=$e');
+      }
+
+      // 2. session_requeue_v1: 'incorrect' words get one re-showing with
+      //    other cards in between. Remove current from queue first.
+      _sessionQueue.removeWhere((i) => i.wordId == wordId);
+
+      if (binaryResult == 'incorrect' && !_sessionRequeued.contains(wordId)) {
+        // First incorrect this session — requeue at end, defer batch recording.
+        _sessionRequeued.add(wordId);
+        _sessionQueue.add(_currentItem!);
+        debugPrint('[ReviewPage] local session: requeued $wordId '
+            '(queue size: ${_sessionQueue.length})');
+
+        if (mounted) {
+          setState(() { _currentItem = _sessionQueue.firstOrNull; _isSubmitting = false; });
+        }
+        return;
+      }
+
+      // 3. Final rating — record for batch submission.
+      _localSessionAttempts.add(LocalWordAttempt(wordId: wordId, actionResult: binaryResult));
+      debugPrint('[ReviewPage] local session: recorded final attempt '
+          '${_localSessionAttempts.length} wordId=$wordId, result=$binaryResult');
+
+      // 4. More items in session queue?
+      if (_sessionQueue.isNotEmpty) {
+        if (mounted) {
+          setState(() { _currentItem = _sessionQueue.first; _isSubmitting = false; });
+        }
+        return;
+      }
+
+      // 5. All items finalised — mark group completed locally.
+      if (mounted) setState(() { _groupCompleted = true; });
+
+      // 6. Background cloud sync (fire-and-forget).
+      // future: cloud verification — submitLocalReviewBatch retained for
+      // future cloud+local hybrid mode. Currently non-blocking.
+      final idempotencyKey = 'local-batch-${_reviewGroup!.reviewGroupId}';
+      _apiClient.submitLocalReviewBatch(
+        attempts: _localSessionAttempts,
+        idempotencyKey: idempotencyKey,
+      ).then((result) {
+        if (result.groupCompleted && result.settlement != null && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '本组完成！奖励状态：${result.settlement!.rewardSettlementStatus}',
+              ),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }).catchError((_) {
+        debugPrint('[ReviewPage] local batch cloud sync failed (non-blocking)');
+      });
+
+      // 7. Load next session.
+      await _loadReviewGroup();
+    } catch (e) {
+      if (mounted) {
+        setState(() { _error = e.toString(); _isSubmitting = false; });
+      }
     }
   }
 
@@ -176,57 +465,104 @@ class _ReviewPageState extends State<ReviewPage> {
   // Final wording frozen: 不认识/模糊/记得/秒答.
   Future<void> _onRate(ReviewRating rating) async {
     if (_isSubmitting || _currentItem == null || _reviewGroup == null) return;
+
+    // P3.3.16 — Route local-origin sessions to the batch path.
+    // S3 resolved: local sessions submit via POST /review-attempts/local-batch.
+    if (LocalReviewQueueBuilder.isLocalOriginGroupId(
+        _reviewGroup!.reviewGroupId)) {
+      await _handleLocalSessionRating(rating);
+      return;
+    }
+
     if (mounted) setState(() { _isSubmitting = true; _error = null; });
 
     try {
-      // Step 1: Idempotency key (existing pattern preserved exactly)
-      final idempotencyKey =
-          'review-${_reviewGroup!.reviewGroupId}-${_currentItem!.wordId}';
+      final wordId = _currentItem!.wordId;
 
-      // Step 2: Binary mapping for cloud API (contract unchanged)
+      // Step 1: Binary mapping for cloud API (contract unchanged)
       // again/hard → 'incorrect' | good/easy → 'correct'
       final binaryResult = (rating == ReviewRating.good || rating == ReviewRating.easy)
           ? 'correct'
           : 'incorrect';
 
-      // Step 2.5: Pre-submit bridge ensure (stronger_bridge_contract_v1, P3.3.4).
-      // Idempotent local card init before cloud submit — reduces miss rate for words
-      // that never passed through StudyPage. Non-blocking: cloud submit runs regardless.
-      // This is step 1 of the minimal repair path:
-      //   pre-submit ensure → cloud submit → post-submit ensure + apply → observable fallback.
+      // Step 2 (session_requeue_v1): first 'incorrect' rating — update FSRS
+      // locally but defer cloud submit and re-show the card after other items.
+      // stronger_bridge_contract_v1 (P3.3.4): bridge runs now as side-effect.
+      _sessionQueue.removeWhere((i) => i.wordId == wordId);
+
+      if (binaryResult == 'incorrect' && !_sessionRequeued.contains(wordId)) {
+        // First incorrect — requeue, no cloud submit yet.
+        _sessionRequeued.add(wordId);
+        _sessionQueue.add(_currentItem!);
+
+        try {
+          await _fsrsService.initCardForWord(wordId);
+          await _fsrsService.rateCard(wordId, rating);
+        } catch (e) {
+          reviewBridgeFallbackCount++;
+          debugPrint('[ReviewPage] FSRS bridge fallback (requeue) '
+              '#$reviewBridgeFallbackCount: wordId=$wordId, error=$e');
+        }
+
+        debugPrint('[ReviewPage] cloud session: requeued $wordId '
+            '(queue size: ${_sessionQueue.length})');
+
+        if (_sessionQueue.isNotEmpty) {
+          if (mounted) setState(() { _currentItem = _sessionQueue.first; _isSubmitting = false; });
+          return;
+        }
+        // Only item in session and it was incorrect — fall through to submit.
+      }
+
+      // Step 3: Final rating path — submit to cloud.
+      // Idempotency key (existing pattern preserved exactly)
+      final idempotencyKey = 'review-${_reviewGroup!.reviewGroupId}-$wordId';
+
+      // Step 3.5: Pre-submit bridge ensure (stronger_bridge_contract_v1, P3.3.4).
       try {
-        await _fsrsService.initCardForWord(_currentItem!.wordId);
+        await _fsrsService.initCardForWord(wordId);
       } catch (e) {
         reviewBridgeFallbackCount++;
         debugPrint('[ReviewPage] pre-submit ensure fallback '
-            '#$reviewBridgeFallbackCount: wordId=${_currentItem?.wordId}, error=$e');
+            '#$reviewBridgeFallbackCount: wordId=$wordId, error=$e');
       }
 
-      // Step 3: Cloud submit — PRIMARY; must succeed before bridge apply runs
+      // Step 4: Cloud submit — PRIMARY; must succeed before bridge apply runs
       final result = await _apiClient.submitReviewAttempt(
         reviewGroupId: _reviewGroup!.reviewGroupId,
-        wordId: _currentItem!.wordId,
+        wordId: wordId,
         actionResult: binaryResult,
         idempotencyKey: idempotencyKey,
       );
       if (mounted) setState(() { _groupCompleted = result.groupCompleted; });
 
-      // Step 4: Post-cloud-submit bridge ensure + apply (stronger_bridge_contract_v1).
-      // initCardForWord() is idempotent: no-op if pre-submit ensure already succeeded.
-      // If pre-submit failed, this is a second-chance attempt.
-      // rateCard() is the local FSRS state update — non-blocking side-effect only.
-      // Does NOT affect review_group continuation, group completion, or settlement.
-      // Observable via debugPrint + reviewBridgeFallbackCount for dev/test.
+      // Step 5: Post-cloud-submit bridge ensure + apply (stronger_bridge_contract_v1).
       try {
-        await _fsrsService.initCardForWord(_currentItem!.wordId);
-        await _fsrsService.rateCard(_currentItem!.wordId, rating);
+        await _fsrsService.initCardForWord(wordId);
+        await _fsrsService.rateCard(wordId, rating);
       } catch (e) {
         reviewBridgeFallbackCount++;
         debugPrint('[ReviewPage] FSRS bridge fallback '
-            '#$reviewBridgeFallbackCount: wordId=${_currentItem?.wordId}, error=$e');
+            '#$reviewBridgeFallbackCount: wordId=$wordId, error=$e');
       }
 
-      // Step 5: Settlement handling (existing logic, preserved exactly)
+      // real_cutover_execution_subset_v1 Member 5 (FROZEN, P3.3.14):
+      final bindingResult = StrongerIngestMinimalBindingSeam
+          .consultMinimalBinding(
+        precondition: StrongerIngestBindingPrecondition(
+          wordId: wordId,
+          cloudReviewGroupAlreadyCommitted: true,
+          backendFactLayerConsultedAsAuthoritative: true,
+        ),
+      );
+      strongerIngestMinimalBindingHitCount++;
+      debugPrint('[ReviewPage] stronger-ingest minimal binding hit '
+          '#$strongerIngestMinimalBindingHitCount: '
+          'discussionOnly=${bindingResult.bindingDiscussedOnly}, '
+          'layer=${bindingResult.allowedDiscussionLayer}, '
+          'tag=${bindingResult.consultationTag}');
+
+      // Step 6: Settlement handling (existing logic, preserved exactly)
       if (result.groupCompleted && result.settlement != null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -240,7 +576,14 @@ class _ReviewPageState extends State<ReviewPage> {
         }
       }
 
-      // Step 6: Refresh group
+      // Step 7 (session_requeue_v1): advance in session or load next group.
+      // Only call _loadReviewGroup() when the session queue is exhausted,
+      // so requeued cards get their re-showing before a fresh group arrives.
+      if (_sessionQueue.isNotEmpty) {
+        if (mounted) setState(() { _currentItem = _sessionQueue.first; _isSubmitting = false; });
+        return;
+      }
+
       await _loadReviewGroup();
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _isSubmitting = false; });
@@ -305,6 +648,13 @@ class _ReviewPageState extends State<ReviewPage> {
   /// Cloud serving layer has no immediate review work (404).
   /// MUST NOT say "no review quota", "today done", or "system judged no review".
   /// Neutral phrasing only — this is a transient, non-permanent state.
+  ///
+  /// real_cutover_execution_subset_v1 Member 2 (FROZEN, P3.3.14):
+  /// The additive neutral caption at the bottom is sourced from
+  /// SourceNeutralHelperCopy.kEmptyStateNeutralCaption. It is a
+  /// source-neutral pre-explanation that does NOT claim any serving-
+  /// truth switch or fact-owner shift. Delivered additively alongside
+  /// the existing copy above.
   Widget _buildNotReadyNow() {
     return Center(
       child: Padding(
@@ -319,6 +669,12 @@ class _ReviewPageState extends State<ReviewPage> {
             Text(
               '可以先去背单词，或稍后再来',
               style: TextStyle(color: Colors.grey[600], fontSize: 13),
+            ),
+            const SizedBox(height: 4),
+            // P3.3.14 B Member 2: additive source-neutral pre-explanation.
+            Text(
+              SourceNeutralHelperCopy.kEmptyStateNeutralCaption,
+              style: TextStyle(color: Colors.grey[500], fontSize: 11),
             ),
             const SizedBox(height: 24),
             ElevatedButton(
@@ -368,9 +724,16 @@ class _ReviewPageState extends State<ReviewPage> {
               // "以后端判断为准" correctly expresses eligibility-only semantics —
               // the next group may or may not exist; the cloud layer decides.
               Text(
-                '下一组是否可用，以后端判断为准',
+                SourceNeutralHelperCopy.kCompletionNextGroupCaption,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey[400], fontSize: 12),
+              ),
+              const SizedBox(height: 4),
+              // P3.3.14 B Member 2: additive neutral completion caption.
+              Text(
+                SourceNeutralHelperCopy.kCompletionNeutralCaption,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey[400], fontSize: 11),
               ),
               const SizedBox(height: 24),
               ElevatedButton(
@@ -403,25 +766,35 @@ class _ReviewPageState extends State<ReviewPage> {
         children: [
           const SizedBox(height: 16),
 
-          // Progress indicator
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                '本组剩余：${_reviewGroup!.remainingCount} 词',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              Text(
-                '${_reviewGroup!.items.where((i) => i.completed).length} / ${_reviewGroup!.items.length}',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          LinearProgressIndicator(
-            value: _reviewGroup!.items.where((i) => i.completed).length /
-                _reviewGroup!.items.length,
-          ),
+          // Progress indicator (session_requeue_v1: based on session queue)
+          Builder(builder: (context) {
+            final total = _reviewGroup!.items.length;
+            // Unique word IDs still pending in session queue (some may appear
+            // twice if requeued; count each word once).
+            final pendingIds = _sessionQueue.map((i) => i.wordId).toSet();
+            final done = total - pendingIds.length;
+            return Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '本组剩余：${pendingIds.length} 词',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    Text(
+                      '$done / $total',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                LinearProgressIndicator(
+                  value: total > 0 ? done / total : 0,
+                ),
+              ],
+            );
+          }),
 
           const SizedBox(height: 32),
 
