@@ -431,6 +431,179 @@ class StatsService {
     return PosRadarData(noun: noun, verb: verb, adj: adj, adv: adv);
   }
 
+  // ── Tab 4: 激励成就 ────────────────────────────────────────────────────────
+
+  /// 词汇增长预测：当前掌握 / 目标 (active book 总词) / 近 7 天日均 →
+  /// 预计还需天数 + 预计达成日。
+  Future<VocabularyForecast> getVocabularyForecast() async {
+    final activeBook = LocalSettingsService(_prefs).activeWordbook;
+    final target = await _driftDb.countWordsInBook(activeBook);
+    final masteredIds = await _localDb.getMasteredWordIds();
+    final bookWordIds = await _driftDb.getWordIdsForBook(activeBook);
+    final bookMastered = masteredIds.intersection(bookWordIds).length;
+
+    // 近 7 天日均新掌握数
+    final now = DateTime.now();
+    final todayLocal = DateTime(now.year, now.month, now.day);
+    final sevenAgo = todayLocal.subtract(const Duration(days: 7));
+    final rows = await _localDb.db.rawQuery(
+      'SELECT COUNT(DISTINCT word_id) AS cnt FROM word_records '
+      "WHERE study_type='new' AND action_result='know' AND created_at >= ?",
+      [sevenAgo.toUtc().toIso8601String()],
+    );
+    final last7 = (rows.first['cnt'] as int?) ?? 0;
+    final avgDaily = last7 / 7.0;
+
+    final remaining = target - bookMastered;
+    if (avgDaily <= 0 || remaining <= 0) {
+      return VocabularyForecast(
+        currentMastered: bookMastered,
+        targetTotal: target,
+        avgDailyNew: avgDaily,
+        daysRemaining: null,
+        estimatedDate: null,
+      );
+    }
+    final daysNeeded = (remaining / avgDaily).ceil();
+    final estDate = todayLocal.add(Duration(days: daysNeeded));
+    return VocabularyForecast(
+      currentMastered: bookMastered,
+      targetTotal: target,
+      avgDailyNew: avgDaily,
+      daysRemaining: daysNeeded,
+      estimatedDate: estDate,
+    );
+  }
+
+  /// 6 枚勋章状态。规则与 plan 文件一致。
+  Future<List<BadgeStatus>> getBadges() async {
+    // ── 满月战士：streak ≥ 30 ─────────────────────────────────────────────
+    final streak = await _computeStreak();
+
+    // ── 记忆大师：card_states.stability ≥ 30 计数 ≥ 1000 ─────────────────
+    final masterRows = await _driftDb.customSelect(
+      'SELECT COUNT(*) AS cnt FROM card_states WHERE stability >= 30',
+    ).get();
+    final masterCount = masterRows.first.read<int>('cnt');
+
+    // ── 百日斩：单日 word_records new+know 计数 ≥ 100 ─────────────────────
+    final allWrRows = await _localDb.db.rawQuery(
+      'SELECT created_at FROM word_records '
+      "WHERE study_type='new' AND action_result='know'",
+    );
+    final byDay = <String, int>{};
+    for (final r in allWrRows) {
+      final localDate = DateTime.parse(r['created_at'] as String).toLocal();
+      final key = _dateKey(localDate);
+      byDay[key] = (byDay[key] ?? 0) + 1;
+    }
+    final maxDaily = byDay.values.fold<int>(0, (a, b) => a > b ? a : b);
+
+    // ── 凌晨学习者：近 7 天 review_logs 在本地 23:00–04:00 不同日 ≥ 3 ───
+    final now = DateTime.now();
+    final sevenAgoUtcMs = DateTime(now.year, now.month, now.day)
+        .subtract(const Duration(days: 7))
+        .toUtc()
+        .millisecondsSinceEpoch;
+    final rlRows = await _driftDb.customSelect(
+      'SELECT review_time_utc FROM review_logs WHERE review_time_utc >= ?',
+      variables: [Variable.withInt(sevenAgoUtcMs)],
+    ).get();
+    final nightDays = <String>{};
+    for (final r in rlRows) {
+      final ms = r.read<int>('review_time_utc');
+      final localDt =
+          DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+      if (localDt.hour >= 23 || localDt.hour < 4) {
+        nightDays.add(_dateKey(localDt));
+      }
+    }
+
+    // ── 完美主义：连续 7 个本地日，每天 review_logs 中 rating=4 占比 = 1.0
+    //   且当日 ≥ 1 条 ─────────────────────────────────────────────────────
+    int perfectDays = 0;
+    final rlWithRating = await _driftDb.customSelect(
+      'SELECT review_time_utc, rating FROM review_logs '
+      'WHERE review_time_utc >= ?',
+      variables: [Variable.withInt(sevenAgoUtcMs)],
+    ).get();
+    if (rlWithRating.isNotEmpty) {
+      // 按本地日分组 (count4, total)
+      final perDay = <String, List<int>>{};
+      for (final r in rlWithRating) {
+        final ms = r.read<int>('review_time_utc');
+        final localDt =
+            DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+        final key = _dateKey(localDt);
+        final entry = perDay.putIfAbsent(key, () => [0, 0]);
+        entry[1] += 1;
+        if (r.read<int>('rating') == 4) entry[0] += 1;
+      }
+      // 检查最近 7 天是否都满足
+      final today = DateTime(now.year, now.month, now.day);
+      var consecutive = 0;
+      for (var i = 0; i < 7; i++) {
+        final d = today.subtract(Duration(days: i));
+        final key = _dateKey(d);
+        final entry = perDay[key];
+        if (entry != null && entry[1] > 0 && entry[0] == entry[1]) {
+          consecutive++;
+        } else {
+          break;
+        }
+      }
+      perfectDays = consecutive;
+    }
+
+    // ── 词汇巅峰：暂无 ky 词库 → 永远未解锁 ──────────────────────────────
+    // (按计划文件，目前 active book 是 book-001/zk/gk，没有 ky 数据)
+
+    return [
+      BadgeStatus(
+        id: 'night_owl',
+        title: '凌晨学习者',
+        desc: '连续3天在23点后学习',
+        unlocked: nightDays.length >= 3,
+        progress: (nightDays.length / 3).clamp(0.0, 1.0),
+      ),
+      BadgeStatus(
+        id: 'century',
+        title: '百日斩',
+        desc: '单日学习超过100词',
+        unlocked: maxDaily >= 100,
+        progress: (maxDaily / 100).clamp(0.0, 1.0),
+      ),
+      BadgeStatus(
+        id: 'full_moon',
+        title: '满月战士',
+        desc: '连续打卡满30天',
+        unlocked: streak >= 30,
+        progress: (streak / 30).clamp(0.0, 1.0),
+      ),
+      BadgeStatus(
+        id: 'memory_master',
+        title: '记忆大师',
+        desc: '掌握词汇突破1000',
+        unlocked: masterCount >= 1000,
+        progress: (masterCount / 1000).clamp(0.0, 1.0),
+      ),
+      const BadgeStatus(
+        id: 'vocab_peak',
+        title: '词汇巅峰',
+        desc: '完成考研词库（未解锁）',
+        unlocked: false,
+        progress: 0.0,
+      ),
+      BadgeStatus(
+        id: 'perfectionist',
+        title: '完美主义',
+        desc: '连续7天正确率100%',
+        unlocked: perfectDays >= 7,
+        progress: (perfectDays / 7).clamp(0.0, 1.0),
+      ),
+    ];
+  }
+
   /// 艾宾浩斯遗忘曲线：R(t) = exp(-t / S)，S=1.0 (默认稳定常数，单位天)。
   static double _ebbinghaus(double days, {double s = 1.0}) {
     final r = -days / s;
