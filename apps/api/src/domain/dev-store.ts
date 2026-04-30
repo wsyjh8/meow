@@ -49,6 +49,14 @@ import {
   ReviewSummary,
   DailyReviewProgressStatus,
   NextGroupReadiness,
+  // Phase D
+  DailyFishingTask,
+  DailyFishingStatus,
+  FishingAttempt,
+  FishingRoundQuestion,
+  FishingChoice,
+  LotteryBox,
+  LotteryDropConfig,
 } from './types';
 
 const DEV_USER_ID = 'dev-user-001';
@@ -186,6 +194,18 @@ export class DevStore {
   private latestBackup: any | null = null;
   private backupSnapshot: any | null = null;
 
+  // Phase D: Fishing + Lottery
+  private fishingTasks: Map<string, DailyFishingTask> = new Map(); // key: "ft-{taskDate}"
+  private fishingAttempts: FishingAttempt[] = [];
+  private lotteryBoxes: LotteryBox[] = [];
+
+  // Prize pool: seeded inline — mirrors lottery_drops_config seed data
+  private readonly lotteryDropsConfig: LotteryDropConfig[] = [
+    { id: 1, prize_type: 'coins', prize_ref: '20',  weight: 60, is_active: true },
+    { id: 2, prize_type: 'coins', prize_ref: '50',  weight: 30, is_active: true },
+    { id: 3, prize_type: 'coins', prize_ref: '100', weight: 10, is_active: true },
+  ];
+
   constructor(persistenceOverride?: IDevStorePersistence | string) {
     if (typeof persistenceOverride === 'string') {
       // Direct file path — use JSON persistence (for tests)
@@ -231,6 +251,10 @@ export class DevStore {
     for (const [k, v] of this.idempotencyKeys.entries()) {
       idempotencyKeysObj[k] = v;
     }
+    const fishingTasksObj: Record<string, any> = {};
+    for (const [k, v] of this.fishingTasks.entries()) {
+      fishingTasksObj[k] = v;
+    }
     return {
       studyAttempts: this.studyAttempts,
       reviewGroups: this.reviewGroups,
@@ -254,6 +278,9 @@ export class DevStore {
       idempotencyKeys: idempotencyKeysObj,
       latestBackup: this.latestBackup,
       backupSnapshot: this.backupSnapshot,
+      fishingTasks: fishingTasksObj,
+      fishingAttempts: this.fishingAttempts,
+      lotteryBoxes: this.lotteryBoxes,
     };
   }
 
@@ -297,6 +324,16 @@ export class DevStore {
     // P3.2 backup state (optional fields — may not be present in old snapshots)
     this.latestBackup = snapshot.latestBackup ?? null;
     this.backupSnapshot = snapshot.backupSnapshot ?? null;
+
+    // Phase D: Fishing + Lottery (optional — backward compat)
+    this.fishingTasks.clear();
+    if (snapshot.fishingTasks) {
+      for (const [k, v] of Object.entries(snapshot.fishingTasks)) {
+        this.fishingTasks.set(k, v as DailyFishingTask);
+      }
+    }
+    this.fishingAttempts = snapshot.fishingAttempts ?? [];
+    this.lotteryBoxes = snapshot.lotteryBoxes ?? [];
   }
 
   // Serialized save chain — only one PG save runs at a time
@@ -1116,6 +1153,10 @@ export class DevStore {
     // Phase 3
     this.equippedOutfit = {};
     this.equippedRoom = {};
+    // Phase D
+    this.fishingTasks.clear();
+    this.fishingAttempts = [];
+    this.lotteryBoxes = [];
     // Phase 4: clear persistence
     this.persistence.clear();
   }
@@ -1477,6 +1518,8 @@ export class DevStore {
 
   getSecondarySummary(): SecondarySummary {
     const balances = this.getBalanceSnapshot();
+    const today = new Date().toISOString().split('T')[0];
+    const todayState = this.todayStates.get(today);
     return {
       ...balances,
       // Phase 2A: total exp includes feed-accumulated exp
@@ -1486,6 +1529,7 @@ export class DevStore {
       equipped_preview: this.getEquippedPreview(),
       change_highlights: this.buildChangeHighlights(),
       stats_summary: this.buildStatsSummary(),
+      review_debt: todayState?.today_review_pending ?? 0,
     };
   }
 
@@ -2280,6 +2324,278 @@ export class DevStore {
    */
   getStreak(): StreakRecord | null {
     return this.streakRecord;
+  }
+
+  // ========== Phase D: Fishing Game ==========
+
+  /**
+   * Returns the Beijing effective date for daily resets.
+   * Day starts at 05:00 Beijing time (UTC+8).
+   */
+  private getBeijingEffectiveDate(): string {
+    const now = new Date();
+    const beijingMs = now.getTime() + 8 * 60 * 60 * 1000;
+    const beijingDate = new Date(beijingMs);
+    const hour = beijingDate.getUTCHours();
+    // Before 05:00 Beijing → still counts as previous day
+    const effectiveMs = hour < 5 ? beijingMs - 24 * 60 * 60 * 1000 : beijingMs;
+    return new Date(effectiveMs).toISOString().split('T')[0];
+  }
+
+  /** Get or create today's fishing task record. */
+  getDailyFishingTask(): DailyFishingTask {
+    const taskDate = this.getBeijingEffectiveDate();
+    const key = `ft-${taskDate}`;
+    if (!this.fishingTasks.has(key)) {
+      const task: DailyFishingTask = {
+        id: key,
+        user_id: this.userId,
+        task_date: taskDate,
+        rounds_completed: 0,
+        rounds_total: 3,
+        status: 'available',
+        current_round_fish_word_id: null,
+        current_round_fish_word_meaning: null,
+      };
+      this.fishingTasks.set(key, task);
+    }
+    return this.fishingTasks.get(key)!;
+  }
+
+  /**
+   * Start the next fishing round.
+   * Picks one studied word as the "fish" and 4 unstudied decoys.
+   * Returns null if fishing is exhausted or the user has no studied words.
+   */
+  startFishingRound(): FishingRoundQuestion | null {
+    const task = this.getDailyFishingTask();
+    if (task.status === 'exhausted') return null;
+    if (task.current_round_fish_word_id) {
+      // Round already started but not submitted — return same question
+      const fish = this.wordPool.find(w => w.word_id === task.current_round_fish_word_id);
+      if (!fish) return null;
+      return this._buildRoundQuestion(task, fish);
+    }
+
+    // Collect mastered words
+    const masteredIds = new Set(
+      this.studyAttempts
+        .filter(a => a.action_result === 'know')
+        .map(a => a.word_id),
+    );
+    const masteredWords = this.wordPool.filter(w => masteredIds.has(w.word_id));
+    if (masteredWords.length === 0) return null;
+
+    // Random fish word
+    const fish = masteredWords[Math.floor(Math.random() * masteredWords.length)];
+
+    // 4 decoy words never studied
+    const decoyPool = this.wordPool.filter(
+      w => !masteredIds.has(w.word_id) && w.word_id !== fish.word_id,
+    );
+    const shuffledDecoys = decoyPool.sort(() => Math.random() - 0.5).slice(0, 4);
+    if (shuffledDecoys.length < 4) {
+      // Not enough decoys — allow fewer (edge case with tiny word pool)
+    }
+
+    // Persist active round
+    task.current_round_fish_word_id = fish.word_id;
+    task.current_round_fish_word_meaning = fish.meaning;
+    this.saveToDisk();
+
+    return this._buildRoundQuestion(task, fish, shuffledDecoys);
+  }
+
+  private _buildRoundQuestion(
+    task: DailyFishingTask,
+    fish: Word,
+    decoys?: Word[],
+  ): FishingRoundQuestion {
+    const decoysToUse = decoys ?? this.wordPool
+      .filter(w => w.word_id !== fish.word_id)
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 4);
+
+    const choices: FishingChoice[] = [
+      { word_id: fish.word_id, word_text: fish.word_text },
+      ...decoysToUse.map(d => ({ word_id: d.word_id, word_text: d.word_text })),
+    ].sort(() => Math.random() - 0.5);
+
+    return {
+      task_id: task.id,
+      round_number: task.rounds_completed + 1,
+      choices,
+    };
+  }
+
+  /**
+   * Submit the user's choice for the active fishing round.
+   * Idempotent via idempotency key.
+   */
+  submitFishingAttempt(
+    taskId: string,
+    chosenWordId: string,
+    idempotencyKey: string,
+  ): {
+    alreadyExists: boolean;
+    attempt: FishingAttempt | null;
+    isCorrect: boolean;
+    fishWord: { word_id: string; word_text: string; meaning: string } | null;
+    fishTreatsEarned: number;
+    roundsCompleted: number;
+    roundsTotal: number;
+    status: DailyFishingStatus;
+    boxEarned: boolean;
+    boxId: string | null;
+  } {
+    if (idempotencyKey) {
+      const existing = this.getIdempotencyKey(idempotencyKey);
+      if (existing) {
+        return { alreadyExists: true, attempt: null, isCorrect: false, fishWord: null, fishTreatsEarned: 0, roundsCompleted: 0, roundsTotal: 3, status: 'available', boxEarned: false, boxId: null };
+      }
+    }
+
+    const task = this.fishingTasks.get(taskId);
+    if (!task || !task.current_round_fish_word_id) {
+      return { alreadyExists: false, attempt: null, isCorrect: false, fishWord: null, fishTreatsEarned: 0, roundsCompleted: task?.rounds_completed ?? 0, roundsTotal: task?.rounds_total ?? 3, status: task?.status ?? 'available', boxEarned: false, boxId: null };
+    }
+
+    const fishWordId = task.current_round_fish_word_id;
+    const fishWord = this.wordPool.find(w => w.word_id === fishWordId);
+    const isCorrect = chosenWordId === fishWordId;
+    const fishTreatsEarned = isCorrect ? 2 : 0;
+
+    const attempt: FishingAttempt = {
+      id: `fa-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      user_id: this.userId,
+      task_date: task.task_date,
+      round_number: task.rounds_completed + 1,
+      fish_word_id: fishWordId,
+      chosen_word_id: chosenWordId,
+      is_correct: isCorrect,
+      fish_treats_earned: fishTreatsEarned,
+      created_at: new Date().toISOString(),
+    };
+    this.fishingAttempts.push(attempt);
+
+    // Reward fish treats via ledger if correct
+    if (isCorrect && fishTreatsEarned > 0) {
+      const ledgerItem: RewardLedgerItem = {
+        reward_item_id: `rl-fish-${attempt.id}`,
+        source_event_id: `fishing-${attempt.id}`,
+        user_id: this.userId,
+        reward_type: 'fish_treats',
+        amount: fishTreatsEarned,
+        reward_status: 'succeeded',
+        created_at: attempt.created_at,
+      };
+      this.rewardLedgerItems.push(ledgerItem);
+    }
+
+    // Advance task
+    task.rounds_completed += 1;
+    task.current_round_fish_word_id = null;
+    task.current_round_fish_word_meaning = null;
+    if (task.rounds_completed >= task.rounds_total) {
+      task.status = 'exhausted';
+    }
+
+    // Box earned when all rounds completed
+    let boxId: string | null = null;
+    if (task.rounds_completed >= task.rounds_total) {
+      const box: LotteryBox = {
+        id: `lbox-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        user_id: this.userId,
+        source: 'fishing',
+        opened: false,
+        opened_at: null,
+        prize_type: null,
+        prize_ref: null,
+        created_at: new Date().toISOString(),
+      };
+      this.lotteryBoxes.push(box);
+      boxId = box.id;
+    }
+
+    this.saveToDisk();
+
+    return {
+      alreadyExists: false,
+      attempt,
+      isCorrect,
+      fishWord: fishWord ? { word_id: fishWord.word_id, word_text: fishWord.word_text, meaning: fishWord.meaning } : null,
+      fishTreatsEarned,
+      roundsCompleted: task.rounds_completed,
+      roundsTotal: task.rounds_total,
+      status: task.status,
+      boxEarned: boxId !== null,
+      boxId,
+    };
+  }
+
+  // ========== Phase D: Lottery ==========
+
+  /** Get all unopened lottery boxes for this user. */
+  getLotteryBoxes(): LotteryBox[] {
+    return this.lotteryBoxes.filter(b => !b.opened);
+  }
+
+  /**
+   * Open a lottery box. Draws a prize using weighted random from lotteryDropsConfig.
+   * Awards coins to reward ledger.
+   */
+  openLotteryBox(
+    boxId: string,
+    idempotencyKey: string,
+  ): {
+    alreadyExists: boolean;
+    box: LotteryBox | null;
+    coinsWon: number;
+  } {
+    if (idempotencyKey) {
+      const existing = this.getIdempotencyKey(idempotencyKey);
+      if (existing) {
+        return { alreadyExists: true, box: null, coinsWon: 0 };
+      }
+    }
+
+    const box = this.lotteryBoxes.find(b => b.id === boxId);
+    if (!box || box.opened) {
+      return { alreadyExists: false, box: box ?? null, coinsWon: 0 };
+    }
+
+    // Weighted random draw
+    const activeConfigs = this.lotteryDropsConfig.filter(c => c.is_active);
+    const totalWeight = activeConfigs.reduce((sum, c) => sum + c.weight, 0);
+    let roll = Math.random() * totalWeight;
+    let picked = activeConfigs[activeConfigs.length - 1];
+    for (const config of activeConfigs) {
+      roll -= config.weight;
+      if (roll <= 0) { picked = config; break; }
+    }
+
+    const coinsWon = parseInt(picked.prize_ref, 10);
+    const now = new Date().toISOString();
+
+    box.opened = true;
+    box.opened_at = now;
+    box.prize_type = picked.prize_type;
+    box.prize_ref = picked.prize_ref;
+
+    // Award coins via reward ledger
+    const ledgerItem: RewardLedgerItem = {
+      reward_item_id: `rl-lbox-${boxId}`,
+      source_event_id: `lottery-${boxId}`,
+      user_id: this.userId,
+      reward_type: 'coins',
+      amount: coinsWon,
+      reward_status: 'succeeded',
+      created_at: now,
+    };
+    this.rewardLedgerItems.push(ledgerItem);
+
+    this.saveToDisk();
+    return { alreadyExists: false, box, coinsWon };
   }
 }
 

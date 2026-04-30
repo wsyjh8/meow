@@ -407,6 +407,91 @@ class ApiClient {
     }
   }
 
+  // ========== Phase D: Fishing + Lottery ==========
+
+  /// Get today's fishing task status (Beijing-time daily reset at 05:00).
+  Future<DailyTaskStatus> getDailyTask() async {
+    final response = await _client.get(Uri.parse('$baseUrl/me/daily-tasks'));
+    if (response.statusCode == 200) {
+      return DailyTaskStatus.fromJson(
+        json.decode(response.body) as Map<String, dynamic>,
+      );
+    }
+    throw ApiException('GET /me/daily-tasks failed: ${response.statusCode}');
+  }
+
+  /// Start the next fishing round. Returns null if no rounds remain or no studied words.
+  Future<FishingRoundQuestion?> startFishingRound() async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/me/daily-tasks/start'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({}),
+    );
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (data['started'] == true) {
+        return FishingRoundQuestion.fromJson(data);
+      }
+      return null;
+    }
+    throw ApiException('POST /me/daily-tasks/start failed: ${response.statusCode}');
+  }
+
+  /// Submit a fishing attempt (the user's chosen word).
+  Future<FishingAttemptResult> submitFishingAttempt({
+    required String taskId,
+    required String chosenWordId,
+    String? idempotencyKey,
+  }) async {
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (idempotencyKey != null) headers['X-Idempotency-Key'] = idempotencyKey;
+    final response = await _client.post(
+      Uri.parse('$baseUrl/me/task-attempts'),
+      headers: headers,
+      body: json.encode({
+        'task_id': taskId,
+        'chosen_word_id': chosenWordId,
+      }),
+    );
+    if (response.statusCode == 200) {
+      return FishingAttemptResult.fromJson(
+        json.decode(response.body) as Map<String, dynamic>,
+      );
+    }
+    throw ApiException('POST /me/task-attempts failed: ${response.statusCode}');
+  }
+
+  /// Get list of unopened lottery boxes.
+  Future<LotteryBoxesResponse> getLotteryBoxes() async {
+    final response = await _client.get(Uri.parse('$baseUrl/me/lottery-boxes'));
+    if (response.statusCode == 200) {
+      return LotteryBoxesResponse.fromJson(
+        json.decode(response.body) as Map<String, dynamic>,
+      );
+    }
+    throw ApiException('GET /me/lottery-boxes failed: ${response.statusCode}');
+  }
+
+  /// Open a specific lottery box. Returns the prize won.
+  Future<LotteryOpenResult> openLotteryBox({
+    required String boxId,
+    String? idempotencyKey,
+  }) async {
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (idempotencyKey != null) headers['X-Idempotency-Key'] = idempotencyKey;
+    final response = await _client.post(
+      Uri.parse('$baseUrl/me/lottery-boxes/$boxId/open'),
+      headers: headers,
+      body: json.encode({}),
+    );
+    if (response.statusCode == 200) {
+      return LotteryOpenResult.fromJson(
+        json.decode(response.body) as Map<String, dynamic>,
+      );
+    }
+    throw ApiException('POST /me/lottery-boxes/:id/open failed: ${response.statusCode}');
+  }
+
   void dispose() {
     _client.close();
   }
@@ -984,6 +1069,7 @@ class SecondarySummary {
   final Map<String, String?> equippedPreview;
   final List<ChangeHighlightData> changeHighlights;
   final StatsSummaryData? statsSummary;
+  final int reviewDebt;
 
   SecondarySummary({
     required this.coins,
@@ -994,6 +1080,7 @@ class SecondarySummary {
     this.equippedPreview = const {},
     this.changeHighlights = const [],
     this.statsSummary,
+    this.reviewDebt = 0,
   });
 
   factory SecondarySummary.fromJson(Map<String, dynamic> json) {
@@ -1025,6 +1112,7 @@ class SecondarySummary {
       statsSummary: json['stats_summary'] != null
           ? StatsSummaryData.fromJson(json['stats_summary'] as Map<String, dynamic>)
           : null,
+      reviewDebt: (json['review_debt'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -1440,6 +1528,187 @@ class EquipResultData {
       slot: json['slot'] as String?,
       itemType: json['item_type'] as String?,
       alreadyExists: json['already_exists'] as bool? ?? false,
+    );
+  }
+}
+
+// ========== Phase D: Fishing + Lottery Models ==========
+
+class DailyTaskStatus {
+  final String taskId;
+  final String taskDate;
+  final int roundsCompleted;
+  final int roundsTotal;
+  final String status; // 'available' | 'exhausted'
+  final bool hasActiveRound;
+  final int fishTreatsBalance;
+
+  DailyTaskStatus({
+    required this.taskId,
+    required this.taskDate,
+    required this.roundsCompleted,
+    required this.roundsTotal,
+    required this.status,
+    required this.hasActiveRound,
+    required this.fishTreatsBalance,
+  });
+
+  factory DailyTaskStatus.fromJson(Map<String, dynamic> json) {
+    return DailyTaskStatus(
+      taskId: json['task_id'] as String,
+      taskDate: json['task_date'] as String,
+      roundsCompleted: (json['rounds_completed'] as num).toInt(),
+      roundsTotal: (json['rounds_total'] as num).toInt(),
+      status: json['status'] as String,
+      hasActiveRound: json['has_active_round'] as bool? ?? false,
+      fishTreatsBalance: (json['fish_treats_balance'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class FishingChoice {
+  final String wordId;
+  final String wordText;
+  FishingChoice({required this.wordId, required this.wordText});
+  factory FishingChoice.fromJson(Map<String, dynamic> json) => FishingChoice(
+        wordId: json['word_id'] as String,
+        wordText: json['word_text'] as String,
+      );
+}
+
+class FishingRoundQuestion {
+  final String taskId;
+  final int roundNumber;
+  final List<FishingChoice> choices;
+  FishingRoundQuestion({
+    required this.taskId,
+    required this.roundNumber,
+    required this.choices,
+  });
+  factory FishingRoundQuestion.fromJson(Map<String, dynamic> json) {
+    final list = (json['choices'] as List<dynamic>)
+        .map((e) => FishingChoice.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return FishingRoundQuestion(
+      taskId: json['task_id'] as String,
+      roundNumber: (json['round_number'] as num).toInt(),
+      choices: list,
+    );
+  }
+}
+
+class FishingFishWord {
+  final String wordId;
+  final String wordText;
+  final String meaning;
+  FishingFishWord({required this.wordId, required this.wordText, required this.meaning});
+  factory FishingFishWord.fromJson(Map<String, dynamic> json) => FishingFishWord(
+        wordId: json['word_id'] as String,
+        wordText: json['word_text'] as String,
+        meaning: json['meaning'] as String,
+      );
+}
+
+class FishingAttemptResult {
+  final bool isCorrect;
+  final FishingFishWord? fishWord;
+  final int fishTreatsEarned;
+  final int roundsCompleted;
+  final int roundsTotal;
+  final String status;
+  final bool boxEarned;
+  final String? boxId;
+  final int fishTreatsBalance;
+
+  FishingAttemptResult({
+    required this.isCorrect,
+    required this.fishWord,
+    required this.fishTreatsEarned,
+    required this.roundsCompleted,
+    required this.roundsTotal,
+    required this.status,
+    required this.boxEarned,
+    required this.boxId,
+    required this.fishTreatsBalance,
+  });
+
+  factory FishingAttemptResult.fromJson(Map<String, dynamic> json) {
+    return FishingAttemptResult(
+      isCorrect: json['is_correct'] as bool? ?? false,
+      fishWord: json['fish_word'] != null
+          ? FishingFishWord.fromJson(json['fish_word'] as Map<String, dynamic>)
+          : null,
+      fishTreatsEarned: (json['fish_treats_earned'] as num?)?.toInt() ?? 0,
+      roundsCompleted: (json['rounds_completed'] as num?)?.toInt() ?? 0,
+      roundsTotal: (json['rounds_total'] as num?)?.toInt() ?? 3,
+      status: json['status'] as String? ?? 'available',
+      boxEarned: json['box_earned'] as bool? ?? false,
+      boxId: json['box_id'] as String?,
+      fishTreatsBalance: (json['fish_treats_balance'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class LotteryBoxData {
+  final String id;
+  final String source;
+  final String createdAt;
+  LotteryBoxData({required this.id, required this.source, required this.createdAt});
+  factory LotteryBoxData.fromJson(Map<String, dynamic> json) => LotteryBoxData(
+        id: json['id'] as String,
+        source: json['source'] as String,
+        createdAt: json['created_at'] as String,
+      );
+}
+
+class LotteryBoxesResponse {
+  final List<LotteryBoxData> pendingBoxes;
+  final int totalPending;
+  final int coinsBalance;
+  final int fishTreatsBalance;
+
+  LotteryBoxesResponse({
+    required this.pendingBoxes,
+    required this.totalPending,
+    required this.coinsBalance,
+    required this.fishTreatsBalance,
+  });
+
+  factory LotteryBoxesResponse.fromJson(Map<String, dynamic> json) {
+    final list = (json['pending_boxes'] as List<dynamic>? ?? [])
+        .map((e) => LotteryBoxData.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return LotteryBoxesResponse(
+      pendingBoxes: list,
+      totalPending: (json['total_pending'] as num?)?.toInt() ?? 0,
+      coinsBalance: (json['coins_balance'] as num?)?.toInt() ?? 0,
+      fishTreatsBalance: (json['fish_treats_balance'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class LotteryOpenResult {
+  final bool opened;
+  final String? boxId;
+  final String? prizeType;
+  final int coinsWon;
+  final int coinsBalance;
+
+  LotteryOpenResult({
+    required this.opened,
+    required this.boxId,
+    required this.prizeType,
+    required this.coinsWon,
+    required this.coinsBalance,
+  });
+
+  factory LotteryOpenResult.fromJson(Map<String, dynamic> json) {
+    return LotteryOpenResult(
+      opened: json['opened'] as bool? ?? false,
+      boxId: json['box_id'] as String?,
+      prizeType: json['prize_type'] as String?,
+      coinsWon: (json['coins_won'] as num?)?.toInt() ?? 0,
+      coinsBalance: (json['coins_balance'] as num?)?.toInt() ?? 0,
     );
   }
 }

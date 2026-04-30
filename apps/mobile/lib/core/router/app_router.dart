@@ -10,6 +10,9 @@ import '../../features/inventory/inventory_page.dart';
 import '../../features/customize/customize_page.dart';
 import '../../features/settings/settings_page.dart';
 import '../../spec/pages/books_page.dart';
+import '../../spec/pages/fishing_page.dart';
+import '../../spec/pages/lottery_gate_page.dart';
+import '../../spec/pages/room_page.dart';
 
 class AppRouter {
   static const String today = '/';
@@ -23,6 +26,10 @@ class AppRouter {
   static const String customize = '/customize';
   static const String settings = '/settings';
   static const String books = '/books';
+  static const String room = '/room';
+  // Phase D
+  static const String fishing = '/fishing';
+  static const String lottery = '/lottery';
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -48,6 +55,12 @@ class AppRouter {
         return _buildPage(const SettingsPage(), settings);
       case books:
         return _buildPage(const BooksPage(), settings);
+      case room:
+        return _buildPage(const RoomPage(), settings);
+      case fishing:
+        return _buildPage(const FishingPage(), settings);
+      case lottery:
+        return _buildPage(const LotteryGatePage(), settings);
       default:
         return _buildPage(
           Scaffold(

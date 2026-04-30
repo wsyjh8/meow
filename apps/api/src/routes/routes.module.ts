@@ -16,6 +16,9 @@ import { BackupController } from '../controllers/backup.controller';
 import { SettingsController } from '../controllers/settings.controller';
 import { WordsController } from '../controllers/words.controller';
 import { PronunciationController } from '../controllers/pronunciation.controller';
+import { DailyTasksController } from '../controllers/daily-tasks.controller';
+import { TaskAttemptsController } from '../controllers/task-attempts.controller';
+import { LotteryController } from '../controllers/lottery.controller';
 
 @Module({
   controllers: [
@@ -36,6 +39,10 @@ import { PronunciationController } from '../controllers/pronunciation.controller
     SettingsController,
     WordsController,
     PronunciationController,
+    // Phase D
+    DailyTasksController,
+    TaskAttemptsController,
+    LotteryController,
   ],
 })
 export class RoutesModule {}

@@ -5,21 +5,19 @@ import '../../core/api/api_client.dart';
 import '../../spec/theme/tokens.dart';
 import '../../spec/widgets/spec_back_to_study_chip.dart';
 
-/// CustomizePage — Phase B cust-a 视觉升级。
+/// RoomPage — 我的小窝
 ///
-/// 所有 API 调用保持不变（/shop/catalog, /me/inventory, /me/equipment,
-/// /shop/purchases, /me/equipment/equip），仅替换 widget 树。
-/// 副机制纪律（CLAUDE.md §3.2）：装扮/小窝不产生学习收益。
-class CustomizePage extends StatefulWidget {
-  const CustomizePage({super.key, this.apiClient});
-
+/// 只展示 itemType == 'room_item' 的物品（decor / floor 槽位）。
+/// 副机制纪律（CLAUDE.md §3.2）：房间装饰不产生学习收益。
+class RoomPage extends StatefulWidget {
+  const RoomPage({super.key, this.apiClient});
   final ApiClient? apiClient;
 
   @override
-  State<CustomizePage> createState() => _CustomizePageState();
+  State<RoomPage> createState() => _RoomPageState();
 }
 
-class _CustomizePageState extends State<CustomizePage>
+class _RoomPageState extends State<RoomPage>
     with SingleTickerProviderStateMixin {
   late final ApiClient _apiClient = widget.apiClient ?? ApiClient();
   late final TabController _tabController;
@@ -32,38 +30,40 @@ class _CustomizePageState extends State<CustomizePage>
   bool _isActing = false;
 
   static const _purchaseSuccessCopies = [
-    '买到了喵~ 🎉',
-    '入手成功喵！',
-    '新物品到手喵~',
-    '收入囊中喵！',
-    '快去装备看看喵~',
+    '买到啦！小窝更温馨了喵~',
+    '新物件到手喵！',
+    '收入囊中喵~',
+    '快摆进小窝看看喵！',
   ];
   static const _equipSuccessCopies = [
-    '穿上了喵 ✨',
-    '换装成功喵~',
-    '新造型上线喵 ✨',
-    '好看喵~',
-    '装扮更新喵！',
+    '摆好了喵 ✨',
+    '小窝焕然一新喵~',
+    '好看！很有家的感觉喵~',
+    '温馨小窝上线喵 ✨',
   ];
 
+  // 房间槽位标签
   static const _slotLabel = <String, String>{
-    'head': '头',
-    'neck': '颈',
-    'decor': '饰',
-    'floor': '地',
+    'decor': '饰品',
+    'floor': '地板',
   };
 
+  // 房间物品 emoji 映射
   static const _itemEmoji = <String, String>{
-    'cat_hat_red': '🎩',
-    'cat_bow_blue': '🎀',
-    'cat_scarf_pink': '🧣',
-    'room_lamp_warm': '💡',
-    'room_rug_soft': '🏠',
-    'cat_hat_straw': '👒',
-    'cat_bow_yellow': '🌻',
-    'cat_scarf_stripe': '🧶',
-    'room_plant_small': '🌿',
-    'room_cushion_cloud': '☁️',
+    'room_lamp_warm':    '💡',
+    'room_rug_soft':     '🟫',
+    'room_plant_small':  '🌿',
+    'room_cushion_cloud':'☁️',
+  };
+
+  // 房间装饰图层（emoji 场景）
+  static const _roomDecorEmoji = <String, String>{
+    'room_lamp_warm':    '💡',
+    'room_plant_small':  '🌿',
+  };
+  static const _roomFloorEmoji = <String, String>{
+    'room_rug_soft':     '🟫',
+    'room_cushion_cloud':'☁️',
   };
 
   @override
@@ -80,7 +80,7 @@ class _CustomizePageState extends State<CustomizePage>
     super.dispose();
   }
 
-  // ==================== 数据加载（不变） ====================
+  // ==================== 数据加载 ====================
 
   Future<void> _loadData() async {
     setState(() { _isLoading = true; _error = null; });
@@ -101,7 +101,7 @@ class _CustomizePageState extends State<CustomizePage>
     }
   }
 
-  // ==================== 购买/装备（不变） ====================
+  // ==================== 购买 / 装备 ====================
 
   Future<void> _purchase(CatalogItemData item) async {
     if (_isActing) return;
@@ -157,7 +157,7 @@ class _CustomizePageState extends State<CustomizePage>
     }
   }
 
-  // ==================== 业务查询 helpers（不变） ====================
+  // ==================== helpers ====================
 
   String _purchaseError(String? code) {
     switch (code) {
@@ -171,29 +171,21 @@ class _CustomizePageState extends State<CustomizePage>
   String _equipError(String? code) {
     switch (code) {
       case 'ITEM_NOT_OWNED': return '还没有这个物品哦';
-      case 'ITEM_NOT_FOUND': return '找不到这个物品';
       default: return '装备失败';
     }
   }
 
-  bool _isEquipped(String itemId) {
-    if (_equipped == null) return false;
-    return _equipped!.outfit.values.contains(itemId) ||
-        _equipped!.room.values.contains(itemId);
-  }
+  bool _isEquipped(String itemId) =>
+      _equipped?.room.values.contains(itemId) ?? false;
 
   bool _isOwned(String itemId) =>
       _inventory?.ownedItems.any((o) => o.itemId == itemId) ?? false;
 
-  String? _getEquippedInSlot(String slot) {
-    if (_equipped == null) return null;
-    return _equipped!.outfit[slot] ?? _equipped!.room[slot];
-  }
+  String? _getEquippedInSlot(String slot) => _equipped?.room[slot];
 
-  String _catalogName(String itemId) {
-    final item = _catalog?.items.where((i) => i.itemId == itemId).firstOrNull;
-    return item?.name ?? itemId;
-  }
+  /// 只取 room_item 类型
+  List<CatalogItemData> get _roomItems =>
+      _catalog?.items.where((i) => i.itemType == 'room_item').toList() ?? [];
 
   // ==================== Build ====================
 
@@ -209,7 +201,7 @@ class _CustomizePageState extends State<CustomizePage>
         scrolledUnderElevation: 0,
         centerTitle: false,
         title: const Text(
-          '装扮与小窝',
+          '我的小窝',
           style: TextStyle(
             fontSize: SpecTypo.sizeCardTitle,
             fontWeight: SpecTypo.medium,
@@ -234,7 +226,7 @@ class _CustomizePageState extends State<CustomizePage>
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: SpecBrand.purple))
+          ? const Center(child: CircularProgressIndicator(color: SpecBrand.mochiRose))
           : _error != null
               ? _buildErrorState()
               : _buildContent(),
@@ -248,23 +240,19 @@ class _CustomizePageState extends State<CustomizePage>
         children: [
           const Text('😿', style: TextStyle(fontSize: 48)),
           const SizedBox(height: 16),
-          const Text(
-            '加载失败了喵',
-            style: TextStyle(fontSize: SpecTypo.sizeCardBody, color: SpecText.primary),
-          ),
+          const Text('加载失败了喵',
+              style: TextStyle(fontSize: SpecTypo.sizeCardBody, color: SpecText.primary)),
           const SizedBox(height: 16),
           GestureDetector(
             onTap: _loadData,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               decoration: BoxDecoration(
-                color: SpecBrand.purple,
+                color: const Color(0xFFF9A825),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Text(
-                '重试',
-                style: TextStyle(fontSize: 13, fontWeight: SpecTypo.medium, color: Colors.white),
-              ),
+              child: const Text('重试',
+                  style: TextStyle(fontSize: 13, fontWeight: SpecTypo.medium, color: Colors.white)),
             ),
           ),
         ],
@@ -273,17 +261,15 @@ class _CustomizePageState extends State<CustomizePage>
   }
 
   Widget _buildContent() {
-    final catalog = _catalog!;
-
     return Stack(
       children: [
         Column(
           children: [
-            // ===== 1. 预览舞台 =====
-            _buildPreviewStage(),
-            const SizedBox(height: 14),
+            // ===== 1. 房间预览 =====
+            _buildRoomPreview(),
+            const SizedBox(height: 12),
 
-            // ===== 2. 副机制提示条（§3.2 学习-装扮隔离） =====
+            // ===== 2. §3.2 提示条 =====
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: SpecSpacing.pageH),
               child: GestureDetector(
@@ -291,19 +277,19 @@ class _CustomizePageState extends State<CustomizePage>
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: SpecBg.heroPurple,
+                    color: const Color(0xFFFFF8E1),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Row(
                     children: const [
-                      Text('📖', style: TextStyle(fontSize: 11)),
+                      Text('🏠', style: TextStyle(fontSize: 11)),
                       SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          '装饰不会变成学习进度，主线在首页 → 去学习',
+                          '小窝装饰不会变成学习进度，主线在首页 → 去学习',
                           style: TextStyle(
                             fontSize: SpecTypo.sizeTiny,
-                            color: SpecText.purple,
+                            color: Color(0xFF5D4037),
                           ),
                         ),
                       ),
@@ -327,7 +313,7 @@ class _CustomizePageState extends State<CustomizePage>
                   indicatorSize: TabBarIndicatorSize.tab,
                   dividerHeight: 0,
                   indicator: BoxDecoration(
-                    color: SpecBrand.purple,
+                    color: const Color(0xFFF9A825),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   labelColor: Colors.white,
@@ -350,21 +336,21 @@ class _CustomizePageState extends State<CustomizePage>
             ),
             const SizedBox(height: 10),
 
-            // ===== 4. Item Grid =====
+            // ===== 4. 物品网格 =====
             Expanded(
               child: TabBarView(
                 controller: _tabController,
                 children: [
-                  _buildItemGrid(catalog.items),
-                  _buildItemGrid(catalog.items.where((i) => _isOwned(i.itemId)).toList()),
-                  _buildItemGrid(catalog.items.where((i) => _isEquipped(i.itemId)).toList()),
+                  _buildItemGrid(_roomItems),
+                  _buildItemGrid(_roomItems.where((i) => _isOwned(i.itemId)).toList()),
+                  _buildItemGrid(_roomItems.where((i) => _isEquipped(i.itemId)).toList()),
                 ],
               ),
             ),
           ],
         ),
 
-        // ===== 5. 回到学习 chip（右上角） =====
+        // ===== 5. 回到学习 chip =====
         const Positioned(
           top: 0,
           right: SpecSpacing.pageH,
@@ -374,57 +360,94 @@ class _CustomizePageState extends State<CustomizePage>
     );
   }
 
-  // ==================== 预览舞台 ====================
+  // ==================== 房间预览 ====================
 
-  Widget _buildPreviewStage() {
-    const slots = ['head', 'neck', 'decor', 'floor'];
+  Widget _buildRoomPreview() {
+    final decorId  = _getEquippedInSlot('decor');
+    final floorId  = _getEquippedInSlot('floor');
+    final decorEmoji = decorId != null ? (_roomDecorEmoji[decorId] ?? '✨') : null;
+    final floorEmoji = floorId != null ? (_roomFloorEmoji[floorId] ?? '🟫') : null;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: SpecSpacing.pageH),
       child: Container(
-        height: 200,
+        height: 180,
         decoration: BoxDecoration(
-          color: SpecBg.card,
+          // 暖米色背景，营造"房间"感
+          color: const Color(0xFFFAF3E8),
           borderRadius: BorderRadius.circular(22),
         ),
         child: Stack(
           children: [
-            // 猫咪占位（MochiCat 待美术资源，暂用 emoji）
-            const Center(
-              child: Text('🐱', style: TextStyle(fontSize: 80)),
+            // 地板纹理提示
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                height: 44,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFEEE0C8),
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(22),
+                    bottomRight: Radius.circular(22),
+                  ),
+                ),
+              ),
             ),
 
-            // 槽位指示 chips（左上角）
+            // 地板物品（floor slot）
+            if (floorEmoji != null)
+              Positioned(
+                bottom: 10,
+                left: 24,
+                child: Text(floorEmoji, style: const TextStyle(fontSize: 28)),
+              ),
+
+            // 猫咪（主角始终在中央）
+            const Center(
+              child: Text('🐱', style: TextStyle(fontSize: 72)),
+            ),
+
+            // 装饰物品（decor slot — 右上角）
+            if (decorEmoji != null)
+              Positioned(
+                top: 18,
+                right: 24,
+                child: Text(decorEmoji, style: const TextStyle(fontSize: 28)),
+              ),
+
+            // 槽位 chips（左上）
             Positioned(
               top: 12,
               left: 12,
-              child: Row(
-                children: slots.map((slot) {
-                  final itemId = _getEquippedInSlot(slot);
-                  final filled = itemId != null;
-                  final label = _slotLabel[slot] ?? slot;
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: _slotLabel.entries.map((e) {
+                  final id = _getEquippedInSlot(e.key);
+                  final filled = id != null;
                   return Padding(
-                    padding: const EdgeInsets.only(right: 6),
+                    padding: const EdgeInsets.only(bottom: 4),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
                         color: filled
-                            ? SpecBrand.purple.withValues(alpha: 0.12)
+                            ? const Color(0xFFF9A825).withValues(alpha: 0.15)
                             : Colors.white.withValues(alpha: 0.7),
                         borderRadius: SpecRadius.pillRadius,
                         border: Border.all(
                           color: filled
-                              ? SpecBrand.purple.withValues(alpha: 0.3)
+                              ? const Color(0xFFF9A825).withValues(alpha: 0.4)
                               : const Color(0xFFE8DFCF),
                           width: 0.5,
                         ),
                       ),
                       child: Text(
-                        label,
+                        e.value,
                         style: TextStyle(
                           fontSize: SpecTypo.sizeTiny,
                           fontWeight: SpecTypo.medium,
-                          color: filled ? SpecText.purple : SpecText.tertiary,
+                          color: filled ? const Color(0xFF5D4037) : SpecText.tertiary,
                         ),
                       ),
                     ),
@@ -433,45 +456,23 @@ class _CustomizePageState extends State<CustomizePage>
               ),
             ),
 
-            // 已装备物品名（右下）
-            Positioned(
-              bottom: 12,
-              right: 12,
-              child: _buildEquippedSummaryChips(),
-            ),
+            // 无装备时的提示
+            if (decorId == null && floorId == null)
+              const Positioned(
+                bottom: 12,
+                right: 14,
+                child: Text(
+                  '小窝还空空的喵~',
+                  style: TextStyle(fontSize: SpecTypo.sizeTiny, color: SpecText.tertiary),
+                ),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildEquippedSummaryChips() {
-    final equipped = <String>[];
-    for (final slot in ['head', 'neck', 'decor', 'floor']) {
-      final id = _getEquippedInSlot(slot);
-      if (id != null) equipped.add(_catalogName(id));
-    }
-    if (equipped.isEmpty) {
-      return const Text(
-        '还没有装扮喵~',
-        style: TextStyle(fontSize: SpecTypo.sizeTiny, color: SpecText.tertiary),
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: equipped
-          .map((name) => Text(
-                name,
-                style: const TextStyle(
-                  fontSize: SpecTypo.sizeTiny,
-                  color: SpecText.secondary,
-                ),
-              ))
-          .toList(),
-    );
-  }
-
-  // ==================== Item Grid ====================
+  // ==================== 物品网格 ====================
 
   Widget _buildItemGrid(List<CatalogItemData> items) {
     if (items.isEmpty) {
@@ -479,7 +480,7 @@ class _CustomizePageState extends State<CustomizePage>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('🎁', style: TextStyle(fontSize: 40)),
+            Text('🏠', style: TextStyle(fontSize: 40)),
             SizedBox(height: 12),
             Text(
               '这里还没有东西喵~',
@@ -491,9 +492,7 @@ class _CustomizePageState extends State<CustomizePage>
     }
 
     return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(
-        SpecSpacing.pageH, 4, SpecSpacing.pageH, 24,
-      ),
+      padding: const EdgeInsets.fromLTRB(SpecSpacing.pageH, 4, SpecSpacing.pageH, 24),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         crossAxisSpacing: 8,
@@ -506,9 +505,9 @@ class _CustomizePageState extends State<CustomizePage>
   }
 
   Widget _buildItemCard(CatalogItemData item) {
-    final owned = _isOwned(item.itemId);
+    final owned    = _isOwned(item.itemId);
     final equipped = _isEquipped(item.itemId);
-    final emoji = _itemEmoji[item.itemId] ?? (item.itemType == 'outfit' ? '👗' : '🏠');
+    final emoji    = _itemEmoji[item.itemId] ?? '🏠';
 
     return GestureDetector(
       onTap: owned && !equipped
@@ -519,7 +518,7 @@ class _CustomizePageState extends State<CustomizePage>
           color: SpecBg.card,
           borderRadius: BorderRadius.circular(14),
           border: equipped
-              ? Border.all(color: SpecBrand.purple.withValues(alpha: 0.4), width: 1)
+              ? Border.all(color: const Color(0xFFF9A825).withValues(alpha: 0.5), width: 1.5)
               : null,
         ),
         padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
@@ -531,7 +530,7 @@ class _CustomizePageState extends State<CustomizePage>
               width: 60,
               height: 60,
               decoration: BoxDecoration(
-                color: SpecBg.cardOutline,
+                color: const Color(0xFFFFF8E1),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Center(
@@ -565,11 +564,11 @@ class _CustomizePageState extends State<CustomizePage>
   Widget _buildStatusLabel(CatalogItemData item, bool owned, bool equipped) {
     if (equipped) {
       return const Text(
-        '已装备',
+        '已摆放',
         style: TextStyle(
           fontSize: SpecTypo.sizeTiny,
           fontWeight: SpecTypo.medium,
-          color: SpecText.purple,
+          color: Color(0xFFF9A825),
         ),
       );
     }
@@ -579,11 +578,11 @@ class _CustomizePageState extends State<CustomizePage>
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
-            color: SpecBrand.purple,
+            color: const Color(0xFFF9A825),
             borderRadius: BorderRadius.circular(8),
           ),
           child: const Text(
-            '装备',
+            '摆放',
             style: TextStyle(
               fontSize: SpecTypo.sizeTiny,
               fontWeight: SpecTypo.medium,
@@ -593,9 +592,7 @@ class _CustomizePageState extends State<CustomizePage>
         ),
       );
     }
-    // 未拥有 — 显示价格
     return Text(
-      key: Key('price-${item.itemId}'),
       '${item.coinPrice} 币',
       style: const TextStyle(
         fontSize: SpecTypo.sizeTiny,

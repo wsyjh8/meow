@@ -25,6 +25,7 @@ import type {
   ISecondarySummaryRepository,
 } from './repository/secondary.repository';
 import type { IIdempotencyRepository } from './repository/idempotency.repository';
+import type { IFishingRepository, ILotteryRepository } from './repository/fishing.repository';
 
 // ========== Study ==========
 
@@ -163,6 +164,25 @@ class DevStoreSecondarySummaryAdapter implements ISecondarySummaryRepository {
   getCompanionResponse() { return devStore.getCompanionResponse(); }
 }
 
+// ========== Phase D: Fishing ==========
+
+class DevStoreFishingAdapter implements IFishingRepository {
+  getDailyFishingTask() { return devStore.getDailyFishingTask(); }
+  startFishingRound() { return devStore.startFishingRound(); }
+  submitFishingAttempt(taskId: string, chosenWordId: string, idempotencyKey: string) {
+    return devStore.submitFishingAttempt(taskId, chosenWordId, idempotencyKey);
+  }
+}
+
+// ========== Phase D: Lottery ==========
+
+class DevStoreLotteryAdapter implements ILotteryRepository {
+  getLotteryBoxes() { return devStore.getLotteryBoxes(); }
+  openLotteryBox(boxId: string, idempotencyKey: string) {
+    return devStore.openLotteryBox(boxId, idempotencyKey);
+  }
+}
+
 // ========== Idempotency ==========
 
 class DevStoreIdempotencyAdapter implements IIdempotencyRepository {
@@ -191,6 +211,8 @@ export const repositories = {
   equipment: new DevStoreEquipmentAdapter() as IEquipmentRepository,
   secondarySummary: new DevStoreSecondarySummaryAdapter() as ISecondarySummaryRepository,
   idempotency: new DevStoreIdempotencyAdapter() as IIdempotencyRepository,
+  fishing: new DevStoreFishingAdapter() as IFishingRepository,
+  lottery: new DevStoreLotteryAdapter() as ILotteryRepository,
 
   /**
    * Ensure the last mutation has been persisted to the active backend.

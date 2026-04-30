@@ -55,6 +55,11 @@ export interface DevStoreSnapshot {
   // P3.2 Backup persistence — optional for backward compat with existing state files
   latestBackup?: any | null;
   backupSnapshot?: any | null;
+
+  // Phase D: Fishing + Lottery — optional for backward compat
+  fishingTasks?: Record<string, any>;
+  fishingAttempts?: any[];
+  lotteryBoxes?: any[];
 }
 
 const DEFAULT_PERSIST_DIR = path.resolve(__dirname, '..', '..', 'data');
