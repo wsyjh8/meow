@@ -197,6 +197,25 @@ class TestApiClient implements ApiClient {
 
   @override
   void dispose() {}
+
+  // Phase D stubs
+  @override
+  Future<DailyTaskStatus> getDailyTask() => throw UnimplementedError();
+  @override
+  Future<FishingRoundQuestion?> startFishingRound() => throw UnimplementedError();
+  @override
+  Future<FishingAttemptResult> submitFishingAttempt({
+    required String taskId,
+    required String chosenWordId,
+    String? idempotencyKey,
+  }) => throw UnimplementedError();
+  @override
+  Future<LotteryBoxesResponse> getLotteryBoxes() => throw UnimplementedError();
+  @override
+  Future<LotteryOpenResult> openLotteryBox({
+    required String boxId,
+    String? idempotencyKey,
+  }) => throw UnimplementedError();
 }
 
 void main() {

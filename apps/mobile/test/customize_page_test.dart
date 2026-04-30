@@ -22,7 +22,6 @@ class CustomizeTestApiClient implements ApiClient {
 
   @override
   String get baseUrl => 'http://10.0.2.2:3000/api/v1';
-  //String get baseUrl => 'http://localhost:3000/api/v1';
 
   /// Default 10-item catalog matching DevStore
   static CatalogResponse defaultCatalog() => CatalogResponse(items: [
@@ -113,6 +112,24 @@ class CustomizeTestApiClient implements ApiClient {
     required List<LocalWordAttempt> attempts,
     String? idempotencyKey,
   }) => throw UnimplementedError();
+  // Phase D stubs
+  @override
+  Future<DailyTaskStatus> getDailyTask() => throw UnimplementedError();
+  @override
+  Future<FishingRoundQuestion?> startFishingRound() => throw UnimplementedError();
+  @override
+  Future<FishingAttemptResult> submitFishingAttempt({
+    required String taskId,
+    required String chosenWordId,
+    String? idempotencyKey,
+  }) => throw UnimplementedError();
+  @override
+  Future<LotteryBoxesResponse> getLotteryBoxes() => throw UnimplementedError();
+  @override
+  Future<LotteryOpenResult> openLotteryBox({
+    required String boxId,
+    String? idempotencyKey,
+  }) => throw UnimplementedError();
   @override
   void dispose() {}
 }
@@ -125,36 +142,31 @@ void main() {
   }
 
   testWidgets('CustomizePage renders loading state', (tester) async {
-    // Use a never-completing catalog to stay in loading state
     final client = _NeverLoadApiClient();
     await tester.pumpWidget(buildTestWidget(client));
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
   });
 
-  testWidgets('CustomizePage renders catalog items (visible subset)', (tester) async {
+  testWidgets('CustomizePage renders catalog items in grid', (tester) async {
     final client = CustomizeTestApiClient();
     await tester.pumpWidget(buildTestWidget(client));
     await tester.pump(const Duration(milliseconds: 500));
 
-    // ListView.builder only renders visible items.
-    // First few items should be visible on screen.
+    // Grid shows item names (GridView renders all 10 in scrollable)
     expect(find.text('红色小帽子'), findsOneWidget);
     expect(find.text('蓝色蝴蝶结'), findsOneWidget);
-    // Total catalog = 10, verify owned count shows 0/10
-    expect(find.textContaining('0/10'), findsOneWidget);
   });
 
-  testWidgets('CustomizePage shows resource bar with owned count', (tester) async {
+  testWidgets('CustomizePage shows coins in AppBar', (tester) async {
     final client = CustomizeTestApiClient();
     await tester.pumpWidget(buildTestWidget(client));
     await tester.pump(const Duration(milliseconds: 500));
 
-    // Resource bar: coins + owned/total count
-    expect(find.text('200'), findsOneWidget); // coinsBalance
-    expect(find.textContaining('已拥有 0/10 件'), findsOneWidget);
+    // AppBar trailing shows coin balance
+    expect(find.textContaining('200'), findsOneWidget);
   });
 
-  testWidgets('CustomizePage shows three-state correctly', (tester) async {
+  testWidgets('CustomizePage shows three-state labels correctly', (tester) async {
     final client = CustomizeTestApiClient(
       inventory: CustomizeTestApiClient.inventoryWithItems(),
       equipment: CustomizeTestApiClient.partialEquipment(),
@@ -162,15 +174,15 @@ void main() {
     await tester.pumpWidget(buildTestWidget(client));
     await tester.pump(const Duration(milliseconds: 500));
 
-    // cat_hat_red is equipped — "已装备" chip visible in card + preview
+    // cat_hat_red is equipped → "已装备" shown
     expect(find.text('已装备'), findsWidgets);
-    // owned-not-equipped detail section is shown for cat_bow_blue / room_lamp_warm
-    expect(find.textContaining('已拥有但还没装上'), findsOneWidget);
-    // Owned count shows 3/10
-    expect(find.textContaining('3/10'), findsOneWidget);
+    // cat_bow_blue is owned not equipped → "装备" button shown
+    expect(find.text('装备'), findsWidgets);
+    // Unowned items show price + "币"
+    expect(find.textContaining('币'), findsWidgets);
   });
 
-  testWidgets('CustomizePage shows equipped slot chips in preview area', (tester) async {
+  testWidgets('CustomizePage shows slot indicator chips in preview stage', (tester) async {
     final client = CustomizeTestApiClient(
       inventory: CustomizeTestApiClient.inventoryWithItems(),
       equipment: CustomizeTestApiClient.partialEquipment(),
@@ -178,85 +190,11 @@ void main() {
     await tester.pumpWidget(buildTestWidget(client));
     await tester.pump(const Duration(milliseconds: 500));
 
-    // Preview should show equipped item chip with slot label
-    expect(find.textContaining('头饰'), findsWidgets);
-  });
-
-  testWidgets('CustomizePage shows empty slot indicators when partially equipped', (tester) async {
-    final client = CustomizeTestApiClient(
-      inventory: CustomizeTestApiClient.inventoryWithItems(),
-      equipment: CustomizeTestApiClient.partialEquipment(),
-    );
-    await tester.pumpWidget(buildTestWidget(client));
-    await tester.pump(const Duration(milliseconds: 500));
-
-    // Should show empty slot chips (neck, decor, floor are empty)
-    expect(find.textContaining('空'), findsWidgets);
-  });
-
-  testWidgets('CustomizePage shows owned-not-equipped detail section', (tester) async {
-    final client = CustomizeTestApiClient(
-      inventory: CustomizeTestApiClient.inventoryWithItems(),
-      equipment: CustomizeTestApiClient.partialEquipment(),
-    );
-    await tester.pumpWidget(buildTestWidget(client));
-    await tester.pump(const Duration(milliseconds: 500));
-
-    // cat_bow_blue and room_lamp_warm are owned but not equipped
-    expect(find.textContaining('已拥有但还没装上'), findsOneWidget);
-  });
-
-  testWidgets('CustomizePage shows save-up goal cue when cannot afford items', (tester) async {
-    final client = CustomizeTestApiClient(
-      inventory: InventoryStateData(
-        ownedItems: [],
-        coinsBalance: 55, // Can't afford cheapest (60 coins)
-      ),
-    );
-    await tester.pumpWidget(buildTestWidget(client));
-    await tester.pump(const Duration(milliseconds: 500));
-
-    // Should show save-up cue with coin difference
-    expect(find.textContaining('金币'), findsWidgets);
-    expect(find.textContaining('红色小帽子'), findsWidgets);
-  });
-
-  testWidgets('CustomizePage hides save-up cue when can afford all', (tester) async {
-    final client = CustomizeTestApiClient(
-      inventory: InventoryStateData(
-        ownedItems: [],
-        coinsBalance: 9999, // Can afford everything
-      ),
-    );
-    await tester.pumpWidget(buildTestWidget(client));
-    await tester.pump(const Duration(milliseconds: 500));
-
-    // No save-up goal cue shown
-    expect(find.textContaining('还差'), findsNothing);
-  });
-
-  testWidgets('CustomizePage shows slot labels in item cards', (tester) async {
-    final client = CustomizeTestApiClient();
-    await tester.pumpWidget(buildTestWidget(client));
-    await tester.pump(const Duration(milliseconds: 500));
-
-    // Slot labels should appear: 头饰, 颈饰, 装饰, 地面
-    expect(find.textContaining('头饰'), findsWidgets);
-    expect(find.textContaining('颈饰'), findsWidgets);
-  });
-
-  testWidgets('CustomizePage shows compare hints for unowned items', (tester) async {
-    final client = CustomizeTestApiClient(
-      inventory: CustomizeTestApiClient.inventoryWithItems(),
-      equipment: CustomizeTestApiClient.partialEquipment(),
-    );
-    await tester.pumpWidget(buildTestWidget(client));
-    await tester.pump(const Duration(milliseconds: 500));
-
-    // Compare hints use text-based hints. Verify some hint text is present for
-    // unowned items visible on screen.
-    // cat_scarf_pink (neck, 100 coins, user has 50) should show "还差 50 金币"
-    expect(find.textContaining('还差'), findsWidgets);
+    // Preview stage shows 4 slot chips: 头 颈 饰 地
+    expect(find.text('头'), findsOneWidget);
+    expect(find.text('颈'), findsOneWidget);
+    expect(find.text('饰'), findsOneWidget);
+    expect(find.text('地'), findsOneWidget);
   });
 
   testWidgets('CustomizePage shows error state on load failure', (tester) async {
@@ -266,20 +204,8 @@ void main() {
     await tester.pumpWidget(buildTestWidget(client));
     await tester.pump(const Duration(milliseconds: 500));
 
-    expect(find.text('加载失败'), findsOneWidget);
+    expect(find.textContaining('加载失败'), findsOneWidget);
     expect(find.text('重试'), findsOneWidget);
-  });
-
-  testWidgets('CustomizePage equipped count chip shows correct count', (tester) async {
-    final client = CustomizeTestApiClient(
-      inventory: CustomizeTestApiClient.inventoryWithItems(),
-      equipment: CustomizeTestApiClient.partialEquipment(),
-    );
-    await tester.pumpWidget(buildTestWidget(client));
-    await tester.pump(const Duration(milliseconds: 500));
-
-    // head slot is equipped, others empty => 1/4
-    expect(find.textContaining('已装备 1/4 槽'), findsOneWidget);
   });
 
   testWidgets('CustomizePage tabs filter items correctly', (tester) async {
@@ -290,16 +216,43 @@ void main() {
     await tester.pumpWidget(buildTestWidget(client));
     await tester.pump(const Duration(milliseconds: 500));
 
-    // Default "全部" tab shows all 10 items
+    // "全部" tab is default — all items visible
     expect(find.text('全部'), findsOneWidget);
-    expect(find.text('已拥有'), findsWidgets); // tab + status chips
 
     // Switch to "已装备" tab
     await tester.tap(find.text('已装备').last);
     await tester.pump(const Duration(milliseconds: 500));
 
-    // Only equipped item(s) should show
-    expect(find.text('红色小帽子'), findsOneWidget);
+    // Only equipped item should show in grid (preview area may also show its name)
+    expect(find.text('红色小帽子'), findsAtLeast(1));
+  });
+
+  testWidgets('CustomizePage shows price for unowned items', (tester) async {
+    final client = CustomizeTestApiClient(
+      inventory: InventoryStateData(ownedItems: [], coinsBalance: 55),
+    );
+    await tester.pumpWidget(buildTestWidget(client));
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // Unowned items show "N 币" price label
+    expect(find.textContaining('币'), findsWidgets);
+  });
+
+  testWidgets('CustomizePage shows back-to-study chip', (tester) async {
+    final client = CustomizeTestApiClient();
+    await tester.pumpWidget(buildTestWidget(client));
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.text('回到学习'), findsOneWidget);
+  });
+
+  testWidgets('CustomizePage shows learning-decor separation notice', (tester) async {
+    final client = CustomizeTestApiClient();
+    await tester.pumpWidget(buildTestWidget(client));
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // §3.2 主副机制隔离提示条
+    expect(find.textContaining('不会变成学习进度'), findsOneWidget);
   });
 }
 

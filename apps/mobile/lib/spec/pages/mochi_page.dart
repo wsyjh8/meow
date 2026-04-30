@@ -4,7 +4,7 @@ import '../theme/tokens.dart';
 import '../icons/mochi_illustrations.dart';
 import '../widgets/spec_cards.dart';
 
-/// SPEC 6.2 — Mochi Page
+/// SPEC 6.2 — Mochi Page（白天版）
 ///
 /// Information hierarchy:
 /// 1. Top: Mochi name + days together + bond level pill
@@ -14,7 +14,10 @@ import '../widgets/spec_cards.dart';
 /// 5. 4 secondary entries: Dress-up / Room / Snack cabinet / Diary
 /// 6. Diary preview card
 class SpecMochiPage extends StatefulWidget {
-  const SpecMochiPage({super.key});
+  const SpecMochiPage({super.key, this.onNightToggle});
+
+  /// 切换到夜晚主题的回调（由 SpecShell 注入）
+  final VoidCallback? onNightToggle;
 
   @override
   State<SpecMochiPage> createState() => _SpecMochiPageState();
@@ -77,7 +80,9 @@ class _SpecMochiPageState extends State<SpecMochiPage> {
               _buildTopInfo(),
               _buildIllustrationArea(),
               _buildProgressBar(),
+              _buildGentleReminderCard(),
               _buildMochiCTA(),
+              _buildFishingEntryCard(),
               _buildSecondaryEntries(),
               _buildDiaryPreview(),
               const SizedBox(height: 20),
@@ -116,17 +121,37 @@ class _SpecMochiPageState extends State<SpecMochiPage> {
               ),
             ],
           ),
-          // Right: bond level pill
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFBEAF0),
-              borderRadius: SpecRadius.pillRadius,
-            ),
-            child: Text(
-              '羁绊 Lv.$level',
-              style: const TextStyle(fontSize: 11, fontWeight: SpecTypo.medium, color: Color(0xFF72243E)),
-            ),
+          Row(
+            children: [
+              // 夜晚主题切换（月亮图标）
+              if (widget.onNightToggle != null)
+                GestureDetector(
+                  onTap: widget.onNightToggle,
+                  child: Container(
+                    width: 30, height: 30,
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF5EFE6),
+                      borderRadius: SpecRadius.pillRadius,
+                    ),
+                    child: const Center(
+                      child: Text('🌙', style: TextStyle(fontSize: 14)),
+                    ),
+                  ),
+                ),
+              // 羁绊等级 pill
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFBEAF0),
+                  borderRadius: SpecRadius.pillRadius,
+                ),
+                child: Text(
+                  '羁绊 Lv.$level',
+                  style: const TextStyle(fontSize: 11, fontWeight: SpecTypo.medium, color: Color(0xFF72243E)),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -301,6 +326,72 @@ class _SpecMochiPageState extends State<SpecMochiPage> {
     );
   }
 
+  // ==================== 6.2.4b Gentle Reminder Card ====================
+
+  Widget _buildGentleReminderCard() {
+    final debt = _summary?.reviewDebt ?? 0;
+    if (debt <= 0) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(SpecSpacing.pageH, 0, SpecSpacing.pageH, 12),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFBEAF0),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '有几个旧朋友想见你',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: SpecTypo.medium,
+                      color: Color(0xFF72243E),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$debt 个旧词在等你回顾喵，要不要一起读一会儿。',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: SpecText.mochi,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: () => Navigator.pushNamed(context, '/review'),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: SpecBrand.mochiRose,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  '陪我读 5 分钟',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: SpecTypo.medium,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ==================== 6.2.5 Mochi Main CTA ====================
 
   Widget _buildMochiCTA() {
@@ -336,14 +427,93 @@ class _SpecMochiPageState extends State<SpecMochiPage> {
     );
   }
 
+  // ==================== 6.2.5b Fishing Entry Card ====================
+
+  Widget _buildFishingEntryCard() {
+    final fishTreats = _summary?.fishTreats ?? 0;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(SpecSpacing.pageH, 0, SpecSpacing.pageH, 12),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF8E1),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text('🐟', style: TextStyle(fontSize: 14)),
+                      const SizedBox(width: 6),
+                      const Text(
+                        '今日钓鱼',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: SpecTypo.medium,
+                          color: Color(0xFF5D4037),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '余 $fishTreats 小鱼干',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: SpecText.secondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    '用学过的词钓鱼，每天 3 轮，答对得小鱼干喵',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: SpecText.secondary,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: () => Navigator.pushNamed(context, '/fishing'),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9A825),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  '去钓鱼喵',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: SpecTypo.medium,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ==================== 6.2.6 Four Secondary Entries ====================
 
   Widget _buildSecondaryEntries() {
     final fishTreats = _summary?.fishTreats ?? 0;
 
     const entries = [
-      _EntryData('换装', Color(0xFFF0997B), false, 4.0),
-      _EntryData('房间', Color(0xFFFAC775), false, 4.0),
+      _EntryData('换装', Color(0xFFF0997B), false, 4.0, route: '/customize'),
+      _EntryData('房间', Color(0xFFFAC775), false, 4.0, route: '/room'),
       _EntryData('零食柜', Color(0xFFF4C0D1), true, 999.0), // circle
       _EntryData('日记', Color(0xFFAFA9EC), false, 4.0),
     ];
@@ -366,8 +536,11 @@ class _SpecMochiPageState extends State<SpecMochiPage> {
   Widget _buildEntry(_EntryData entry, int? badgeCount) {
     return GestureDetector(
       onTap: () {
-        // Sub-pages are out of scope (SPEC 9.2)
-        debugPrint('${entry.label} tapped — sub-page not designed yet');
+        if (entry.route != null) {
+          Navigator.pushNamed(context, entry.route!);
+        } else {
+          debugPrint('${entry.label} tapped — sub-page not designed yet');
+        }
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
@@ -458,5 +631,6 @@ class _EntryData {
   final Color color;
   final bool isCircle;
   final double radius;
-  const _EntryData(this.label, this.color, this.isCircle, this.radius);
+  final String? route;
+  const _EntryData(this.label, this.color, this.isCircle, this.radius, {this.route});
 }

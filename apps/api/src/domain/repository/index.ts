@@ -20,3 +20,4 @@ export type {
   ISecondarySummaryRepository,
 } from './secondary.repository';
 export type { IIdempotencyRepository } from './idempotency.repository';
+export type { IFishingRepository, ILotteryRepository } from './fishing.repository';

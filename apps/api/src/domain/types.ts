@@ -292,6 +292,7 @@ export interface SecondarySummary extends BalanceSnapshot {
   equipped_preview: Record<string, string | null>;
   change_highlights?: ChangeHighlight[];
   stats_summary?: StatsSummary;
+  review_debt: number; // = active review group pending items; 0 means no debt
 }
 
 /**
@@ -508,4 +509,70 @@ export interface LearningDayRecord {
   effective_learning_count: number;
   effective_review_count: number;
   updated_at: string;
+}
+
+// ========== Phase D: Fishing Game + Lottery ==========
+
+export type DailyFishingStatus = 'available' | 'exhausted';
+export type LotteryPrizeType = 'coins';
+
+/**
+ * One fishing task per user per effective Beijing day (resets at 05:00 UTC+8).
+ */
+export interface DailyFishingTask {
+  id: string;          // "ft-{taskDate}"
+  user_id: string;
+  task_date: string;   // Beijing effective date, e.g. "2026-04-29"
+  rounds_completed: number;
+  rounds_total: number;
+  status: DailyFishingStatus;
+  current_round_fish_word_id: string | null;
+  current_round_fish_word_meaning: string | null;
+}
+
+/** One choice presented to the user during a fishing round. */
+export interface FishingChoice {
+  word_id: string;
+  word_text: string;
+}
+
+/** Response returned when starting a fishing round. */
+export interface FishingRoundQuestion {
+  task_id: string;
+  round_number: number;
+  choices: FishingChoice[];
+}
+
+/** Record of a single fishing guess. */
+export interface FishingAttempt {
+  id: string;
+  user_id: string;
+  task_date: string;
+  round_number: number;
+  fish_word_id: string;
+  chosen_word_id: string;
+  is_correct: boolean;
+  fish_treats_earned: number;
+  created_at: string;
+}
+
+/** Lottery box in the user's inventory. */
+export interface LotteryBox {
+  id: string;
+  user_id: string;
+  source: string;
+  opened: boolean;
+  opened_at: string | null;
+  prize_type: LotteryPrizeType | null;
+  prize_ref: string | null;   // coin amount as string when prize_type === 'coins'
+  created_at: string;
+}
+
+/** Prize pool entry (weighted random draw). */
+export interface LotteryDropConfig {
+  id: number;
+  prize_type: LotteryPrizeType;
+  prize_ref: string;
+  weight: number;
+  is_active: boolean;
 }
