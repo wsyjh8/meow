@@ -100,12 +100,16 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(wordBookAssignments);
             await m.createTable(exampleSentences);
           }
+          // Defensive migration: dev devices accumulate intermediate states
+          // (e.g. column added by an earlier build but PRAGMA user_version
+          // didn't advance), so every step is idempotent — already-present
+          // columns / tables are skipped silently. Anything else still throws.
           if (from < 5) {
             // v5 (Need #8): local session truth + review attempt local table +
             // word_records.session_id linkage.
-            await m.createTable(sessions);
-            await m.createTable(reviewRecords);
-            await m.addColumn(wordRecords, wordRecords.sessionId);
+            await _safeCreateTable(m, sessions);
+            await _safeCreateTable(m, reviewRecords);
+            await _safeAddColumn(m, wordRecords, wordRecords.sessionId);
           }
           if (from >= 5 && from < 6) {
             // v6 (Need #10): record FSRS rating per review attempt for the
@@ -113,18 +117,48 @@ class AppDatabase extends _$AppDatabase {
             // a v1→v6 upgrade above already created review_records with the
             // current definition (rating included), so we must NOT add it
             // again here or sqlite throws "duplicate column".
-            await m.addColumn(reviewRecords, reviewRecords.rating);
+            await _safeAddColumn(m, reviewRecords, reviewRecords.rating);
           }
           if (from < 7) {
             // v7 (Need #11): local-only word enrichment layer.
             // Three tables, no foreign keys (joined by lowercase word_text
             // at read time). Indexes are emitted by drift's @TableIndex.
-            await m.createTable(wordForms);
-            await m.createTable(wordRelations);
-            await m.createTable(wordPhrases);
+            await _safeCreateTable(m, wordForms);
+            await _safeCreateTable(m, wordRelations);
+            await _safeCreateTable(m, wordPhrases);
           }
         },
       );
+
+  /// Add a column iff it doesn't already exist on [table]. Reads the live
+  /// `PRAGMA table_info(...)` rather than relying on drift's internal
+  /// schema cache so it survives "schema drifted from user_version" cases.
+  Future<void> _safeAddColumn(
+    Migrator m,
+    TableInfo table,
+    GeneratedColumn column,
+  ) async {
+    final cols = await customSelect(
+      'PRAGMA table_info(${table.actualTableName})',
+    ).get();
+    final existing =
+        cols.map((r) => r.read<String>('name')).toSet();
+    if (existing.contains(column.$name)) return;
+    await m.addColumn(table, column);
+  }
+
+  /// Create a table iff it doesn't already exist. Uses sqlite_master so it
+  /// survives the same dev-build skew as [_safeAddColumn]. Drift's
+  /// `m.createTable` does not emit `IF NOT EXISTS`, so we have to gate it
+  /// ourselves.
+  Future<void> _safeCreateTable(Migrator m, TableInfo table) async {
+    final rows = await customSelect(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+      variables: [Variable.withString(table.actualTableName)],
+    ).get();
+    if (rows.isNotEmpty) return;
+    await m.createTable(table);
+  }
 
   /// Return the next word in [bookId] that the user has not yet studied.
   ///

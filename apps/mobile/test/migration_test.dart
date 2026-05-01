@@ -249,6 +249,58 @@ void main() {
       await db.close();
     });
 
+    test('upgrade is idempotent: pre-existing column does NOT crash migration', () async {
+      // Repro for the dev-build skew bug: device sits at user_version=1 yet
+      // word_records.session_id was added by some earlier build. The v5
+      // branch must skip the addColumn instead of throwing
+      // "duplicate column name". This was hit on a real emulator after
+      // flutter clean + rerun across schema bumps.
+      final nativeDb = NativeDatabase.memory(
+        setup: (rawDb) {
+          rawDb.execute('PRAGMA user_version = 1');
+          rawDb.execute('CREATE TABLE word_records (id INTEGER PRIMARY KEY AUTOINCREMENT, word_id TEXT NOT NULL, book_id TEXT NOT NULL, study_type TEXT NOT NULL DEFAULT \'new\', action_result TEXT NOT NULL, created_at TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0, session_id TEXT)');
+          rawDb.execute('CREATE TABLE wordbook_progress (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT UNIQUE, total_words INTEGER, completed_words INTEGER, updated_at TEXT)');
+          rawDb.execute('CREATE TABLE daily_checkins (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE, checked_in INTEGER, created_at TEXT)');
+          rawDb.execute('CREATE TABLE custom_wordbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, word_count INTEGER, created_at TEXT)');
+          rawDb.execute('CREATE TABLE vocabulary_notebook (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT, meaning TEXT, note TEXT, created_at TEXT)');
+        },
+      );
+      final db = AppDatabase.forTesting(nativeDb);
+
+      // After migration, all v7 tables must exist regardless of dev-build skew.
+      expect(await db.select(db.wordRecords).get(), isEmpty);
+      expect(await db.select(db.sessions).get(), isEmpty);
+      expect(await db.select(db.reviewRecords).get(), isEmpty);
+      expect(await db.select(db.wordForms).get(), isEmpty);
+      expect(await db.select(db.wordRelations).get(), isEmpty);
+      expect(await db.select(db.wordPhrases).get(), isEmpty);
+
+      await db.close();
+    });
+
+    test('upgrade is idempotent: pre-existing v5 tables do NOT crash migration',
+        () async {
+      // Same pattern but with sessions / review_records already present at v1.
+      final nativeDb = NativeDatabase.memory(
+        setup: (rawDb) {
+          rawDb.execute('PRAGMA user_version = 1');
+          rawDb.execute('CREATE TABLE word_records (id INTEGER PRIMARY KEY AUTOINCREMENT, word_id TEXT NOT NULL, book_id TEXT NOT NULL, study_type TEXT NOT NULL DEFAULT \'new\', action_result TEXT NOT NULL, created_at TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0)');
+          rawDb.execute('CREATE TABLE wordbook_progress (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT UNIQUE, total_words INTEGER, completed_words INTEGER, updated_at TEXT)');
+          rawDb.execute('CREATE TABLE daily_checkins (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE, checked_in INTEGER, created_at TEXT)');
+          rawDb.execute('CREATE TABLE custom_wordbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, word_count INTEGER, created_at TEXT)');
+          rawDb.execute('CREATE TABLE vocabulary_notebook (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT, meaning TEXT, note TEXT, created_at TEXT)');
+          rawDb.execute('CREATE TABLE sessions (id TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_seconds INTEGER, session_minutes_target INTEGER NOT NULL DEFAULT 15, cached_validation_status TEXT, synced INTEGER NOT NULL DEFAULT 0)');
+        },
+      );
+      final db = AppDatabase.forTesting(nativeDb);
+      // Migration must succeed without "table already exists" or
+      // "duplicate column" — sessions stays as the partial pre-existing
+      // version, the rest of v5/v6/v7 still completes.
+      expect(await db.select(db.sessions).get(), isEmpty);
+      expect(await db.select(db.wordForms).get(), isEmpty);
+      await db.close();
+    });
+
     test('upgrade from v6: enrichment tables created (v7, Need #11)', () async {
       // Simulate a v6 database (sessions + review_records WITH rating, no
       // enrichment tables yet).
