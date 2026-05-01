@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import '../../core/api/api_client.dart';
 import '../../core/guards/p3_feature_guard.dart';
 import '../../core/memory/fsrs_service.dart';
+import '../../core/services/review_log_service.dart';
+import '../../core/services/session_store.dart';
+import '../../core/services/session_sync_service.dart';
 import '../../core/memory/review_rating.dart';
 import '../../core/memory/widgets/rating_buttons.dart';
 import '../../core/review/review_readiness_state.dart';
@@ -65,6 +68,14 @@ class ReviewPage extends StatefulWidget {
 class _ReviewPageState extends State<ReviewPage> {
   final ApiClient _apiClient = ApiClient();
   late final FsrsService _fsrsService;
+  late final SessionStore _sessionStore;
+  late final SessionSyncService _sessionSyncService;
+  late final ReviewLogService _reviewLog;
+
+  // Need #8 — Local id for the current review session, threaded into every
+  // submitReviewAttempt / submitLocalReviewBatch this page makes.
+  String? _sessionId;
+
   ReviewGroup? _reviewGroup;
   ReviewGroupItem? _currentItem;
   bool _isLoading = false;
@@ -141,6 +152,10 @@ class _ReviewPageState extends State<ReviewPage> {
   /// submitted as a batch when all items are completed.
   /// Cleared at the start of each [_loadReviewGroup()] call. P3.3.16.
   final List<LocalWordAttempt> _localSessionAttempts = [];
+  // Need #10 — local review_records row ids that correspond 1:1 to entries
+  // in _localSessionAttempts, in the same order. When the batch cloud sync
+  // succeeds these rows get bulk-marked synced.
+  final List<int> _localBatchRowIds = [];
 
   // ── Intra-session requeue (session_requeue_v1) ───────────────────────────
   // Works for both local-origin and cloud-origin review sessions.
@@ -162,12 +177,33 @@ class _ReviewPageState extends State<ReviewPage> {
   @override
   void initState() {
     super.initState();
-    _fsrsService = FsrsService(db: AppDatabase());
+    final appDb = AppDatabase();
+    _fsrsService = FsrsService(db: appDb);
+    _sessionStore = SessionStore(apiClient: _apiClient, driftDb: appDb);
+    _sessionSyncService =
+        SessionSyncService(apiClient: _apiClient, driftDb: appDb);
+    _reviewLog = ReviewLogService(apiClient: _apiClient, driftDb: appDb);
+    // Drain any unfinished sessions from prior runs first, then open one
+    // for this review page (independent from any study-page session).
+    _sessionSyncService.drainPending();
+    _startSession();
     _loadReviewGroup();
+  }
+
+  Future<void> _startSession() async {
+    try {
+      final id = await _sessionStore.startForReview();
+      if (mounted) setState(() => _sessionId = id);
+    } catch (_) {
+      // Session creation failure is non-fatal — submissions will fall back
+      // to the backend's time-window matching.
+    }
   }
 
   @override
   void dispose() {
+    // Need #8 — record session end (covers normal pop / back / explicit exit).
+    _sessionStore.finish();
     _apiClient.dispose();
     super.dispose();
   }
@@ -222,6 +258,7 @@ class _ReviewPageState extends State<ReviewPage> {
 
     // P3.3.16: clear local session accumulator on every load (fresh session).
     _localSessionAttempts.clear();
+    _localBatchRowIds.clear();
 
     setState(() {
       _isLoading = true;
@@ -403,6 +440,23 @@ class _ReviewPageState extends State<ReviewPage> {
       debugPrint('[ReviewPage] local session: recorded final attempt '
           '${_localSessionAttempts.length} wordId=$wordId, result=$binaryResult');
 
+      // 3a. Need #10 — persist this attempt locally as a review log entry
+      // (synced=0, will be marked synced once the batch cloud sync below
+      // confirms acceptance). Best-effort: a local-write failure here
+      // does not stop the review flow.
+      try {
+        final localId = await _reviewLog.recordLocal(
+          wordId: wordId,
+          reviewGroupId: _reviewGroup!.reviewGroupId,
+          actionResult: binaryResult,
+          sessionId: _sessionId,
+          rating: _ratingToFsrsInt(rating),
+        );
+        _localBatchRowIds.add(localId);
+      } catch (e) {
+        debugPrint('[ReviewPage] review-log local insert failed (non-blocking): $e');
+      }
+
       // 4. More items in session queue?
       if (_sessionQueue.isNotEmpty) {
         if (mounted) {
@@ -418,10 +472,20 @@ class _ReviewPageState extends State<ReviewPage> {
       // future: cloud verification — submitLocalReviewBatch retained for
       // future cloud+local hybrid mode. Currently non-blocking.
       final idempotencyKey = 'local-batch-${_reviewGroup!.reviewGroupId}';
+      // Snapshot the local row ids that correspond to this batch BEFORE
+      // _loadReviewGroup() clears the buffers below.
+      final batchRowIds = List<int>.from(_localBatchRowIds);
       _apiClient.submitLocalReviewBatch(
         attempts: _localSessionAttempts,
         idempotencyKey: idempotencyKey,
-      ).then((result) {
+        sessionId: _sessionId,
+      ).then((result) async {
+        // Need #10 — flag corresponding local review_records rows as synced.
+        for (final id in batchRowIds) {
+          try {
+            await _reviewLog.markSynced(id);
+          } catch (_) {/* best-effort */}
+        }
         if (result.groupCompleted && result.settlement != null && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -527,13 +591,37 @@ class _ReviewPageState extends State<ReviewPage> {
             '#$reviewBridgeFallbackCount: wordId=$wordId, error=$e');
       }
 
-      // Step 4: Cloud submit — PRIMARY; must succeed before bridge apply runs
+      // Step 4: Cloud submit — PRIMARY; must succeed before bridge apply runs.
+      //
+      // Need #10: write a local review_records row first (synced=0). On
+      // cloud success we mark it synced; on failure it stays unsynced and
+      // surfaces in the debug page as pending — no data is lost.
+      int? localLogId;
+      try {
+        localLogId = await _reviewLog.recordLocal(
+          wordId: wordId,
+          reviewGroupId: _reviewGroup!.reviewGroupId,
+          actionResult: binaryResult,
+          sessionId: _sessionId,
+          rating: _ratingToFsrsInt(rating),
+        );
+      } catch (e) {
+        debugPrint('[ReviewPage] review-log local insert failed (non-blocking): $e');
+      }
+
       final result = await _apiClient.submitReviewAttempt(
         reviewGroupId: _reviewGroup!.reviewGroupId,
         wordId: wordId,
         actionResult: binaryResult,
         idempotencyKey: idempotencyKey,
+        sessionId: _sessionId,
       );
+
+      if (localLogId != null) {
+        try {
+          await _reviewLog.markSynced(localLogId);
+        } catch (_) {/* best-effort */}
+      }
       if (mounted) setState(() { _groupCompleted = result.groupCompleted; });
 
       // Step 5: Post-cloud-submit bridge ensure + apply (stronger_bridge_contract_v1).
@@ -831,5 +919,22 @@ class _ReviewPageState extends State<ReviewPage> {
         ],
       ),
     );
+  }
+}
+
+
+/// Need #10 — Map [ReviewRating] to the FSRS canonical 1..4 integer
+/// (1=again, 2=hard, 3=good, 4=easy). Used when persisting a review
+/// attempt to the local review log.
+int _ratingToFsrsInt(ReviewRating rating) {
+  switch (rating) {
+    case ReviewRating.again:
+      return 1;
+    case ReviewRating.hard:
+      return 2;
+    case ReviewRating.good:
+      return 3;
+    case ReviewRating.easy:
+      return 4;
   }
 }

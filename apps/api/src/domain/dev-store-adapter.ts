@@ -34,8 +34,9 @@ class DevStoreStudyAdapter implements IStudyRepository {
   submitStudyAttempt(
     wordId: string, bookId: string, studyType: 'new',
     actionResult: 'know' | 'forgot', idempotencyKey: string,
+    sessionId?: string,
   ) {
-    return devStore.submitStudyAttempt(wordId, bookId, studyType, actionResult, idempotencyKey);
+    return devStore.submitStudyAttempt(wordId, bookId, studyType, actionResult, idempotencyKey, sessionId);
   }
   getStudyAttempts() { return devStore.getStudyAttempts(); }
 }
@@ -48,11 +49,12 @@ class DevStoreReviewAdapter implements IReviewRepository {
   submitReviewAttempt(
     reviewGroupId: string, wordId: string,
     actionResult: 'correct' | 'incorrect', idempotencyKey: string,
+    sessionId?: string,
   ) {
-    return devStore.submitReviewAttempt(reviewGroupId, wordId, actionResult, idempotencyKey);
+    return devStore.submitReviewAttempt(reviewGroupId, wordId, actionResult, idempotencyKey, sessionId);
   }
   submitLocalReviewBatch(
-    wordAttempts: { word_id: string; action_result: 'correct' | 'incorrect' }[],
+    wordAttempts: { word_id: string; action_result: 'correct' | 'incorrect'; session_id?: string }[],
     idempotencyKey: string,
   ) {
     return devStore.submitLocalReviewBatch(wordAttempts, idempotencyKey);
@@ -62,6 +64,9 @@ class DevStoreReviewAdapter implements IReviewRepository {
   }
   getReviewGroups() { return devStore.getReviewGroups(); }
   getReviewAttempts() { return devStore.getReviewAttempts(); }
+  getReviewAttemptsForWord(wordId: string, limit: number) {
+    return devStore.getReviewAttemptsForWord(wordId, limit);
+  }
 }
 
 // ========== Reward ==========
@@ -85,8 +90,8 @@ class DevStoreRewardAdapter implements IRewardRepository {
 
 class DevStoreSessionAdapter implements ISessionRepository {
   getActiveSession() { return devStore.getActiveSession(); }
-  startSession(minutesTarget: number, idempotencyKey: string) {
-    return devStore.startSession(minutesTarget, idempotencyKey);
+  startSession(minutesTarget: number, idempotencyKey: string, clientSessionId?: string) {
+    return devStore.startSession(minutesTarget, idempotencyKey, clientSessionId);
   }
   finishSession(sessionId: string, idempotencyKey: string) {
     return devStore.finishSession(sessionId, idempotencyKey);

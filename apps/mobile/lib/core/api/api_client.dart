@@ -52,6 +52,7 @@ class ApiClient {
     required String studyType,
     required String actionResult,
     String? idempotencyKey,
+    String? sessionId,
   }) async {
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -60,15 +61,18 @@ class ApiClient {
       headers['X-Idempotency-Key'] = idempotencyKey;
     }
 
+    final body = <String, dynamic>{
+      'word_id': wordId,
+      'book_id': bookId,
+      'study_type': studyType,
+      'action_result': actionResult,
+    };
+    if (sessionId != null) body['session_id'] = sessionId;
+
     final response = await _client.post(
       Uri.parse('$baseUrl/me/new-words'),
       headers: headers,
-      body: json.encode({
-        'word_id': wordId,
-        'book_id': bookId,
-        'study_type': studyType,
-        'action_result': actionResult,
-      }),
+      body: json.encode(body),
     );
     if (response.statusCode == 200) {
       return StudyAttemptResult.fromJson(
@@ -119,6 +123,7 @@ class ApiClient {
     required String wordId,
     required String actionResult,
     String? idempotencyKey,
+    String? sessionId,
   }) async {
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -127,14 +132,17 @@ class ApiClient {
       headers['X-Idempotency-Key'] = idempotencyKey;
     }
 
+    final body = <String, dynamic>{
+      'review_group_id': reviewGroupId,
+      'word_id': wordId,
+      'action_result': actionResult,
+    };
+    if (sessionId != null) body['session_id'] = sessionId;
+
     final response = await _client.post(
       Uri.parse('$baseUrl/review-attempts'),
       headers: headers,
-      body: json.encode({
-        'review_group_id': reviewGroupId,
-        'word_id': wordId,
-        'action_result': actionResult,
-      }),
+      body: json.encode(body),
     );
     if (response.statusCode == 200) {
       return ReviewAttemptResult.fromJson(
@@ -154,6 +162,7 @@ class ApiClient {
   Future<ReviewAttemptResult> submitLocalReviewBatch({
     required List<LocalWordAttempt> attempts,
     String? idempotencyKey,
+    String? sessionId,
   }) async {
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -161,14 +170,16 @@ class ApiClient {
     if (idempotencyKey != null) {
       headers['X-Idempotency-Key'] = idempotencyKey;
     }
+    final body = <String, dynamic>{
+      'word_attempts': attempts
+          .map((a) => {'word_id': a.wordId, 'action_result': a.actionResult})
+          .toList(),
+    };
+    if (sessionId != null) body['session_id'] = sessionId;
     final response = await _client.post(
       Uri.parse('$baseUrl/review-attempts/local-batch'),
       headers: headers,
-      body: json.encode({
-        'word_attempts': attempts
-            .map((a) => {'word_id': a.wordId, 'action_result': a.actionResult})
-            .toList(),
-      }),
+      body: json.encode(body),
     );
     if (response.statusCode == 200) {
       return ReviewAttemptResult.fromJson(
@@ -185,6 +196,7 @@ class ApiClient {
   Future<SessionInfo> startSession({
     int sessionMinutesTarget = 15,
     String? idempotencyKey,
+    String? sessionId,
   }) async {
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -193,12 +205,15 @@ class ApiClient {
       headers['X-Idempotency-Key'] = idempotencyKey;
     }
 
+    final body = <String, dynamic>{
+      'session_minutes_target': sessionMinutesTarget,
+    };
+    if (sessionId != null) body['session_id'] = sessionId;
+
     final response = await _client.post(
       Uri.parse('$baseUrl/sessions'),
       headers: headers,
-      body: json.encode({
-        'session_minutes_target': sessionMinutesTarget,
-      }),
+      body: json.encode(body),
     );
     if (response.statusCode == 200) {
       return SessionInfo.fromJson(
@@ -241,6 +256,28 @@ class ApiClient {
       );
     }
     throw ApiException('GET /sessions/$sessionId failed: ${response.statusCode}');
+  }
+
+  // ========== Need #10: Per-word review history ==========
+
+  /// Get cloud-accepted review history for a single word, newest first.
+  /// Returns up to [limit] items (server clamps at 200).
+  Future<List<WordReviewHistoryItem>> getWordReviewHistory({
+    required String wordId,
+    int limit = 20,
+  }) async {
+    final uri = Uri.parse('$baseUrl/me/words/$wordId/review-history')
+        .replace(queryParameters: {'limit': limit.toString()});
+    final response = await _client.get(uri);
+    if (response.statusCode == 200) {
+      final body = json.decode(response.body) as Map<String, dynamic>;
+      final items = (body['items'] as List<dynamic>? ?? [])
+          .map((e) => WordReviewHistoryItem.fromJson(e as Map<String, dynamic>))
+          .toList();
+      return items;
+    }
+    throw ApiException(
+        'GET /me/words/$wordId/review-history failed: ${response.statusCode}');
   }
 
   // ========== Phase 3: Check-in ==========
@@ -959,6 +996,7 @@ class SessionInfo {
   final int effectiveLearningCount;
   final int effectiveReviewCount;
   final int? actualMinutes;
+  final int? durationSeconds;
 
   SessionInfo({
     required this.sessionId,
@@ -967,9 +1005,10 @@ class SessionInfo {
     required this.sessionMinutesTarget,
     required this.startedAt,
     this.endedAt,
-    required this.effectiveLearningCount,
-    required this.effectiveReviewCount,
+    this.effectiveLearningCount = 0,
+    this.effectiveReviewCount = 0,
     this.actualMinutes,
+    this.durationSeconds,
   });
 
   factory SessionInfo.fromJson(Map<String, dynamic> json) {
@@ -980,9 +1019,41 @@ class SessionInfo {
       sessionMinutesTarget: json['session_minutes_target'] as int,
       startedAt: json['started_at'] as String,
       endedAt: json['ended_at'] as String?,
-      effectiveLearningCount: json['effective_learning_count'] as int,
-      effectiveReviewCount: json['effective_review_count'] as int,
+      // The /sessions start response omits these — default to 0 to keep parsing robust.
+      effectiveLearningCount: (json['effective_learning_count'] as int?) ?? 0,
+      effectiveReviewCount: (json['effective_review_count'] as int?) ?? 0,
       actualMinutes: json['actual_minutes'] as int?,
+      durationSeconds: json['duration_seconds'] as int?,
+    );
+  }
+}
+
+/// Need #10 — One cloud-accepted review attempt for a word.
+class WordReviewHistoryItem {
+  final String attemptId;
+  final String wordId;
+  final String reviewGroupId;
+  final String actionResult;
+  final String reviewedAt;
+  final String? sessionId;
+
+  WordReviewHistoryItem({
+    required this.attemptId,
+    required this.wordId,
+    required this.reviewGroupId,
+    required this.actionResult,
+    required this.reviewedAt,
+    this.sessionId,
+  });
+
+  factory WordReviewHistoryItem.fromJson(Map<String, dynamic> json) {
+    return WordReviewHistoryItem(
+      attemptId: json['attempt_id'] as String,
+      wordId: json['word_id'] as String,
+      reviewGroupId: json['review_group_id'] as String,
+      actionResult: json['action_result'] as String,
+      reviewedAt: json['reviewed_at'] as String,
+      sessionId: json['session_id'] as String?,
     );
   }
 }

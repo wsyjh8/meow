@@ -29,6 +29,7 @@ class WordRecords extends Table {
   TextColumn get actionResult => text().named('action_result')();
   TextColumn get createdAt => text().named('created_at')();
   IntColumn get synced => integer().withDefault(const Constant(0))();
+  TextColumn get sessionId => text().named('session_id').nullable()();
 }
 
 // ==================== wordbook_progress ====================

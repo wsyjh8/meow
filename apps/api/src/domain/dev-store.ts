@@ -716,25 +716,27 @@ export class DevStore {
     bookId: string,
     studyType: 'new',
     actionResult: 'know' | 'forgot',
-    idempotencyKey: string
+    idempotencyKey: string,
+    sessionId?: string,
   ): { success: boolean; alreadyExists: boolean; attempt: StudyAttempt } {
     // Check idempotency key first
     if (idempotencyKey) {
       const existingRecord = this.getIdempotencyKey(idempotencyKey);
       if (existingRecord) {
         // Return alreadyExists=true for idempotent replay
-        return { 
-          success: true, 
-          alreadyExists: true, 
-          attempt: { 
-            id: '', 
-            user_id: this.userId, 
-            word_id: wordId, 
-            book_id: bookId, 
-            study_type: studyType, 
-            action_result: actionResult, 
-            created_at: '' 
-          } 
+        return {
+          success: true,
+          alreadyExists: true,
+          attempt: {
+            id: '',
+            user_id: this.userId,
+            word_id: wordId,
+            book_id: bookId,
+            study_type: studyType,
+            action_result: actionResult,
+            created_at: '',
+            session_id: sessionId,
+          }
         };
       }
     }
@@ -753,6 +755,9 @@ export class DevStore {
       // Different action result (e.g., forgot→know): update the existing attempt
       existingAttempt.action_result = actionResult;
       existingAttempt.created_at = new Date().toISOString();
+      if (sessionId) {
+        existingAttempt.session_id = sessionId;
+      }
 
       // If upgrading from forgot to know, count as newly completed
       if (studyType === 'new' && actionResult === 'know') {
@@ -784,6 +789,7 @@ export class DevStore {
       study_type: studyType,
       action_result: actionResult,
       created_at: new Date().toISOString(),
+      session_id: sessionId,
     };
 
     this.studyAttempts.push(attempt);
@@ -881,7 +887,8 @@ export class DevStore {
     reviewGroupId: string,
     wordId: string,
     actionResult: 'correct' | 'incorrect',
-    idempotencyKey: string
+    idempotencyKey: string,
+    sessionId?: string,
   ): { success: boolean; groupCompleted: boolean; alreadyExists: boolean } {
     const group = this.reviewGroups.find(g => g.review_group_id === reviewGroupId);
     if (!group) {
@@ -921,6 +928,7 @@ export class DevStore {
       word_id: wordId,
       action_result: actionResult,
       created_at: new Date().toISOString(),
+      session_id: sessionId,
     };
     this.reviewAttempts.push(attempt);
 
@@ -985,7 +993,7 @@ export class DevStore {
    * Returns: { success, alreadyExists, localGroupId }
    */
   submitLocalReviewBatch(
-    wordAttempts: { word_id: string; action_result: 'correct' | 'incorrect' }[],
+    wordAttempts: { word_id: string; action_result: 'correct' | 'incorrect'; session_id?: string }[],
     idempotencyKey: string,
   ): { success: boolean; alreadyExists: boolean; localGroupId: string } {
     const localGroupId = `local_batch_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
@@ -1006,6 +1014,7 @@ export class DevStore {
         word_id: attempt.word_id,
         action_result: attempt.action_result,
         created_at: new Date().toISOString(),
+        session_id: attempt.session_id,
       };
       this.reviewAttempts.push(ra);
     }
@@ -1110,6 +1119,23 @@ export class DevStore {
 
   getReviewAttempts(): ReviewAttempt[] {
     return [...this.reviewAttempts];
+  }
+
+  /**
+   * Need #10 — Newest-first review history for a single word.
+   * Stable sort: created_at DESC, then attempt id DESC as tiebreaker so
+   * multiple attempts within the same millisecond are still ordered.
+   */
+  getReviewAttemptsForWord(wordId: string, limit: number): ReviewAttempt[] {
+    const matches = this.reviewAttempts.filter(a => a.word_id === wordId);
+    matches.sort((a, b) => {
+      const ca = new Date(a.created_at).getTime();
+      const cb = new Date(b.created_at).getTime();
+      if (cb !== ca) return cb - ca;
+      return b.id.localeCompare(a.id);
+    });
+    const cap = Math.max(1, Math.min(limit, 200));
+    return matches.slice(0, cap);
   }
 
   getSourceEvents(): RewardSourceEvent[] {
@@ -1661,7 +1687,11 @@ export class DevStore {
    * - Only one active session per user at a time
    * - Idempotency key prevents duplicate creation
    */
-  startSession(minutesTarget: number, idempotencyKey: string): { session: Session; alreadyExists: boolean } {
+  startSession(
+    minutesTarget: number,
+    idempotencyKey: string,
+    clientSessionId?: string,
+  ): { session: Session; alreadyExists: boolean } {
     // Check idempotency
     const existingRecord = this.getIdempotencyKey(idempotencyKey);
     if (existingRecord) {
@@ -1672,15 +1702,23 @@ export class DevStore {
       }
     }
 
-    // Check for existing active session
+    // If client supplied a session_id and it already exists, treat as idempotent.
+    if (clientSessionId) {
+      const existingByClientId = this.sessions.find(s => s.session_id === clientSessionId);
+      if (existingByClientId) {
+        return { session: existingByClientId, alreadyExists: true };
+      }
+    }
+
+    // Check for existing active session (global single-active constraint).
     const existingActive = this.getActiveSession();
     if (existingActive) {
       return { session: existingActive, alreadyExists: true };
     }
 
-    // Create new session
+    // Create new session — prefer client-supplied id (offline-first UUID).
     const session: Session = {
-      session_id: `sess-${Date.now()}`,
+      session_id: clientSessionId ?? `sess-${Date.now()}`,
       user_id: this.userId,
       session_status: 'started',
       session_validation_status: 'pending',
@@ -1724,28 +1762,50 @@ export class DevStore {
       return { session, alreadyExists: true };
     }
 
-    // Count effective attempts during this session
+    // Count effective attempts during this session.
+    // Primary path: explicit session_id linkage. Fallback: time window (for legacy/late-arriving offline attempts without session_id).
     const sessionStartTime = new Date(session.started_at).getTime();
     const now = Date.now();
 
-    const effectiveLearningCount = this.studyAttempts.filter(
-      a => a.study_type === 'new' &&
-           a.action_result === 'know' &&
-           new Date(a.created_at).getTime() >= sessionStartTime
+    const learningById = this.studyAttempts.filter(
+      a => a.session_id === session.session_id &&
+           a.study_type === 'new' &&
+           a.action_result === 'know',
     ).length;
 
-    const effectiveReviewCount = this.reviewAttempts.filter(
-      a => a.action_result === 'correct' &&
-           new Date(a.created_at).getTime() >= sessionStartTime
+    const reviewById = this.reviewAttempts.filter(
+      a => a.session_id === session.session_id &&
+           a.action_result === 'correct',
     ).length;
+
+    let effectiveLearningCount = learningById;
+    let effectiveReviewCount = reviewById;
+
+    if (effectiveLearningCount === 0 && effectiveReviewCount === 0) {
+      effectiveLearningCount = this.studyAttempts.filter(
+        a => !a.session_id &&
+             a.study_type === 'new' &&
+             a.action_result === 'know' &&
+             new Date(a.created_at).getTime() >= sessionStartTime &&
+             new Date(a.created_at).getTime() <= now,
+      ).length;
+      effectiveReviewCount = this.reviewAttempts.filter(
+        a => !a.session_id &&
+             a.action_result === 'correct' &&
+             new Date(a.created_at).getTime() >= sessionStartTime &&
+             new Date(a.created_at).getTime() <= now,
+      ).length;
+    }
 
     session.effective_learning_count = effectiveLearningCount;
     session.effective_review_count = effectiveReviewCount;
     session.session_status = 'ended';
     session.ended_at = new Date().toISOString();
 
-    // Calculate actual session duration in minutes
-    const actualMinutes = (now - sessionStartTime) / 1000 / 60;
+    // Duration: keep actual_minutes for backward compat + add duration_seconds (frozen field per BR-011 derivative).
+    const elapsedMs = now - sessionStartTime;
+    session.duration_seconds = Math.max(0, Math.round(elapsedMs / 1000));
+    const actualMinutes = elapsedMs / 1000 / 60;
     session.actual_minutes = Math.ceil(actualMinutes);
 
     // Phase 5 closeout: Enter validating state first, then validate

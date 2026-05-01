@@ -68,6 +68,7 @@ export interface StudyAttempt {
   study_type: StudyType;
   action_result: StudyActionResult;
   created_at: string;
+  session_id?: string;
 }
 
 /**
@@ -111,6 +112,7 @@ export interface ReviewAttempt {
   word_id: string;
   action_result: ReviewActionResult;
   created_at: string;
+  session_id?: string;
 }
 
 /**
@@ -473,6 +475,7 @@ export interface Session {
   effective_learning_count: number;
   effective_review_count: number;
   actual_minutes?: number;
+  duration_seconds?: number;
 }
 
 /**

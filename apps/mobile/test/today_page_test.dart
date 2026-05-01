@@ -55,6 +55,7 @@ class MockApiClient implements ApiClient {
     required String studyType,
     required String actionResult,
     String? idempotencyKey,
+    String? sessionId,
   }) =>
       throw UnimplementedError();
 
@@ -67,6 +68,7 @@ class MockApiClient implements ApiClient {
     required String wordId,
     required String actionResult,
     String? idempotencyKey,
+    String? sessionId,
   }) =>
       throw UnimplementedError();
 
@@ -97,6 +99,7 @@ class MockApiClient implements ApiClient {
   Future<SessionInfo> startSession({
     int sessionMinutesTarget = 15,
     String? idempotencyKey,
+    String? sessionId,
   }) =>
       throw UnimplementedError();
 
@@ -109,6 +112,13 @@ class MockApiClient implements ApiClient {
 
   @override
   Future<SessionInfo> getSession(String sessionId) =>
+      throw UnimplementedError();
+
+  @override
+  Future<List<WordReviewHistoryItem>> getWordReviewHistory({
+    required String wordId,
+    int limit = 20,
+  }) =>
       throw UnimplementedError();
 
   @override
@@ -156,6 +166,7 @@ class MockApiClient implements ApiClient {
   Future<ReviewAttemptResult> submitLocalReviewBatch({
     required List<LocalWordAttempt> attempts,
     String? idempotencyKey,
+    String? sessionId,
   }) =>
       throw UnimplementedError();
 }

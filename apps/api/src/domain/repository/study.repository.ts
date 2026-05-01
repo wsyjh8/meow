@@ -14,6 +14,7 @@ export interface IStudyRepository {
     studyType: 'new',
     actionResult: 'know' | 'forgot',
     idempotencyKey: string,
+    sessionId?: string,
   ): { success: boolean; alreadyExists: boolean; attempt: StudyAttempt };
 
   getStudyAttempts(): StudyAttempt[];

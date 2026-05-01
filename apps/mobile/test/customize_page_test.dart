@@ -86,17 +86,20 @@ class CustomizeTestApiClient implements ApiClient {
   @override
   Future<Word?> getNextNewWord() => throw UnimplementedError();
   @override
-  Future<StudyAttemptResult> submitStudyAttempt({required String wordId, required String bookId, required String studyType, required String actionResult, String? idempotencyKey}) => throw UnimplementedError();
+  Future<StudyAttemptResult> submitStudyAttempt({required String wordId, required String bookId, required String studyType, required String actionResult, String? idempotencyKey, String? sessionId}) => throw UnimplementedError();
   @override
   Future<ReviewGroup> getNextReviewGroup() => throw UnimplementedError();
   @override
-  Future<ReviewAttemptResult> submitReviewAttempt({required String reviewGroupId, required String wordId, required String actionResult, String? idempotencyKey}) => throw UnimplementedError();
+  Future<ReviewAttemptResult> submitReviewAttempt({required String reviewGroupId, required String wordId, required String actionResult, String? idempotencyKey, String? sessionId}) => throw UnimplementedError();
   @override
-  Future<SessionInfo> startSession({int sessionMinutesTarget = 15, String? idempotencyKey}) => throw UnimplementedError();
+  Future<SessionInfo> startSession({int sessionMinutesTarget = 15, String? idempotencyKey, String? sessionId}) => throw UnimplementedError();
   @override
   Future<SessionInfo> finishSession({required String sessionId, String? idempotencyKey}) => throw UnimplementedError();
   @override
   Future<SessionInfo> getSession(String sessionId) => throw UnimplementedError();
+  @override
+  Future<List<WordReviewHistoryItem>> getWordReviewHistory({required String wordId, int limit = 20}) => throw UnimplementedError();
+
   @override
   Future<CheckInResult> checkIn({String? idempotencyKey}) => throw UnimplementedError();
   @override
@@ -111,6 +114,7 @@ class CustomizeTestApiClient implements ApiClient {
   Future<ReviewAttemptResult> submitLocalReviewBatch({
     required List<LocalWordAttempt> attempts,
     String? idempotencyKey,
+    String? sessionId,
   }) => throw UnimplementedError();
   // Phase D stubs
   @override

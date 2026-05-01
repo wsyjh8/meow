@@ -174,6 +174,7 @@ class StudyService {
     required String bookId,
     required String studyType,
     required String actionResult,
+    String? sessionId,
   }) async {
     // Step 1: Write to SQLite FIRST
     final localId = await _db.insertWordRecord(
@@ -181,6 +182,7 @@ class StudyService {
       bookId: bookId,
       studyType: studyType,
       actionResult: actionResult,
+      sessionId: sessionId,
     );
 
     // Step 2: Return immediate result (don't wait for API)
@@ -198,6 +200,7 @@ class StudyService {
       studyType: studyType,
       actionResult: actionResult,
       localId: localId,
+      sessionId: sessionId,
     );
 
     return result;
@@ -210,6 +213,7 @@ class StudyService {
     required String studyType,
     required String actionResult,
     required int localId,
+    String? sessionId,
   }) async {
     try {
       final idempotencyKey = 'study-local-$localId-${DateTime.now().millisecondsSinceEpoch}';
@@ -219,6 +223,7 @@ class StudyService {
         studyType: studyType,
         actionResult: actionResult,
         idempotencyKey: idempotencyKey,
+        sessionId: sessionId,
       );
       // API succeeded — mark as synced
       await _db.markSynced(localId);
@@ -242,6 +247,7 @@ class StudyService {
           studyType: record['study_type'] as String,
           actionResult: record['action_result'] as String,
           idempotencyKey: idempotencyKey,
+          sessionId: record['session_id'] as String?,
         );
         await _db.markSynced(record['id'] as int);
         syncedCount++;

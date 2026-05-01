@@ -3,6 +3,8 @@ import 'package:drift_sqflite/drift_sqflite.dart';
 
 import 'tables/legacy_tables.dart';
 import 'tables/fsrs_tables.dart';
+import 'tables/session_tables.dart';
+import 'tables/enrichment_tables.dart';
 
 part 'app_database.g.dart';
 
@@ -35,6 +37,13 @@ part 'app_database.g.dart';
   WordEntries,
   WordBookAssignments,
   ExampleSentences,
+  // Session layer (v5, Need #8: local Session truth + linked review attempts)
+  Sessions,
+  ReviewRecords,
+  // Enrichment layer (v7, Need #11: other forms / synonyms+antonyms / common phrases)
+  WordForms,
+  WordRelations,
+  WordPhrases,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
@@ -43,7 +52,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -90,6 +99,29 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(wordEntries);
             await m.createTable(wordBookAssignments);
             await m.createTable(exampleSentences);
+          }
+          if (from < 5) {
+            // v5 (Need #8): local session truth + review attempt local table +
+            // word_records.session_id linkage.
+            await m.createTable(sessions);
+            await m.createTable(reviewRecords);
+            await m.addColumn(wordRecords, wordRecords.sessionId);
+          }
+          if (from >= 5 && from < 6) {
+            // v6 (Need #10): record FSRS rating per review attempt for the
+            // local review log. Only run when upgrading FROM exactly v5 —
+            // a v1→v6 upgrade above already created review_records with the
+            // current definition (rating included), so we must NOT add it
+            // again here or sqlite throws "duplicate column".
+            await m.addColumn(reviewRecords, reviewRecords.rating);
+          }
+          if (from < 7) {
+            // v7 (Need #11): local-only word enrichment layer.
+            // Three tables, no foreign keys (joined by lowercase word_text
+            // at read time). Indexes are emitted by drift's @TableIndex.
+            await m.createTable(wordForms);
+            await m.createTable(wordRelations);
+            await m.createTable(wordPhrases);
           }
         },
       );

@@ -11,6 +11,7 @@ export interface ISessionRepository {
   startSession(
     minutesTarget: number,
     idempotencyKey: string,
+    clientSessionId?: string,
   ): { session: Session; alreadyExists: boolean };
 
   finishSession(

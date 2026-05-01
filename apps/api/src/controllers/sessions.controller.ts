@@ -13,6 +13,7 @@ import { repositories } from '../domain';
 
 export interface StartSessionDto {
   session_minutes_target?: number;
+  session_id?: string;
 }
 
 /**
@@ -43,7 +44,7 @@ export class SessionsController {
     }
 
     const minutesTarget = dto.session_minutes_target ?? 15;
-    const result = repositories.session.startSession(minutesTarget, idempotencyKey);
+    const result = repositories.session.startSession(minutesTarget, idempotencyKey, dto.session_id);
 
     await repositories.ensurePersisted();
 
@@ -85,6 +86,7 @@ export class SessionsController {
       session_minutes_target: result.session.session_minutes_target,
       started_at: result.session.started_at,
       ended_at: result.session.ended_at,
+      duration_seconds: result.session.duration_seconds,
       already_exists: result.alreadyExists,
     };
   }
@@ -109,6 +111,7 @@ export class SessionsController {
       session_minutes_target: session.session_minutes_target,
       started_at: session.started_at,
       ended_at: session.ended_at,
+      duration_seconds: session.duration_seconds,
       effective_learning_count: session.effective_learning_count,
       effective_review_count: session.effective_review_count,
     };

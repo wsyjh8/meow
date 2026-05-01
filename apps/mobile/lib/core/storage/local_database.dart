@@ -106,11 +106,16 @@ class LocalDatabase {
   // ==================== Word Records (核心) ====================
 
   /// Insert a study attempt record.
+  ///
+  /// [sessionId] (Need #8) is the local Sessions.id this attempt belongs to,
+  /// or null when the attempt happens outside any active session
+  /// (legacy / pre-migration data — backend falls back to time-window match).
   Future<int> insertWordRecord({
     required String wordId,
     required String bookId,
     required String studyType,
     required String actionResult,
+    String? sessionId,
   }) async {
     // If this word already has a record, update it (forgot → know upgrade)
     final existing = await _db!.query(
@@ -125,13 +130,15 @@ class LocalDatabase {
         return existing.first['id'] as int; // Already exists, same result
       }
       // Update: e.g., forgot → know
+      final updateValues = <String, Object?>{
+        'action_result': actionResult,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+        'synced': 0,
+      };
+      if (sessionId != null) updateValues['session_id'] = sessionId;
       await _db!.update(
         'word_records',
-        {
-          'action_result': actionResult,
-          'created_at': DateTime.now().toUtc().toIso8601String(),
-          'synced': 0,
-        },
+        updateValues,
         where: 'id = ?',
         whereArgs: [existing.first['id']],
       );
@@ -145,6 +152,7 @@ class LocalDatabase {
       'action_result': actionResult,
       'created_at': DateTime.now().toUtc().toIso8601String(),
       'synced': 0,
+      if (sessionId != null) 'session_id': sessionId,
     });
   }
 

@@ -99,6 +99,7 @@ class TestApiClient implements ApiClient {
     required String studyType,
     required String actionResult,
     String? idempotencyKey,
+    String? sessionId,
   }) => throw UnimplementedError();
 
   @override
@@ -110,12 +111,14 @@ class TestApiClient implements ApiClient {
     required String wordId,
     required String actionResult,
     String? idempotencyKey,
+    String? sessionId,
   }) => throw UnimplementedError();
 
   @override
   Future<SessionInfo> startSession({
     int sessionMinutesTarget = 15,
     String? idempotencyKey,
+    String? sessionId,
   }) => throw UnimplementedError();
 
   @override
@@ -126,6 +129,9 @@ class TestApiClient implements ApiClient {
 
   @override
   Future<SessionInfo> getSession(String sessionId) => throw UnimplementedError();
+  @override
+  Future<List<WordReviewHistoryItem>> getWordReviewHistory({required String wordId, int limit = 20}) => throw UnimplementedError();
+
 
   @override
   Future<CheckInResult> checkIn({String? idempotencyKey}) =>
@@ -193,6 +199,7 @@ class TestApiClient implements ApiClient {
   Future<ReviewAttemptResult> submitLocalReviewBatch({
     required List<LocalWordAttempt> attempts,
     String? idempotencyKey,
+    String? sessionId,
   }) => throw UnimplementedError();
 
   @override

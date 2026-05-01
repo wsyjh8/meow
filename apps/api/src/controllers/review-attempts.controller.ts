@@ -5,15 +5,18 @@ export interface ReviewAttemptDto {
   review_group_id: string;
   word_id: string;
   action_result: 'correct' | 'incorrect';
+  session_id?: string;
 }
 
 interface LocalWordAttemptDto {
   word_id: string;
   action_result: 'correct' | 'incorrect';
+  session_id?: string;
 }
 
 interface LocalBatchReviewAttemptDto {
   word_attempts: LocalWordAttemptDto[];
+  session_id?: string;
 }
 
 /**
@@ -39,6 +42,7 @@ export class ReviewAttemptsController {
       dto.word_id,
       dto.action_result,
       idempotencyKey || '',
+      dto.session_id,
     );
 
     const state = repositories.today.getTodayState();
@@ -117,8 +121,12 @@ export class ReviewAttemptsController {
       }
     }
 
+    const wordAttemptsWithSession = dto.word_attempts.map(wa => ({
+      ...wa,
+      session_id: wa.session_id ?? dto.session_id,
+    }));
     const result = repositories.review.submitLocalReviewBatch(
-      dto.word_attempts,
+      wordAttemptsWithSession,
       idempotencyKey || '',
     );
 

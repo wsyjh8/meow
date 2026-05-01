@@ -14,6 +14,7 @@ export interface StudyAttemptDto {
   book_id: string;
   study_type: 'new';
   action_result: 'know' | 'forgot';
+  session_id?: string;
 }
 
 /**
@@ -52,6 +53,7 @@ export class StudyAttemptsController {
       dto.study_type,
       dto.action_result,
       idempotencyKey || '',
+      dto.session_id,
     );
 
     // Phase 2: Create source event and settlement for effective new word

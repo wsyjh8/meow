@@ -10,6 +10,8 @@ import '../../core/storage/backup_restore_service.dart';
 import '../../core/storage/local_database.dart';
 import '../../core/device/device_info_service.dart';
 import '../../core/guards/p3_feature_guard.dart';
+import '../../core/services/word_enrichment_importer.dart';
+import '../debug/review_history_debug_page.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/meow_card.dart';
 import '../../shared/widgets/meow_chip.dart';
@@ -177,8 +179,150 @@ class _SettingsPageState extends State<SettingsPage> {
 
             // ===== Backup Section =====
             _buildBackupSection(),
+
+            // ===== Debug: review history (Need #10) =====
+            const SizedBox(height: MeowSpacing.md),
+            _buildDebugSection(context),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildDebugSection(BuildContext context) {
+    return MeowCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('🔧', style: TextStyle(fontSize: 18)),
+              const SizedBox(width: 8),
+              Text('调试', style: MeowTextStyles.label),
+            ],
+          ),
+          const SizedBox(height: MeowSpacing.md),
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.history),
+            title: const Text('复习历史'),
+            subtitle: const Text('按 word_id 查看云端 + 本地复习记录'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const ReviewHistoryDebugPage(),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.cloud_download_outlined),
+            title: const Text('导入增强数据'),
+            subtitle: const Text(
+              '把 docs/forms/ 三个 JSONL 写入本地 SQLite（仅本机调试用）',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _runEnrichmentImport(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Need #11 — Debug import flow. Wipes existing enrichment rows and
+  /// re-imports from `assets/forms/*.jsonl`. Shows a simple progress
+  /// dialog so the user can tell ~70K relation rows aren't silently
+  /// stalled. Result snackbar reports per-table totals.
+  Future<void> _runEnrichmentImport(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('导入增强数据？'),
+        content: const Text(
+          '将清空本地 word_forms / word_relations / word_phrases 三张表，'
+          '重新从 assets/forms/*.jsonl 导入。'
+          '\n\n大约 14 万行，模拟器上需要 30 秒到 1 分钟。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('开始导入'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+
+    // Drive a stateful progress dialog via a ValueNotifier so we don't
+    // need a StatefulWidget for the dialog itself.
+    final progress = ValueNotifier<_ImportTick>(
+      const _ImportTick(label: '准备', done: 0, total: null),
+    );
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('正在导入增强数据'),
+        content: ValueListenableBuilder<_ImportTick>(
+          valueListenable: progress,
+          builder: (_, tick, __) {
+            final pct = (tick.total != null && tick.total! > 0)
+                ? (tick.done / tick.total!).clamp(0.0, 1.0)
+                : null;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '${tick.label}: ${tick.done}'
+                  '${tick.total != null ? " / ${tick.total}" : ""}',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                LinearProgressIndicator(value: pct),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+
+    ImportStats? stats;
+    Object? error;
+    try {
+      final importer = WordEnrichmentImporter();
+      stats = await importer.importAll(
+        replace: true,
+        onProgress: (label, done, total) {
+          progress.value = _ImportTick(label: label, done: done, total: total);
+        },
+      );
+    } catch (e) {
+      error = e;
+    }
+
+    if (!context.mounted) return;
+    Navigator.of(context).pop(); // dismiss progress dialog
+
+    if (error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('导入失败：$error')),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('导入完成：${stats!}'),
+        duration: const Duration(seconds: 4),
       ),
     );
   }
@@ -753,3 +897,12 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 }
+
+
+class _ImportTick {
+  final String label;
+  final int done;
+  final int? total;
+  const _ImportTick({required this.label, required this.done, this.total});
+}
+

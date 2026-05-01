@@ -21,6 +21,7 @@ dependencies:
   device_info_plus: ^10.0.0
   audioplayers: ^6.0.0
   fl_chart: ^0.69.0
+  uuid: ^4.4.0
 
 dev_dependencies:
   flutter_test:
@@ -36,3 +37,6 @@ flutter:
     - assets/words/book-001.json
     - assets/words/zk.json
     - assets/words/gk.json
+    - assets/forms/word_forms.jsonl
+    - assets/forms/word_relations.jsonl
+    - assets/forms/word_phrases.jsonl

@@ -43,3 +43,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android Gradle Kotlin DSL cache
+/android/.kotlin/
+
+# Need #11 enrichment JSONL — local-only debug seed copies of docs/forms/.
+# Do not check these in: keep the repo lean, source of truth lives in docs/.
+# To populate locally: cp ../../docs/forms/*.jsonl assets/forms/
+/assets/forms/

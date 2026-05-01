@@ -55,9 +55,23 @@ class $WordRecordsTable extends WordRecords
       type: DriftSqlType.int,
       requiredDuringInsert: false,
       defaultValue: const Constant(0));
+  static const VerificationMeta _sessionIdMeta =
+      const VerificationMeta('sessionId');
   @override
-  List<GeneratedColumn> get $columns =>
-      [id, wordId, bookId, studyType, actionResult, createdAt, synced];
+  late final GeneratedColumn<String> sessionId = GeneratedColumn<String>(
+      'session_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        wordId,
+        bookId,
+        studyType,
+        actionResult,
+        createdAt,
+        synced,
+        sessionId
+      ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -105,6 +119,10 @@ class $WordRecordsTable extends WordRecords
       context.handle(_syncedMeta,
           synced.isAcceptableOrUnknown(data['synced']!, _syncedMeta));
     }
+    if (data.containsKey('session_id')) {
+      context.handle(_sessionIdMeta,
+          sessionId.isAcceptableOrUnknown(data['session_id']!, _sessionIdMeta));
+    }
     return context;
   }
 
@@ -128,6 +146,8 @@ class $WordRecordsTable extends WordRecords
           .read(DriftSqlType.string, data['${effectivePrefix}created_at'])!,
       synced: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}synced'])!,
+      sessionId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}session_id']),
     );
   }
 
@@ -145,6 +165,7 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
   final String actionResult;
   final String createdAt;
   final int synced;
+  final String? sessionId;
   const WordRecord(
       {required this.id,
       required this.wordId,
@@ -152,7 +173,8 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
       required this.studyType,
       required this.actionResult,
       required this.createdAt,
-      required this.synced});
+      required this.synced,
+      this.sessionId});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -163,6 +185,9 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
     map['action_result'] = Variable<String>(actionResult);
     map['created_at'] = Variable<String>(createdAt);
     map['synced'] = Variable<int>(synced);
+    if (!nullToAbsent || sessionId != null) {
+      map['session_id'] = Variable<String>(sessionId);
+    }
     return map;
   }
 
@@ -175,6 +200,9 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
       actionResult: Value(actionResult),
       createdAt: Value(createdAt),
       synced: Value(synced),
+      sessionId: sessionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sessionId),
     );
   }
 
@@ -189,6 +217,7 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
       actionResult: serializer.fromJson<String>(json['actionResult']),
       createdAt: serializer.fromJson<String>(json['createdAt']),
       synced: serializer.fromJson<int>(json['synced']),
+      sessionId: serializer.fromJson<String?>(json['sessionId']),
     );
   }
   @override
@@ -202,6 +231,7 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
       'actionResult': serializer.toJson<String>(actionResult),
       'createdAt': serializer.toJson<String>(createdAt),
       'synced': serializer.toJson<int>(synced),
+      'sessionId': serializer.toJson<String?>(sessionId),
     };
   }
 
@@ -212,7 +242,8 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
           String? studyType,
           String? actionResult,
           String? createdAt,
-          int? synced}) =>
+          int? synced,
+          Value<String?> sessionId = const Value.absent()}) =>
       WordRecord(
         id: id ?? this.id,
         wordId: wordId ?? this.wordId,
@@ -221,6 +252,7 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
         actionResult: actionResult ?? this.actionResult,
         createdAt: createdAt ?? this.createdAt,
         synced: synced ?? this.synced,
+        sessionId: sessionId.present ? sessionId.value : this.sessionId,
       );
   WordRecord copyWithCompanion(WordRecordsCompanion data) {
     return WordRecord(
@@ -233,6 +265,7 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
           : this.actionResult,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       synced: data.synced.present ? data.synced.value : this.synced,
+      sessionId: data.sessionId.present ? data.sessionId.value : this.sessionId,
     );
   }
 
@@ -245,14 +278,15 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
           ..write('studyType: $studyType, ')
           ..write('actionResult: $actionResult, ')
           ..write('createdAt: $createdAt, ')
-          ..write('synced: $synced')
+          ..write('synced: $synced, ')
+          ..write('sessionId: $sessionId')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
-      id, wordId, bookId, studyType, actionResult, createdAt, synced);
+  int get hashCode => Object.hash(id, wordId, bookId, studyType, actionResult,
+      createdAt, synced, sessionId);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -263,7 +297,8 @@ class WordRecord extends DataClass implements Insertable<WordRecord> {
           other.studyType == this.studyType &&
           other.actionResult == this.actionResult &&
           other.createdAt == this.createdAt &&
-          other.synced == this.synced);
+          other.synced == this.synced &&
+          other.sessionId == this.sessionId);
 }
 
 class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
@@ -274,6 +309,7 @@ class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
   final Value<String> actionResult;
   final Value<String> createdAt;
   final Value<int> synced;
+  final Value<String?> sessionId;
   const WordRecordsCompanion({
     this.id = const Value.absent(),
     this.wordId = const Value.absent(),
@@ -282,6 +318,7 @@ class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
     this.actionResult = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.synced = const Value.absent(),
+    this.sessionId = const Value.absent(),
   });
   WordRecordsCompanion.insert({
     this.id = const Value.absent(),
@@ -291,6 +328,7 @@ class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
     required String actionResult,
     required String createdAt,
     this.synced = const Value.absent(),
+    this.sessionId = const Value.absent(),
   })  : wordId = Value(wordId),
         bookId = Value(bookId),
         actionResult = Value(actionResult),
@@ -303,6 +341,7 @@ class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
     Expression<String>? actionResult,
     Expression<String>? createdAt,
     Expression<int>? synced,
+    Expression<String>? sessionId,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -312,6 +351,7 @@ class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
       if (actionResult != null) 'action_result': actionResult,
       if (createdAt != null) 'created_at': createdAt,
       if (synced != null) 'synced': synced,
+      if (sessionId != null) 'session_id': sessionId,
     });
   }
 
@@ -322,7 +362,8 @@ class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
       Value<String>? studyType,
       Value<String>? actionResult,
       Value<String>? createdAt,
-      Value<int>? synced}) {
+      Value<int>? synced,
+      Value<String?>? sessionId}) {
     return WordRecordsCompanion(
       id: id ?? this.id,
       wordId: wordId ?? this.wordId,
@@ -331,6 +372,7 @@ class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
       actionResult: actionResult ?? this.actionResult,
       createdAt: createdAt ?? this.createdAt,
       synced: synced ?? this.synced,
+      sessionId: sessionId ?? this.sessionId,
     );
   }
 
@@ -358,6 +400,9 @@ class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
     if (synced.present) {
       map['synced'] = Variable<int>(synced.value);
     }
+    if (sessionId.present) {
+      map['session_id'] = Variable<String>(sessionId.value);
+    }
     return map;
   }
 
@@ -370,7 +415,8 @@ class WordRecordsCompanion extends UpdateCompanion<WordRecord> {
           ..write('studyType: $studyType, ')
           ..write('actionResult: $actionResult, ')
           ..write('createdAt: $createdAt, ')
-          ..write('synced: $synced')
+          ..write('synced: $synced, ')
+          ..write('sessionId: $sessionId')
           ..write(')'))
         .toString();
   }
@@ -4642,6 +4688,1934 @@ class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
   }
 }
 
+class $SessionsTable extends Sessions with TableInfo<$SessionsTable, Session> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SessionsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _kindMeta = const VerificationMeta('kind');
+  @override
+  late final GeneratedColumn<String> kind = GeneratedColumn<String>(
+      'kind', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _startedAtMeta =
+      const VerificationMeta('startedAt');
+  @override
+  late final GeneratedColumn<String> startedAt = GeneratedColumn<String>(
+      'started_at', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _endedAtMeta =
+      const VerificationMeta('endedAt');
+  @override
+  late final GeneratedColumn<String> endedAt = GeneratedColumn<String>(
+      'ended_at', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _durationSecondsMeta =
+      const VerificationMeta('durationSeconds');
+  @override
+  late final GeneratedColumn<int> durationSeconds = GeneratedColumn<int>(
+      'duration_seconds', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _sessionMinutesTargetMeta =
+      const VerificationMeta('sessionMinutesTarget');
+  @override
+  late final GeneratedColumn<int> sessionMinutesTarget = GeneratedColumn<int>(
+      'session_minutes_target', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(15));
+  static const VerificationMeta _cachedValidationStatusMeta =
+      const VerificationMeta('cachedValidationStatus');
+  @override
+  late final GeneratedColumn<String> cachedValidationStatus =
+      GeneratedColumn<String>('cached_validation_status', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _syncedMeta = const VerificationMeta('synced');
+  @override
+  late final GeneratedColumn<int> synced = GeneratedColumn<int>(
+      'synced', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        kind,
+        startedAt,
+        endedAt,
+        durationSeconds,
+        sessionMinutesTarget,
+        cachedValidationStatus,
+        synced
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'sessions';
+  @override
+  VerificationContext validateIntegrity(Insertable<Session> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('kind')) {
+      context.handle(
+          _kindMeta, kind.isAcceptableOrUnknown(data['kind']!, _kindMeta));
+    } else if (isInserting) {
+      context.missing(_kindMeta);
+    }
+    if (data.containsKey('started_at')) {
+      context.handle(_startedAtMeta,
+          startedAt.isAcceptableOrUnknown(data['started_at']!, _startedAtMeta));
+    } else if (isInserting) {
+      context.missing(_startedAtMeta);
+    }
+    if (data.containsKey('ended_at')) {
+      context.handle(_endedAtMeta,
+          endedAt.isAcceptableOrUnknown(data['ended_at']!, _endedAtMeta));
+    }
+    if (data.containsKey('duration_seconds')) {
+      context.handle(
+          _durationSecondsMeta,
+          durationSeconds.isAcceptableOrUnknown(
+              data['duration_seconds']!, _durationSecondsMeta));
+    }
+    if (data.containsKey('session_minutes_target')) {
+      context.handle(
+          _sessionMinutesTargetMeta,
+          sessionMinutesTarget.isAcceptableOrUnknown(
+              data['session_minutes_target']!, _sessionMinutesTargetMeta));
+    }
+    if (data.containsKey('cached_validation_status')) {
+      context.handle(
+          _cachedValidationStatusMeta,
+          cachedValidationStatus.isAcceptableOrUnknown(
+              data['cached_validation_status']!, _cachedValidationStatusMeta));
+    }
+    if (data.containsKey('synced')) {
+      context.handle(_syncedMeta,
+          synced.isAcceptableOrUnknown(data['synced']!, _syncedMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  Session map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Session(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      kind: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}kind'])!,
+      startedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}started_at'])!,
+      endedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}ended_at']),
+      durationSeconds: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}duration_seconds']),
+      sessionMinutesTarget: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}session_minutes_target'])!,
+      cachedValidationStatus: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}cached_validation_status']),
+      synced: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}synced'])!,
+    );
+  }
+
+  @override
+  $SessionsTable createAlias(String alias) {
+    return $SessionsTable(attachedDatabase, alias);
+  }
+}
+
+class Session extends DataClass implements Insertable<Session> {
+  final String id;
+  final String kind;
+  final String startedAt;
+  final String? endedAt;
+  final int? durationSeconds;
+  final int sessionMinutesTarget;
+  final String? cachedValidationStatus;
+  final int synced;
+  const Session(
+      {required this.id,
+      required this.kind,
+      required this.startedAt,
+      this.endedAt,
+      this.durationSeconds,
+      required this.sessionMinutesTarget,
+      this.cachedValidationStatus,
+      required this.synced});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['kind'] = Variable<String>(kind);
+    map['started_at'] = Variable<String>(startedAt);
+    if (!nullToAbsent || endedAt != null) {
+      map['ended_at'] = Variable<String>(endedAt);
+    }
+    if (!nullToAbsent || durationSeconds != null) {
+      map['duration_seconds'] = Variable<int>(durationSeconds);
+    }
+    map['session_minutes_target'] = Variable<int>(sessionMinutesTarget);
+    if (!nullToAbsent || cachedValidationStatus != null) {
+      map['cached_validation_status'] =
+          Variable<String>(cachedValidationStatus);
+    }
+    map['synced'] = Variable<int>(synced);
+    return map;
+  }
+
+  SessionsCompanion toCompanion(bool nullToAbsent) {
+    return SessionsCompanion(
+      id: Value(id),
+      kind: Value(kind),
+      startedAt: Value(startedAt),
+      endedAt: endedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(endedAt),
+      durationSeconds: durationSeconds == null && nullToAbsent
+          ? const Value.absent()
+          : Value(durationSeconds),
+      sessionMinutesTarget: Value(sessionMinutesTarget),
+      cachedValidationStatus: cachedValidationStatus == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cachedValidationStatus),
+      synced: Value(synced),
+    );
+  }
+
+  factory Session.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Session(
+      id: serializer.fromJson<String>(json['id']),
+      kind: serializer.fromJson<String>(json['kind']),
+      startedAt: serializer.fromJson<String>(json['startedAt']),
+      endedAt: serializer.fromJson<String?>(json['endedAt']),
+      durationSeconds: serializer.fromJson<int?>(json['durationSeconds']),
+      sessionMinutesTarget:
+          serializer.fromJson<int>(json['sessionMinutesTarget']),
+      cachedValidationStatus:
+          serializer.fromJson<String?>(json['cachedValidationStatus']),
+      synced: serializer.fromJson<int>(json['synced']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'kind': serializer.toJson<String>(kind),
+      'startedAt': serializer.toJson<String>(startedAt),
+      'endedAt': serializer.toJson<String?>(endedAt),
+      'durationSeconds': serializer.toJson<int?>(durationSeconds),
+      'sessionMinutesTarget': serializer.toJson<int>(sessionMinutesTarget),
+      'cachedValidationStatus':
+          serializer.toJson<String?>(cachedValidationStatus),
+      'synced': serializer.toJson<int>(synced),
+    };
+  }
+
+  Session copyWith(
+          {String? id,
+          String? kind,
+          String? startedAt,
+          Value<String?> endedAt = const Value.absent(),
+          Value<int?> durationSeconds = const Value.absent(),
+          int? sessionMinutesTarget,
+          Value<String?> cachedValidationStatus = const Value.absent(),
+          int? synced}) =>
+      Session(
+        id: id ?? this.id,
+        kind: kind ?? this.kind,
+        startedAt: startedAt ?? this.startedAt,
+        endedAt: endedAt.present ? endedAt.value : this.endedAt,
+        durationSeconds: durationSeconds.present
+            ? durationSeconds.value
+            : this.durationSeconds,
+        sessionMinutesTarget: sessionMinutesTarget ?? this.sessionMinutesTarget,
+        cachedValidationStatus: cachedValidationStatus.present
+            ? cachedValidationStatus.value
+            : this.cachedValidationStatus,
+        synced: synced ?? this.synced,
+      );
+  Session copyWithCompanion(SessionsCompanion data) {
+    return Session(
+      id: data.id.present ? data.id.value : this.id,
+      kind: data.kind.present ? data.kind.value : this.kind,
+      startedAt: data.startedAt.present ? data.startedAt.value : this.startedAt,
+      endedAt: data.endedAt.present ? data.endedAt.value : this.endedAt,
+      durationSeconds: data.durationSeconds.present
+          ? data.durationSeconds.value
+          : this.durationSeconds,
+      sessionMinutesTarget: data.sessionMinutesTarget.present
+          ? data.sessionMinutesTarget.value
+          : this.sessionMinutesTarget,
+      cachedValidationStatus: data.cachedValidationStatus.present
+          ? data.cachedValidationStatus.value
+          : this.cachedValidationStatus,
+      synced: data.synced.present ? data.synced.value : this.synced,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Session(')
+          ..write('id: $id, ')
+          ..write('kind: $kind, ')
+          ..write('startedAt: $startedAt, ')
+          ..write('endedAt: $endedAt, ')
+          ..write('durationSeconds: $durationSeconds, ')
+          ..write('sessionMinutesTarget: $sessionMinutesTarget, ')
+          ..write('cachedValidationStatus: $cachedValidationStatus, ')
+          ..write('synced: $synced')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, kind, startedAt, endedAt, durationSeconds,
+      sessionMinutesTarget, cachedValidationStatus, synced);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Session &&
+          other.id == this.id &&
+          other.kind == this.kind &&
+          other.startedAt == this.startedAt &&
+          other.endedAt == this.endedAt &&
+          other.durationSeconds == this.durationSeconds &&
+          other.sessionMinutesTarget == this.sessionMinutesTarget &&
+          other.cachedValidationStatus == this.cachedValidationStatus &&
+          other.synced == this.synced);
+}
+
+class SessionsCompanion extends UpdateCompanion<Session> {
+  final Value<String> id;
+  final Value<String> kind;
+  final Value<String> startedAt;
+  final Value<String?> endedAt;
+  final Value<int?> durationSeconds;
+  final Value<int> sessionMinutesTarget;
+  final Value<String?> cachedValidationStatus;
+  final Value<int> synced;
+  final Value<int> rowid;
+  const SessionsCompanion({
+    this.id = const Value.absent(),
+    this.kind = const Value.absent(),
+    this.startedAt = const Value.absent(),
+    this.endedAt = const Value.absent(),
+    this.durationSeconds = const Value.absent(),
+    this.sessionMinutesTarget = const Value.absent(),
+    this.cachedValidationStatus = const Value.absent(),
+    this.synced = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SessionsCompanion.insert({
+    required String id,
+    required String kind,
+    required String startedAt,
+    this.endedAt = const Value.absent(),
+    this.durationSeconds = const Value.absent(),
+    this.sessionMinutesTarget = const Value.absent(),
+    this.cachedValidationStatus = const Value.absent(),
+    this.synced = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : id = Value(id),
+        kind = Value(kind),
+        startedAt = Value(startedAt);
+  static Insertable<Session> custom({
+    Expression<String>? id,
+    Expression<String>? kind,
+    Expression<String>? startedAt,
+    Expression<String>? endedAt,
+    Expression<int>? durationSeconds,
+    Expression<int>? sessionMinutesTarget,
+    Expression<String>? cachedValidationStatus,
+    Expression<int>? synced,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (kind != null) 'kind': kind,
+      if (startedAt != null) 'started_at': startedAt,
+      if (endedAt != null) 'ended_at': endedAt,
+      if (durationSeconds != null) 'duration_seconds': durationSeconds,
+      if (sessionMinutesTarget != null)
+        'session_minutes_target': sessionMinutesTarget,
+      if (cachedValidationStatus != null)
+        'cached_validation_status': cachedValidationStatus,
+      if (synced != null) 'synced': synced,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SessionsCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? kind,
+      Value<String>? startedAt,
+      Value<String?>? endedAt,
+      Value<int?>? durationSeconds,
+      Value<int>? sessionMinutesTarget,
+      Value<String?>? cachedValidationStatus,
+      Value<int>? synced,
+      Value<int>? rowid}) {
+    return SessionsCompanion(
+      id: id ?? this.id,
+      kind: kind ?? this.kind,
+      startedAt: startedAt ?? this.startedAt,
+      endedAt: endedAt ?? this.endedAt,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      sessionMinutesTarget: sessionMinutesTarget ?? this.sessionMinutesTarget,
+      cachedValidationStatus:
+          cachedValidationStatus ?? this.cachedValidationStatus,
+      synced: synced ?? this.synced,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (kind.present) {
+      map['kind'] = Variable<String>(kind.value);
+    }
+    if (startedAt.present) {
+      map['started_at'] = Variable<String>(startedAt.value);
+    }
+    if (endedAt.present) {
+      map['ended_at'] = Variable<String>(endedAt.value);
+    }
+    if (durationSeconds.present) {
+      map['duration_seconds'] = Variable<int>(durationSeconds.value);
+    }
+    if (sessionMinutesTarget.present) {
+      map['session_minutes_target'] = Variable<int>(sessionMinutesTarget.value);
+    }
+    if (cachedValidationStatus.present) {
+      map['cached_validation_status'] =
+          Variable<String>(cachedValidationStatus.value);
+    }
+    if (synced.present) {
+      map['synced'] = Variable<int>(synced.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SessionsCompanion(')
+          ..write('id: $id, ')
+          ..write('kind: $kind, ')
+          ..write('startedAt: $startedAt, ')
+          ..write('endedAt: $endedAt, ')
+          ..write('durationSeconds: $durationSeconds, ')
+          ..write('sessionMinutesTarget: $sessionMinutesTarget, ')
+          ..write('cachedValidationStatus: $cachedValidationStatus, ')
+          ..write('synced: $synced, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $ReviewRecordsTable extends ReviewRecords
+    with TableInfo<$ReviewRecordsTable, ReviewRecord> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ReviewRecordsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _reviewGroupIdMeta =
+      const VerificationMeta('reviewGroupId');
+  @override
+  late final GeneratedColumn<String> reviewGroupId = GeneratedColumn<String>(
+      'review_group_id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _wordIdMeta = const VerificationMeta('wordId');
+  @override
+  late final GeneratedColumn<String> wordId = GeneratedColumn<String>(
+      'word_id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _actionResultMeta =
+      const VerificationMeta('actionResult');
+  @override
+  late final GeneratedColumn<String> actionResult = GeneratedColumn<String>(
+      'action_result', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _sessionIdMeta =
+      const VerificationMeta('sessionId');
+  @override
+  late final GeneratedColumn<String> sessionId = GeneratedColumn<String>(
+      'session_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<String> createdAt = GeneratedColumn<String>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _syncedMeta = const VerificationMeta('synced');
+  @override
+  late final GeneratedColumn<int> synced = GeneratedColumn<int>(
+      'synced', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _ratingMeta = const VerificationMeta('rating');
+  @override
+  late final GeneratedColumn<int> rating = GeneratedColumn<int>(
+      'rating', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        reviewGroupId,
+        wordId,
+        actionResult,
+        sessionId,
+        createdAt,
+        synced,
+        rating
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'review_records';
+  @override
+  VerificationContext validateIntegrity(Insertable<ReviewRecord> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('review_group_id')) {
+      context.handle(
+          _reviewGroupIdMeta,
+          reviewGroupId.isAcceptableOrUnknown(
+              data['review_group_id']!, _reviewGroupIdMeta));
+    } else if (isInserting) {
+      context.missing(_reviewGroupIdMeta);
+    }
+    if (data.containsKey('word_id')) {
+      context.handle(_wordIdMeta,
+          wordId.isAcceptableOrUnknown(data['word_id']!, _wordIdMeta));
+    } else if (isInserting) {
+      context.missing(_wordIdMeta);
+    }
+    if (data.containsKey('action_result')) {
+      context.handle(
+          _actionResultMeta,
+          actionResult.isAcceptableOrUnknown(
+              data['action_result']!, _actionResultMeta));
+    } else if (isInserting) {
+      context.missing(_actionResultMeta);
+    }
+    if (data.containsKey('session_id')) {
+      context.handle(_sessionIdMeta,
+          sessionId.isAcceptableOrUnknown(data['session_id']!, _sessionIdMeta));
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('synced')) {
+      context.handle(_syncedMeta,
+          synced.isAcceptableOrUnknown(data['synced']!, _syncedMeta));
+    }
+    if (data.containsKey('rating')) {
+      context.handle(_ratingMeta,
+          rating.isAcceptableOrUnknown(data['rating']!, _ratingMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  ReviewRecord map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ReviewRecord(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      reviewGroupId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}review_group_id'])!,
+      wordId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}word_id'])!,
+      actionResult: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}action_result'])!,
+      sessionId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}session_id']),
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}created_at'])!,
+      synced: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}synced'])!,
+      rating: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}rating']),
+    );
+  }
+
+  @override
+  $ReviewRecordsTable createAlias(String alias) {
+    return $ReviewRecordsTable(attachedDatabase, alias);
+  }
+}
+
+class ReviewRecord extends DataClass implements Insertable<ReviewRecord> {
+  final int id;
+  final String reviewGroupId;
+  final String wordId;
+  final String actionResult;
+  final String? sessionId;
+  final String createdAt;
+  final int synced;
+  final int? rating;
+  const ReviewRecord(
+      {required this.id,
+      required this.reviewGroupId,
+      required this.wordId,
+      required this.actionResult,
+      this.sessionId,
+      required this.createdAt,
+      required this.synced,
+      this.rating});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['review_group_id'] = Variable<String>(reviewGroupId);
+    map['word_id'] = Variable<String>(wordId);
+    map['action_result'] = Variable<String>(actionResult);
+    if (!nullToAbsent || sessionId != null) {
+      map['session_id'] = Variable<String>(sessionId);
+    }
+    map['created_at'] = Variable<String>(createdAt);
+    map['synced'] = Variable<int>(synced);
+    if (!nullToAbsent || rating != null) {
+      map['rating'] = Variable<int>(rating);
+    }
+    return map;
+  }
+
+  ReviewRecordsCompanion toCompanion(bool nullToAbsent) {
+    return ReviewRecordsCompanion(
+      id: Value(id),
+      reviewGroupId: Value(reviewGroupId),
+      wordId: Value(wordId),
+      actionResult: Value(actionResult),
+      sessionId: sessionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sessionId),
+      createdAt: Value(createdAt),
+      synced: Value(synced),
+      rating:
+          rating == null && nullToAbsent ? const Value.absent() : Value(rating),
+    );
+  }
+
+  factory ReviewRecord.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ReviewRecord(
+      id: serializer.fromJson<int>(json['id']),
+      reviewGroupId: serializer.fromJson<String>(json['reviewGroupId']),
+      wordId: serializer.fromJson<String>(json['wordId']),
+      actionResult: serializer.fromJson<String>(json['actionResult']),
+      sessionId: serializer.fromJson<String?>(json['sessionId']),
+      createdAt: serializer.fromJson<String>(json['createdAt']),
+      synced: serializer.fromJson<int>(json['synced']),
+      rating: serializer.fromJson<int?>(json['rating']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'reviewGroupId': serializer.toJson<String>(reviewGroupId),
+      'wordId': serializer.toJson<String>(wordId),
+      'actionResult': serializer.toJson<String>(actionResult),
+      'sessionId': serializer.toJson<String?>(sessionId),
+      'createdAt': serializer.toJson<String>(createdAt),
+      'synced': serializer.toJson<int>(synced),
+      'rating': serializer.toJson<int?>(rating),
+    };
+  }
+
+  ReviewRecord copyWith(
+          {int? id,
+          String? reviewGroupId,
+          String? wordId,
+          String? actionResult,
+          Value<String?> sessionId = const Value.absent(),
+          String? createdAt,
+          int? synced,
+          Value<int?> rating = const Value.absent()}) =>
+      ReviewRecord(
+        id: id ?? this.id,
+        reviewGroupId: reviewGroupId ?? this.reviewGroupId,
+        wordId: wordId ?? this.wordId,
+        actionResult: actionResult ?? this.actionResult,
+        sessionId: sessionId.present ? sessionId.value : this.sessionId,
+        createdAt: createdAt ?? this.createdAt,
+        synced: synced ?? this.synced,
+        rating: rating.present ? rating.value : this.rating,
+      );
+  ReviewRecord copyWithCompanion(ReviewRecordsCompanion data) {
+    return ReviewRecord(
+      id: data.id.present ? data.id.value : this.id,
+      reviewGroupId: data.reviewGroupId.present
+          ? data.reviewGroupId.value
+          : this.reviewGroupId,
+      wordId: data.wordId.present ? data.wordId.value : this.wordId,
+      actionResult: data.actionResult.present
+          ? data.actionResult.value
+          : this.actionResult,
+      sessionId: data.sessionId.present ? data.sessionId.value : this.sessionId,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      synced: data.synced.present ? data.synced.value : this.synced,
+      rating: data.rating.present ? data.rating.value : this.rating,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ReviewRecord(')
+          ..write('id: $id, ')
+          ..write('reviewGroupId: $reviewGroupId, ')
+          ..write('wordId: $wordId, ')
+          ..write('actionResult: $actionResult, ')
+          ..write('sessionId: $sessionId, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('synced: $synced, ')
+          ..write('rating: $rating')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, reviewGroupId, wordId, actionResult,
+      sessionId, createdAt, synced, rating);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ReviewRecord &&
+          other.id == this.id &&
+          other.reviewGroupId == this.reviewGroupId &&
+          other.wordId == this.wordId &&
+          other.actionResult == this.actionResult &&
+          other.sessionId == this.sessionId &&
+          other.createdAt == this.createdAt &&
+          other.synced == this.synced &&
+          other.rating == this.rating);
+}
+
+class ReviewRecordsCompanion extends UpdateCompanion<ReviewRecord> {
+  final Value<int> id;
+  final Value<String> reviewGroupId;
+  final Value<String> wordId;
+  final Value<String> actionResult;
+  final Value<String?> sessionId;
+  final Value<String> createdAt;
+  final Value<int> synced;
+  final Value<int?> rating;
+  const ReviewRecordsCompanion({
+    this.id = const Value.absent(),
+    this.reviewGroupId = const Value.absent(),
+    this.wordId = const Value.absent(),
+    this.actionResult = const Value.absent(),
+    this.sessionId = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.synced = const Value.absent(),
+    this.rating = const Value.absent(),
+  });
+  ReviewRecordsCompanion.insert({
+    this.id = const Value.absent(),
+    required String reviewGroupId,
+    required String wordId,
+    required String actionResult,
+    this.sessionId = const Value.absent(),
+    required String createdAt,
+    this.synced = const Value.absent(),
+    this.rating = const Value.absent(),
+  })  : reviewGroupId = Value(reviewGroupId),
+        wordId = Value(wordId),
+        actionResult = Value(actionResult),
+        createdAt = Value(createdAt);
+  static Insertable<ReviewRecord> custom({
+    Expression<int>? id,
+    Expression<String>? reviewGroupId,
+    Expression<String>? wordId,
+    Expression<String>? actionResult,
+    Expression<String>? sessionId,
+    Expression<String>? createdAt,
+    Expression<int>? synced,
+    Expression<int>? rating,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (reviewGroupId != null) 'review_group_id': reviewGroupId,
+      if (wordId != null) 'word_id': wordId,
+      if (actionResult != null) 'action_result': actionResult,
+      if (sessionId != null) 'session_id': sessionId,
+      if (createdAt != null) 'created_at': createdAt,
+      if (synced != null) 'synced': synced,
+      if (rating != null) 'rating': rating,
+    });
+  }
+
+  ReviewRecordsCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? reviewGroupId,
+      Value<String>? wordId,
+      Value<String>? actionResult,
+      Value<String?>? sessionId,
+      Value<String>? createdAt,
+      Value<int>? synced,
+      Value<int?>? rating}) {
+    return ReviewRecordsCompanion(
+      id: id ?? this.id,
+      reviewGroupId: reviewGroupId ?? this.reviewGroupId,
+      wordId: wordId ?? this.wordId,
+      actionResult: actionResult ?? this.actionResult,
+      sessionId: sessionId ?? this.sessionId,
+      createdAt: createdAt ?? this.createdAt,
+      synced: synced ?? this.synced,
+      rating: rating ?? this.rating,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (reviewGroupId.present) {
+      map['review_group_id'] = Variable<String>(reviewGroupId.value);
+    }
+    if (wordId.present) {
+      map['word_id'] = Variable<String>(wordId.value);
+    }
+    if (actionResult.present) {
+      map['action_result'] = Variable<String>(actionResult.value);
+    }
+    if (sessionId.present) {
+      map['session_id'] = Variable<String>(sessionId.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<String>(createdAt.value);
+    }
+    if (synced.present) {
+      map['synced'] = Variable<int>(synced.value);
+    }
+    if (rating.present) {
+      map['rating'] = Variable<int>(rating.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ReviewRecordsCompanion(')
+          ..write('id: $id, ')
+          ..write('reviewGroupId: $reviewGroupId, ')
+          ..write('wordId: $wordId, ')
+          ..write('actionResult: $actionResult, ')
+          ..write('sessionId: $sessionId, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('synced: $synced, ')
+          ..write('rating: $rating')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $WordFormsTable extends WordForms
+    with TableInfo<$WordFormsTable, WordForm> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WordFormsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _wordMeta = const VerificationMeta('word');
+  @override
+  late final GeneratedColumn<String> word = GeneratedColumn<String>(
+      'word', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _formTextMeta =
+      const VerificationMeta('formText');
+  @override
+  late final GeneratedColumn<String> formText = GeneratedColumn<String>(
+      'form_text', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _formTypeMeta =
+      const VerificationMeta('formType');
+  @override
+  late final GeneratedColumn<String> formType = GeneratedColumn<String>(
+      'form_type', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _posMeta = const VerificationMeta('pos');
+  @override
+  late final GeneratedColumn<String> pos = GeneratedColumn<String>(
+      'pos', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+      'source', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, word, formText, formType, pos, source];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'word_forms';
+  @override
+  VerificationContext validateIntegrity(Insertable<WordForm> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('word')) {
+      context.handle(
+          _wordMeta, word.isAcceptableOrUnknown(data['word']!, _wordMeta));
+    } else if (isInserting) {
+      context.missing(_wordMeta);
+    }
+    if (data.containsKey('form_text')) {
+      context.handle(_formTextMeta,
+          formText.isAcceptableOrUnknown(data['form_text']!, _formTextMeta));
+    } else if (isInserting) {
+      context.missing(_formTextMeta);
+    }
+    if (data.containsKey('form_type')) {
+      context.handle(_formTypeMeta,
+          formType.isAcceptableOrUnknown(data['form_type']!, _formTypeMeta));
+    } else if (isInserting) {
+      context.missing(_formTypeMeta);
+    }
+    if (data.containsKey('pos')) {
+      context.handle(
+          _posMeta, pos.isAcceptableOrUnknown(data['pos']!, _posMeta));
+    }
+    if (data.containsKey('source')) {
+      context.handle(_sourceMeta,
+          source.isAcceptableOrUnknown(data['source']!, _sourceMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  WordForm map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WordForm(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      word: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}word'])!,
+      formText: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}form_text'])!,
+      formType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}form_type'])!,
+      pos: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}pos']),
+      source: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}source']),
+    );
+  }
+
+  @override
+  $WordFormsTable createAlias(String alias) {
+    return $WordFormsTable(attachedDatabase, alias);
+  }
+}
+
+class WordForm extends DataClass implements Insertable<WordForm> {
+  final int id;
+  final String word;
+  final String formText;
+  final String formType;
+  final String? pos;
+  final String? source;
+  const WordForm(
+      {required this.id,
+      required this.word,
+      required this.formText,
+      required this.formType,
+      this.pos,
+      this.source});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['word'] = Variable<String>(word);
+    map['form_text'] = Variable<String>(formText);
+    map['form_type'] = Variable<String>(formType);
+    if (!nullToAbsent || pos != null) {
+      map['pos'] = Variable<String>(pos);
+    }
+    if (!nullToAbsent || source != null) {
+      map['source'] = Variable<String>(source);
+    }
+    return map;
+  }
+
+  WordFormsCompanion toCompanion(bool nullToAbsent) {
+    return WordFormsCompanion(
+      id: Value(id),
+      word: Value(word),
+      formText: Value(formText),
+      formType: Value(formType),
+      pos: pos == null && nullToAbsent ? const Value.absent() : Value(pos),
+      source:
+          source == null && nullToAbsent ? const Value.absent() : Value(source),
+    );
+  }
+
+  factory WordForm.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WordForm(
+      id: serializer.fromJson<int>(json['id']),
+      word: serializer.fromJson<String>(json['word']),
+      formText: serializer.fromJson<String>(json['formText']),
+      formType: serializer.fromJson<String>(json['formType']),
+      pos: serializer.fromJson<String?>(json['pos']),
+      source: serializer.fromJson<String?>(json['source']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'word': serializer.toJson<String>(word),
+      'formText': serializer.toJson<String>(formText),
+      'formType': serializer.toJson<String>(formType),
+      'pos': serializer.toJson<String?>(pos),
+      'source': serializer.toJson<String?>(source),
+    };
+  }
+
+  WordForm copyWith(
+          {int? id,
+          String? word,
+          String? formText,
+          String? formType,
+          Value<String?> pos = const Value.absent(),
+          Value<String?> source = const Value.absent()}) =>
+      WordForm(
+        id: id ?? this.id,
+        word: word ?? this.word,
+        formText: formText ?? this.formText,
+        formType: formType ?? this.formType,
+        pos: pos.present ? pos.value : this.pos,
+        source: source.present ? source.value : this.source,
+      );
+  WordForm copyWithCompanion(WordFormsCompanion data) {
+    return WordForm(
+      id: data.id.present ? data.id.value : this.id,
+      word: data.word.present ? data.word.value : this.word,
+      formText: data.formText.present ? data.formText.value : this.formText,
+      formType: data.formType.present ? data.formType.value : this.formType,
+      pos: data.pos.present ? data.pos.value : this.pos,
+      source: data.source.present ? data.source.value : this.source,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WordForm(')
+          ..write('id: $id, ')
+          ..write('word: $word, ')
+          ..write('formText: $formText, ')
+          ..write('formType: $formType, ')
+          ..write('pos: $pos, ')
+          ..write('source: $source')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, word, formText, formType, pos, source);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WordForm &&
+          other.id == this.id &&
+          other.word == this.word &&
+          other.formText == this.formText &&
+          other.formType == this.formType &&
+          other.pos == this.pos &&
+          other.source == this.source);
+}
+
+class WordFormsCompanion extends UpdateCompanion<WordForm> {
+  final Value<int> id;
+  final Value<String> word;
+  final Value<String> formText;
+  final Value<String> formType;
+  final Value<String?> pos;
+  final Value<String?> source;
+  const WordFormsCompanion({
+    this.id = const Value.absent(),
+    this.word = const Value.absent(),
+    this.formText = const Value.absent(),
+    this.formType = const Value.absent(),
+    this.pos = const Value.absent(),
+    this.source = const Value.absent(),
+  });
+  WordFormsCompanion.insert({
+    this.id = const Value.absent(),
+    required String word,
+    required String formText,
+    required String formType,
+    this.pos = const Value.absent(),
+    this.source = const Value.absent(),
+  })  : word = Value(word),
+        formText = Value(formText),
+        formType = Value(formType);
+  static Insertable<WordForm> custom({
+    Expression<int>? id,
+    Expression<String>? word,
+    Expression<String>? formText,
+    Expression<String>? formType,
+    Expression<String>? pos,
+    Expression<String>? source,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (word != null) 'word': word,
+      if (formText != null) 'form_text': formText,
+      if (formType != null) 'form_type': formType,
+      if (pos != null) 'pos': pos,
+      if (source != null) 'source': source,
+    });
+  }
+
+  WordFormsCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? word,
+      Value<String>? formText,
+      Value<String>? formType,
+      Value<String?>? pos,
+      Value<String?>? source}) {
+    return WordFormsCompanion(
+      id: id ?? this.id,
+      word: word ?? this.word,
+      formText: formText ?? this.formText,
+      formType: formType ?? this.formType,
+      pos: pos ?? this.pos,
+      source: source ?? this.source,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (word.present) {
+      map['word'] = Variable<String>(word.value);
+    }
+    if (formText.present) {
+      map['form_text'] = Variable<String>(formText.value);
+    }
+    if (formType.present) {
+      map['form_type'] = Variable<String>(formType.value);
+    }
+    if (pos.present) {
+      map['pos'] = Variable<String>(pos.value);
+    }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WordFormsCompanion(')
+          ..write('id: $id, ')
+          ..write('word: $word, ')
+          ..write('formText: $formText, ')
+          ..write('formType: $formType, ')
+          ..write('pos: $pos, ')
+          ..write('source: $source')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $WordRelationsTable extends WordRelations
+    with TableInfo<$WordRelationsTable, WordRelation> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WordRelationsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _wordMeta = const VerificationMeta('word');
+  @override
+  late final GeneratedColumn<String> word = GeneratedColumn<String>(
+      'word', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _targetWordMeta =
+      const VerificationMeta('targetWord');
+  @override
+  late final GeneratedColumn<String> targetWord = GeneratedColumn<String>(
+      'target_word', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _relationTypeMeta =
+      const VerificationMeta('relationType');
+  @override
+  late final GeneratedColumn<String> relationType = GeneratedColumn<String>(
+      'relation_type', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _posMeta = const VerificationMeta('pos');
+  @override
+  late final GeneratedColumn<String> pos = GeneratedColumn<String>(
+      'pos', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _confidenceMeta =
+      const VerificationMeta('confidence');
+  @override
+  late final GeneratedColumn<double> confidence = GeneratedColumn<double>(
+      'confidence', aliasedName, true,
+      type: DriftSqlType.double, requiredDuringInsert: false);
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+      'source', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, word, targetWord, relationType, pos, confidence, source];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'word_relations';
+  @override
+  VerificationContext validateIntegrity(Insertable<WordRelation> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('word')) {
+      context.handle(
+          _wordMeta, word.isAcceptableOrUnknown(data['word']!, _wordMeta));
+    } else if (isInserting) {
+      context.missing(_wordMeta);
+    }
+    if (data.containsKey('target_word')) {
+      context.handle(
+          _targetWordMeta,
+          targetWord.isAcceptableOrUnknown(
+              data['target_word']!, _targetWordMeta));
+    } else if (isInserting) {
+      context.missing(_targetWordMeta);
+    }
+    if (data.containsKey('relation_type')) {
+      context.handle(
+          _relationTypeMeta,
+          relationType.isAcceptableOrUnknown(
+              data['relation_type']!, _relationTypeMeta));
+    } else if (isInserting) {
+      context.missing(_relationTypeMeta);
+    }
+    if (data.containsKey('pos')) {
+      context.handle(
+          _posMeta, pos.isAcceptableOrUnknown(data['pos']!, _posMeta));
+    }
+    if (data.containsKey('confidence')) {
+      context.handle(
+          _confidenceMeta,
+          confidence.isAcceptableOrUnknown(
+              data['confidence']!, _confidenceMeta));
+    }
+    if (data.containsKey('source')) {
+      context.handle(_sourceMeta,
+          source.isAcceptableOrUnknown(data['source']!, _sourceMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  WordRelation map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WordRelation(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      word: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}word'])!,
+      targetWord: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}target_word'])!,
+      relationType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}relation_type'])!,
+      pos: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}pos']),
+      confidence: attachedDatabase.typeMapping
+          .read(DriftSqlType.double, data['${effectivePrefix}confidence']),
+      source: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}source']),
+    );
+  }
+
+  @override
+  $WordRelationsTable createAlias(String alias) {
+    return $WordRelationsTable(attachedDatabase, alias);
+  }
+}
+
+class WordRelation extends DataClass implements Insertable<WordRelation> {
+  final int id;
+  final String word;
+  final String targetWord;
+  final String relationType;
+  final String? pos;
+  final double? confidence;
+  final String? source;
+  const WordRelation(
+      {required this.id,
+      required this.word,
+      required this.targetWord,
+      required this.relationType,
+      this.pos,
+      this.confidence,
+      this.source});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['word'] = Variable<String>(word);
+    map['target_word'] = Variable<String>(targetWord);
+    map['relation_type'] = Variable<String>(relationType);
+    if (!nullToAbsent || pos != null) {
+      map['pos'] = Variable<String>(pos);
+    }
+    if (!nullToAbsent || confidence != null) {
+      map['confidence'] = Variable<double>(confidence);
+    }
+    if (!nullToAbsent || source != null) {
+      map['source'] = Variable<String>(source);
+    }
+    return map;
+  }
+
+  WordRelationsCompanion toCompanion(bool nullToAbsent) {
+    return WordRelationsCompanion(
+      id: Value(id),
+      word: Value(word),
+      targetWord: Value(targetWord),
+      relationType: Value(relationType),
+      pos: pos == null && nullToAbsent ? const Value.absent() : Value(pos),
+      confidence: confidence == null && nullToAbsent
+          ? const Value.absent()
+          : Value(confidence),
+      source:
+          source == null && nullToAbsent ? const Value.absent() : Value(source),
+    );
+  }
+
+  factory WordRelation.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WordRelation(
+      id: serializer.fromJson<int>(json['id']),
+      word: serializer.fromJson<String>(json['word']),
+      targetWord: serializer.fromJson<String>(json['targetWord']),
+      relationType: serializer.fromJson<String>(json['relationType']),
+      pos: serializer.fromJson<String?>(json['pos']),
+      confidence: serializer.fromJson<double?>(json['confidence']),
+      source: serializer.fromJson<String?>(json['source']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'word': serializer.toJson<String>(word),
+      'targetWord': serializer.toJson<String>(targetWord),
+      'relationType': serializer.toJson<String>(relationType),
+      'pos': serializer.toJson<String?>(pos),
+      'confidence': serializer.toJson<double?>(confidence),
+      'source': serializer.toJson<String?>(source),
+    };
+  }
+
+  WordRelation copyWith(
+          {int? id,
+          String? word,
+          String? targetWord,
+          String? relationType,
+          Value<String?> pos = const Value.absent(),
+          Value<double?> confidence = const Value.absent(),
+          Value<String?> source = const Value.absent()}) =>
+      WordRelation(
+        id: id ?? this.id,
+        word: word ?? this.word,
+        targetWord: targetWord ?? this.targetWord,
+        relationType: relationType ?? this.relationType,
+        pos: pos.present ? pos.value : this.pos,
+        confidence: confidence.present ? confidence.value : this.confidence,
+        source: source.present ? source.value : this.source,
+      );
+  WordRelation copyWithCompanion(WordRelationsCompanion data) {
+    return WordRelation(
+      id: data.id.present ? data.id.value : this.id,
+      word: data.word.present ? data.word.value : this.word,
+      targetWord:
+          data.targetWord.present ? data.targetWord.value : this.targetWord,
+      relationType: data.relationType.present
+          ? data.relationType.value
+          : this.relationType,
+      pos: data.pos.present ? data.pos.value : this.pos,
+      confidence:
+          data.confidence.present ? data.confidence.value : this.confidence,
+      source: data.source.present ? data.source.value : this.source,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WordRelation(')
+          ..write('id: $id, ')
+          ..write('word: $word, ')
+          ..write('targetWord: $targetWord, ')
+          ..write('relationType: $relationType, ')
+          ..write('pos: $pos, ')
+          ..write('confidence: $confidence, ')
+          ..write('source: $source')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, word, targetWord, relationType, pos, confidence, source);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WordRelation &&
+          other.id == this.id &&
+          other.word == this.word &&
+          other.targetWord == this.targetWord &&
+          other.relationType == this.relationType &&
+          other.pos == this.pos &&
+          other.confidence == this.confidence &&
+          other.source == this.source);
+}
+
+class WordRelationsCompanion extends UpdateCompanion<WordRelation> {
+  final Value<int> id;
+  final Value<String> word;
+  final Value<String> targetWord;
+  final Value<String> relationType;
+  final Value<String?> pos;
+  final Value<double?> confidence;
+  final Value<String?> source;
+  const WordRelationsCompanion({
+    this.id = const Value.absent(),
+    this.word = const Value.absent(),
+    this.targetWord = const Value.absent(),
+    this.relationType = const Value.absent(),
+    this.pos = const Value.absent(),
+    this.confidence = const Value.absent(),
+    this.source = const Value.absent(),
+  });
+  WordRelationsCompanion.insert({
+    this.id = const Value.absent(),
+    required String word,
+    required String targetWord,
+    required String relationType,
+    this.pos = const Value.absent(),
+    this.confidence = const Value.absent(),
+    this.source = const Value.absent(),
+  })  : word = Value(word),
+        targetWord = Value(targetWord),
+        relationType = Value(relationType);
+  static Insertable<WordRelation> custom({
+    Expression<int>? id,
+    Expression<String>? word,
+    Expression<String>? targetWord,
+    Expression<String>? relationType,
+    Expression<String>? pos,
+    Expression<double>? confidence,
+    Expression<String>? source,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (word != null) 'word': word,
+      if (targetWord != null) 'target_word': targetWord,
+      if (relationType != null) 'relation_type': relationType,
+      if (pos != null) 'pos': pos,
+      if (confidence != null) 'confidence': confidence,
+      if (source != null) 'source': source,
+    });
+  }
+
+  WordRelationsCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? word,
+      Value<String>? targetWord,
+      Value<String>? relationType,
+      Value<String?>? pos,
+      Value<double?>? confidence,
+      Value<String?>? source}) {
+    return WordRelationsCompanion(
+      id: id ?? this.id,
+      word: word ?? this.word,
+      targetWord: targetWord ?? this.targetWord,
+      relationType: relationType ?? this.relationType,
+      pos: pos ?? this.pos,
+      confidence: confidence ?? this.confidence,
+      source: source ?? this.source,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (word.present) {
+      map['word'] = Variable<String>(word.value);
+    }
+    if (targetWord.present) {
+      map['target_word'] = Variable<String>(targetWord.value);
+    }
+    if (relationType.present) {
+      map['relation_type'] = Variable<String>(relationType.value);
+    }
+    if (pos.present) {
+      map['pos'] = Variable<String>(pos.value);
+    }
+    if (confidence.present) {
+      map['confidence'] = Variable<double>(confidence.value);
+    }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WordRelationsCompanion(')
+          ..write('id: $id, ')
+          ..write('word: $word, ')
+          ..write('targetWord: $targetWord, ')
+          ..write('relationType: $relationType, ')
+          ..write('pos: $pos, ')
+          ..write('confidence: $confidence, ')
+          ..write('source: $source')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $WordPhrasesTable extends WordPhrases
+    with TableInfo<$WordPhrasesTable, WordPhrase> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WordPhrasesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _wordMeta = const VerificationMeta('word');
+  @override
+  late final GeneratedColumn<String> word = GeneratedColumn<String>(
+      'word', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _phraseTextMeta =
+      const VerificationMeta('phraseText');
+  @override
+  late final GeneratedColumn<String> phraseText = GeneratedColumn<String>(
+      'phrase_text', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _phraseTypeMeta =
+      const VerificationMeta('phraseType');
+  @override
+  late final GeneratedColumn<String> phraseType = GeneratedColumn<String>(
+      'phrase_type', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('common_phrase'));
+  static const VerificationMeta _scoreMeta = const VerificationMeta('score');
+  @override
+  late final GeneratedColumn<int> score = GeneratedColumn<int>(
+      'score', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+      'source', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, word, phraseText, phraseType, score, source];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'word_phrases';
+  @override
+  VerificationContext validateIntegrity(Insertable<WordPhrase> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('word')) {
+      context.handle(
+          _wordMeta, word.isAcceptableOrUnknown(data['word']!, _wordMeta));
+    } else if (isInserting) {
+      context.missing(_wordMeta);
+    }
+    if (data.containsKey('phrase_text')) {
+      context.handle(
+          _phraseTextMeta,
+          phraseText.isAcceptableOrUnknown(
+              data['phrase_text']!, _phraseTextMeta));
+    } else if (isInserting) {
+      context.missing(_phraseTextMeta);
+    }
+    if (data.containsKey('phrase_type')) {
+      context.handle(
+          _phraseTypeMeta,
+          phraseType.isAcceptableOrUnknown(
+              data['phrase_type']!, _phraseTypeMeta));
+    }
+    if (data.containsKey('score')) {
+      context.handle(
+          _scoreMeta, score.isAcceptableOrUnknown(data['score']!, _scoreMeta));
+    }
+    if (data.containsKey('source')) {
+      context.handle(_sourceMeta,
+          source.isAcceptableOrUnknown(data['source']!, _sourceMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  WordPhrase map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WordPhrase(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      word: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}word'])!,
+      phraseText: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}phrase_text'])!,
+      phraseType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}phrase_type'])!,
+      score: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}score']),
+      source: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}source']),
+    );
+  }
+
+  @override
+  $WordPhrasesTable createAlias(String alias) {
+    return $WordPhrasesTable(attachedDatabase, alias);
+  }
+}
+
+class WordPhrase extends DataClass implements Insertable<WordPhrase> {
+  final int id;
+  final String word;
+  final String phraseText;
+  final String phraseType;
+  final int? score;
+  final String? source;
+  const WordPhrase(
+      {required this.id,
+      required this.word,
+      required this.phraseText,
+      required this.phraseType,
+      this.score,
+      this.source});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['word'] = Variable<String>(word);
+    map['phrase_text'] = Variable<String>(phraseText);
+    map['phrase_type'] = Variable<String>(phraseType);
+    if (!nullToAbsent || score != null) {
+      map['score'] = Variable<int>(score);
+    }
+    if (!nullToAbsent || source != null) {
+      map['source'] = Variable<String>(source);
+    }
+    return map;
+  }
+
+  WordPhrasesCompanion toCompanion(bool nullToAbsent) {
+    return WordPhrasesCompanion(
+      id: Value(id),
+      word: Value(word),
+      phraseText: Value(phraseText),
+      phraseType: Value(phraseType),
+      score:
+          score == null && nullToAbsent ? const Value.absent() : Value(score),
+      source:
+          source == null && nullToAbsent ? const Value.absent() : Value(source),
+    );
+  }
+
+  factory WordPhrase.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WordPhrase(
+      id: serializer.fromJson<int>(json['id']),
+      word: serializer.fromJson<String>(json['word']),
+      phraseText: serializer.fromJson<String>(json['phraseText']),
+      phraseType: serializer.fromJson<String>(json['phraseType']),
+      score: serializer.fromJson<int?>(json['score']),
+      source: serializer.fromJson<String?>(json['source']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'word': serializer.toJson<String>(word),
+      'phraseText': serializer.toJson<String>(phraseText),
+      'phraseType': serializer.toJson<String>(phraseType),
+      'score': serializer.toJson<int?>(score),
+      'source': serializer.toJson<String?>(source),
+    };
+  }
+
+  WordPhrase copyWith(
+          {int? id,
+          String? word,
+          String? phraseText,
+          String? phraseType,
+          Value<int?> score = const Value.absent(),
+          Value<String?> source = const Value.absent()}) =>
+      WordPhrase(
+        id: id ?? this.id,
+        word: word ?? this.word,
+        phraseText: phraseText ?? this.phraseText,
+        phraseType: phraseType ?? this.phraseType,
+        score: score.present ? score.value : this.score,
+        source: source.present ? source.value : this.source,
+      );
+  WordPhrase copyWithCompanion(WordPhrasesCompanion data) {
+    return WordPhrase(
+      id: data.id.present ? data.id.value : this.id,
+      word: data.word.present ? data.word.value : this.word,
+      phraseText:
+          data.phraseText.present ? data.phraseText.value : this.phraseText,
+      phraseType:
+          data.phraseType.present ? data.phraseType.value : this.phraseType,
+      score: data.score.present ? data.score.value : this.score,
+      source: data.source.present ? data.source.value : this.source,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WordPhrase(')
+          ..write('id: $id, ')
+          ..write('word: $word, ')
+          ..write('phraseText: $phraseText, ')
+          ..write('phraseType: $phraseType, ')
+          ..write('score: $score, ')
+          ..write('source: $source')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, word, phraseText, phraseType, score, source);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WordPhrase &&
+          other.id == this.id &&
+          other.word == this.word &&
+          other.phraseText == this.phraseText &&
+          other.phraseType == this.phraseType &&
+          other.score == this.score &&
+          other.source == this.source);
+}
+
+class WordPhrasesCompanion extends UpdateCompanion<WordPhrase> {
+  final Value<int> id;
+  final Value<String> word;
+  final Value<String> phraseText;
+  final Value<String> phraseType;
+  final Value<int?> score;
+  final Value<String?> source;
+  const WordPhrasesCompanion({
+    this.id = const Value.absent(),
+    this.word = const Value.absent(),
+    this.phraseText = const Value.absent(),
+    this.phraseType = const Value.absent(),
+    this.score = const Value.absent(),
+    this.source = const Value.absent(),
+  });
+  WordPhrasesCompanion.insert({
+    this.id = const Value.absent(),
+    required String word,
+    required String phraseText,
+    this.phraseType = const Value.absent(),
+    this.score = const Value.absent(),
+    this.source = const Value.absent(),
+  })  : word = Value(word),
+        phraseText = Value(phraseText);
+  static Insertable<WordPhrase> custom({
+    Expression<int>? id,
+    Expression<String>? word,
+    Expression<String>? phraseText,
+    Expression<String>? phraseType,
+    Expression<int>? score,
+    Expression<String>? source,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (word != null) 'word': word,
+      if (phraseText != null) 'phrase_text': phraseText,
+      if (phraseType != null) 'phrase_type': phraseType,
+      if (score != null) 'score': score,
+      if (source != null) 'source': source,
+    });
+  }
+
+  WordPhrasesCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? word,
+      Value<String>? phraseText,
+      Value<String>? phraseType,
+      Value<int?>? score,
+      Value<String?>? source}) {
+    return WordPhrasesCompanion(
+      id: id ?? this.id,
+      word: word ?? this.word,
+      phraseText: phraseText ?? this.phraseText,
+      phraseType: phraseType ?? this.phraseType,
+      score: score ?? this.score,
+      source: source ?? this.source,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (word.present) {
+      map['word'] = Variable<String>(word.value);
+    }
+    if (phraseText.present) {
+      map['phrase_text'] = Variable<String>(phraseText.value);
+    }
+    if (phraseType.present) {
+      map['phrase_type'] = Variable<String>(phraseType.value);
+    }
+    if (score.present) {
+      map['score'] = Variable<int>(score.value);
+    }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WordPhrasesCompanion(')
+          ..write('id: $id, ')
+          ..write('word: $word, ')
+          ..write('phraseText: $phraseText, ')
+          ..write('phraseType: $phraseType, ')
+          ..write('score: $score, ')
+          ..write('source: $source')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -4663,6 +6637,11 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       $WordBookAssignmentsTable(this);
   late final $ExampleSentencesTable exampleSentences =
       $ExampleSentencesTable(this);
+  late final $SessionsTable sessions = $SessionsTable(this);
+  late final $ReviewRecordsTable reviewRecords = $ReviewRecordsTable(this);
+  late final $WordFormsTable wordForms = $WordFormsTable(this);
+  late final $WordRelationsTable wordRelations = $WordRelationsTable(this);
+  late final $WordPhrasesTable wordPhrases = $WordPhrasesTable(this);
   late final Index idxCardStatesDue = Index('idx_card_states_due',
       'CREATE INDEX idx_card_states_due ON card_states (due)');
   late final Index idxCardStatesState = Index('idx_card_states_state',
@@ -4676,6 +6655,12 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       'CREATE INDEX idx_wba_book_order ON word_book_assignments (book_slug, sort_order)');
   late final Index idxEsWordOrder = Index('idx_es_word_order',
       'CREATE UNIQUE INDEX idx_es_word_order ON example_sentences (word_id, sort_order)');
+  late final Index idxWordFormsWord = Index('idx_word_forms_word',
+      'CREATE INDEX idx_word_forms_word ON word_forms (word)');
+  late final Index idxWordRelationsWord = Index('idx_word_relations_word',
+      'CREATE INDEX idx_word_relations_word ON word_relations (word)');
+  late final Index idxWordPhrasesWord = Index('idx_word_phrases_word',
+      'CREATE INDEX idx_word_phrases_word ON word_phrases (word)');
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -4693,12 +6678,20 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         wordEntries,
         wordBookAssignments,
         exampleSentences,
+        sessions,
+        reviewRecords,
+        wordForms,
+        wordRelations,
+        wordPhrases,
         idxCardStatesDue,
         idxCardStatesState,
         idxReviewLogsWordId,
         idxReviewLogsReviewTime,
         idxWbaBookOrder,
-        idxEsWordOrder
+        idxEsWordOrder,
+        idxWordFormsWord,
+        idxWordRelationsWord,
+        idxWordPhrasesWord
       ];
 }
 
@@ -4711,6 +6704,7 @@ typedef $$WordRecordsTableCreateCompanionBuilder = WordRecordsCompanion
   required String actionResult,
   required String createdAt,
   Value<int> synced,
+  Value<String?> sessionId,
 });
 typedef $$WordRecordsTableUpdateCompanionBuilder = WordRecordsCompanion
     Function({
@@ -4721,6 +6715,7 @@ typedef $$WordRecordsTableUpdateCompanionBuilder = WordRecordsCompanion
   Value<String> actionResult,
   Value<String> createdAt,
   Value<int> synced,
+  Value<String?> sessionId,
 });
 
 class $$WordRecordsTableFilterComposer
@@ -4752,6 +6747,9 @@ class $$WordRecordsTableFilterComposer
 
   ColumnFilters<int> get synced => $composableBuilder(
       column: $table.synced, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get sessionId => $composableBuilder(
+      column: $table.sessionId, builder: (column) => ColumnFilters(column));
 }
 
 class $$WordRecordsTableOrderingComposer
@@ -4784,6 +6782,9 @@ class $$WordRecordsTableOrderingComposer
 
   ColumnOrderings<int> get synced => $composableBuilder(
       column: $table.synced, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get sessionId => $composableBuilder(
+      column: $table.sessionId, builder: (column) => ColumnOrderings(column));
 }
 
 class $$WordRecordsTableAnnotationComposer
@@ -4815,6 +6816,9 @@ class $$WordRecordsTableAnnotationComposer
 
   GeneratedColumn<int> get synced =>
       $composableBuilder(column: $table.synced, builder: (column) => column);
+
+  GeneratedColumn<String> get sessionId =>
+      $composableBuilder(column: $table.sessionId, builder: (column) => column);
 }
 
 class $$WordRecordsTableTableManager extends RootTableManager<
@@ -4847,6 +6851,7 @@ class $$WordRecordsTableTableManager extends RootTableManager<
             Value<String> actionResult = const Value.absent(),
             Value<String> createdAt = const Value.absent(),
             Value<int> synced = const Value.absent(),
+            Value<String?> sessionId = const Value.absent(),
           }) =>
               WordRecordsCompanion(
             id: id,
@@ -4856,6 +6861,7 @@ class $$WordRecordsTableTableManager extends RootTableManager<
             actionResult: actionResult,
             createdAt: createdAt,
             synced: synced,
+            sessionId: sessionId,
           ),
           createCompanionCallback: ({
             Value<int> id = const Value.absent(),
@@ -4865,6 +6871,7 @@ class $$WordRecordsTableTableManager extends RootTableManager<
             required String actionResult,
             required String createdAt,
             Value<int> synced = const Value.absent(),
+            Value<String?> sessionId = const Value.absent(),
           }) =>
               WordRecordsCompanion.insert(
             id: id,
@@ -4874,6 +6881,7 @@ class $$WordRecordsTableTableManager extends RootTableManager<
             actionResult: actionResult,
             createdAt: createdAt,
             synced: synced,
+            sessionId: sessionId,
           ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
@@ -7236,6 +9244,984 @@ typedef $$ExampleSentencesTableProcessedTableManager = ProcessedTableManager<
     ),
     ExampleSentence,
     PrefetchHooks Function()>;
+typedef $$SessionsTableCreateCompanionBuilder = SessionsCompanion Function({
+  required String id,
+  required String kind,
+  required String startedAt,
+  Value<String?> endedAt,
+  Value<int?> durationSeconds,
+  Value<int> sessionMinutesTarget,
+  Value<String?> cachedValidationStatus,
+  Value<int> synced,
+  Value<int> rowid,
+});
+typedef $$SessionsTableUpdateCompanionBuilder = SessionsCompanion Function({
+  Value<String> id,
+  Value<String> kind,
+  Value<String> startedAt,
+  Value<String?> endedAt,
+  Value<int?> durationSeconds,
+  Value<int> sessionMinutesTarget,
+  Value<String?> cachedValidationStatus,
+  Value<int> synced,
+  Value<int> rowid,
+});
+
+class $$SessionsTableFilterComposer
+    extends Composer<_$AppDatabase, $SessionsTable> {
+  $$SessionsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get kind => $composableBuilder(
+      column: $table.kind, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get startedAt => $composableBuilder(
+      column: $table.startedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get endedAt => $composableBuilder(
+      column: $table.endedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get durationSeconds => $composableBuilder(
+      column: $table.durationSeconds,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get sessionMinutesTarget => $composableBuilder(
+      column: $table.sessionMinutesTarget,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get cachedValidationStatus => $composableBuilder(
+      column: $table.cachedValidationStatus,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get synced => $composableBuilder(
+      column: $table.synced, builder: (column) => ColumnFilters(column));
+}
+
+class $$SessionsTableOrderingComposer
+    extends Composer<_$AppDatabase, $SessionsTable> {
+  $$SessionsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get kind => $composableBuilder(
+      column: $table.kind, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get startedAt => $composableBuilder(
+      column: $table.startedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get endedAt => $composableBuilder(
+      column: $table.endedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get durationSeconds => $composableBuilder(
+      column: $table.durationSeconds,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get sessionMinutesTarget => $composableBuilder(
+      column: $table.sessionMinutesTarget,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get cachedValidationStatus => $composableBuilder(
+      column: $table.cachedValidationStatus,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get synced => $composableBuilder(
+      column: $table.synced, builder: (column) => ColumnOrderings(column));
+}
+
+class $$SessionsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SessionsTable> {
+  $$SessionsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get kind =>
+      $composableBuilder(column: $table.kind, builder: (column) => column);
+
+  GeneratedColumn<String> get startedAt =>
+      $composableBuilder(column: $table.startedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get endedAt =>
+      $composableBuilder(column: $table.endedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get durationSeconds => $composableBuilder(
+      column: $table.durationSeconds, builder: (column) => column);
+
+  GeneratedColumn<int> get sessionMinutesTarget => $composableBuilder(
+      column: $table.sessionMinutesTarget, builder: (column) => column);
+
+  GeneratedColumn<String> get cachedValidationStatus => $composableBuilder(
+      column: $table.cachedValidationStatus, builder: (column) => column);
+
+  GeneratedColumn<int> get synced =>
+      $composableBuilder(column: $table.synced, builder: (column) => column);
+}
+
+class $$SessionsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $SessionsTable,
+    Session,
+    $$SessionsTableFilterComposer,
+    $$SessionsTableOrderingComposer,
+    $$SessionsTableAnnotationComposer,
+    $$SessionsTableCreateCompanionBuilder,
+    $$SessionsTableUpdateCompanionBuilder,
+    (Session, BaseReferences<_$AppDatabase, $SessionsTable, Session>),
+    Session,
+    PrefetchHooks Function()> {
+  $$SessionsTableTableManager(_$AppDatabase db, $SessionsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SessionsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SessionsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SessionsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> kind = const Value.absent(),
+            Value<String> startedAt = const Value.absent(),
+            Value<String?> endedAt = const Value.absent(),
+            Value<int?> durationSeconds = const Value.absent(),
+            Value<int> sessionMinutesTarget = const Value.absent(),
+            Value<String?> cachedValidationStatus = const Value.absent(),
+            Value<int> synced = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              SessionsCompanion(
+            id: id,
+            kind: kind,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            durationSeconds: durationSeconds,
+            sessionMinutesTarget: sessionMinutesTarget,
+            cachedValidationStatus: cachedValidationStatus,
+            synced: synced,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            required String kind,
+            required String startedAt,
+            Value<String?> endedAt = const Value.absent(),
+            Value<int?> durationSeconds = const Value.absent(),
+            Value<int> sessionMinutesTarget = const Value.absent(),
+            Value<String?> cachedValidationStatus = const Value.absent(),
+            Value<int> synced = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              SessionsCompanion.insert(
+            id: id,
+            kind: kind,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            durationSeconds: durationSeconds,
+            sessionMinutesTarget: sessionMinutesTarget,
+            cachedValidationStatus: cachedValidationStatus,
+            synced: synced,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$SessionsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $SessionsTable,
+    Session,
+    $$SessionsTableFilterComposer,
+    $$SessionsTableOrderingComposer,
+    $$SessionsTableAnnotationComposer,
+    $$SessionsTableCreateCompanionBuilder,
+    $$SessionsTableUpdateCompanionBuilder,
+    (Session, BaseReferences<_$AppDatabase, $SessionsTable, Session>),
+    Session,
+    PrefetchHooks Function()>;
+typedef $$ReviewRecordsTableCreateCompanionBuilder = ReviewRecordsCompanion
+    Function({
+  Value<int> id,
+  required String reviewGroupId,
+  required String wordId,
+  required String actionResult,
+  Value<String?> sessionId,
+  required String createdAt,
+  Value<int> synced,
+  Value<int?> rating,
+});
+typedef $$ReviewRecordsTableUpdateCompanionBuilder = ReviewRecordsCompanion
+    Function({
+  Value<int> id,
+  Value<String> reviewGroupId,
+  Value<String> wordId,
+  Value<String> actionResult,
+  Value<String?> sessionId,
+  Value<String> createdAt,
+  Value<int> synced,
+  Value<int?> rating,
+});
+
+class $$ReviewRecordsTableFilterComposer
+    extends Composer<_$AppDatabase, $ReviewRecordsTable> {
+  $$ReviewRecordsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get reviewGroupId => $composableBuilder(
+      column: $table.reviewGroupId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get wordId => $composableBuilder(
+      column: $table.wordId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get actionResult => $composableBuilder(
+      column: $table.actionResult, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get sessionId => $composableBuilder(
+      column: $table.sessionId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get synced => $composableBuilder(
+      column: $table.synced, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get rating => $composableBuilder(
+      column: $table.rating, builder: (column) => ColumnFilters(column));
+}
+
+class $$ReviewRecordsTableOrderingComposer
+    extends Composer<_$AppDatabase, $ReviewRecordsTable> {
+  $$ReviewRecordsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get reviewGroupId => $composableBuilder(
+      column: $table.reviewGroupId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get wordId => $composableBuilder(
+      column: $table.wordId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get actionResult => $composableBuilder(
+      column: $table.actionResult,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get sessionId => $composableBuilder(
+      column: $table.sessionId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get synced => $composableBuilder(
+      column: $table.synced, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get rating => $composableBuilder(
+      column: $table.rating, builder: (column) => ColumnOrderings(column));
+}
+
+class $$ReviewRecordsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ReviewRecordsTable> {
+  $$ReviewRecordsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get reviewGroupId => $composableBuilder(
+      column: $table.reviewGroupId, builder: (column) => column);
+
+  GeneratedColumn<String> get wordId =>
+      $composableBuilder(column: $table.wordId, builder: (column) => column);
+
+  GeneratedColumn<String> get actionResult => $composableBuilder(
+      column: $table.actionResult, builder: (column) => column);
+
+  GeneratedColumn<String> get sessionId =>
+      $composableBuilder(column: $table.sessionId, builder: (column) => column);
+
+  GeneratedColumn<String> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get synced =>
+      $composableBuilder(column: $table.synced, builder: (column) => column);
+
+  GeneratedColumn<int> get rating =>
+      $composableBuilder(column: $table.rating, builder: (column) => column);
+}
+
+class $$ReviewRecordsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $ReviewRecordsTable,
+    ReviewRecord,
+    $$ReviewRecordsTableFilterComposer,
+    $$ReviewRecordsTableOrderingComposer,
+    $$ReviewRecordsTableAnnotationComposer,
+    $$ReviewRecordsTableCreateCompanionBuilder,
+    $$ReviewRecordsTableUpdateCompanionBuilder,
+    (
+      ReviewRecord,
+      BaseReferences<_$AppDatabase, $ReviewRecordsTable, ReviewRecord>
+    ),
+    ReviewRecord,
+    PrefetchHooks Function()> {
+  $$ReviewRecordsTableTableManager(_$AppDatabase db, $ReviewRecordsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ReviewRecordsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ReviewRecordsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ReviewRecordsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> reviewGroupId = const Value.absent(),
+            Value<String> wordId = const Value.absent(),
+            Value<String> actionResult = const Value.absent(),
+            Value<String?> sessionId = const Value.absent(),
+            Value<String> createdAt = const Value.absent(),
+            Value<int> synced = const Value.absent(),
+            Value<int?> rating = const Value.absent(),
+          }) =>
+              ReviewRecordsCompanion(
+            id: id,
+            reviewGroupId: reviewGroupId,
+            wordId: wordId,
+            actionResult: actionResult,
+            sessionId: sessionId,
+            createdAt: createdAt,
+            synced: synced,
+            rating: rating,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String reviewGroupId,
+            required String wordId,
+            required String actionResult,
+            Value<String?> sessionId = const Value.absent(),
+            required String createdAt,
+            Value<int> synced = const Value.absent(),
+            Value<int?> rating = const Value.absent(),
+          }) =>
+              ReviewRecordsCompanion.insert(
+            id: id,
+            reviewGroupId: reviewGroupId,
+            wordId: wordId,
+            actionResult: actionResult,
+            sessionId: sessionId,
+            createdAt: createdAt,
+            synced: synced,
+            rating: rating,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$ReviewRecordsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $ReviewRecordsTable,
+    ReviewRecord,
+    $$ReviewRecordsTableFilterComposer,
+    $$ReviewRecordsTableOrderingComposer,
+    $$ReviewRecordsTableAnnotationComposer,
+    $$ReviewRecordsTableCreateCompanionBuilder,
+    $$ReviewRecordsTableUpdateCompanionBuilder,
+    (
+      ReviewRecord,
+      BaseReferences<_$AppDatabase, $ReviewRecordsTable, ReviewRecord>
+    ),
+    ReviewRecord,
+    PrefetchHooks Function()>;
+typedef $$WordFormsTableCreateCompanionBuilder = WordFormsCompanion Function({
+  Value<int> id,
+  required String word,
+  required String formText,
+  required String formType,
+  Value<String?> pos,
+  Value<String?> source,
+});
+typedef $$WordFormsTableUpdateCompanionBuilder = WordFormsCompanion Function({
+  Value<int> id,
+  Value<String> word,
+  Value<String> formText,
+  Value<String> formType,
+  Value<String?> pos,
+  Value<String?> source,
+});
+
+class $$WordFormsTableFilterComposer
+    extends Composer<_$AppDatabase, $WordFormsTable> {
+  $$WordFormsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get word => $composableBuilder(
+      column: $table.word, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get formText => $composableBuilder(
+      column: $table.formText, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get formType => $composableBuilder(
+      column: $table.formType, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get pos => $composableBuilder(
+      column: $table.pos, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnFilters(column));
+}
+
+class $$WordFormsTableOrderingComposer
+    extends Composer<_$AppDatabase, $WordFormsTable> {
+  $$WordFormsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get word => $composableBuilder(
+      column: $table.word, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get formText => $composableBuilder(
+      column: $table.formText, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get formType => $composableBuilder(
+      column: $table.formType, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get pos => $composableBuilder(
+      column: $table.pos, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnOrderings(column));
+}
+
+class $$WordFormsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $WordFormsTable> {
+  $$WordFormsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get word =>
+      $composableBuilder(column: $table.word, builder: (column) => column);
+
+  GeneratedColumn<String> get formText =>
+      $composableBuilder(column: $table.formText, builder: (column) => column);
+
+  GeneratedColumn<String> get formType =>
+      $composableBuilder(column: $table.formType, builder: (column) => column);
+
+  GeneratedColumn<String> get pos =>
+      $composableBuilder(column: $table.pos, builder: (column) => column);
+
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+}
+
+class $$WordFormsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $WordFormsTable,
+    WordForm,
+    $$WordFormsTableFilterComposer,
+    $$WordFormsTableOrderingComposer,
+    $$WordFormsTableAnnotationComposer,
+    $$WordFormsTableCreateCompanionBuilder,
+    $$WordFormsTableUpdateCompanionBuilder,
+    (WordForm, BaseReferences<_$AppDatabase, $WordFormsTable, WordForm>),
+    WordForm,
+    PrefetchHooks Function()> {
+  $$WordFormsTableTableManager(_$AppDatabase db, $WordFormsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WordFormsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WordFormsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WordFormsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> word = const Value.absent(),
+            Value<String> formText = const Value.absent(),
+            Value<String> formType = const Value.absent(),
+            Value<String?> pos = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+          }) =>
+              WordFormsCompanion(
+            id: id,
+            word: word,
+            formText: formText,
+            formType: formType,
+            pos: pos,
+            source: source,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String word,
+            required String formText,
+            required String formType,
+            Value<String?> pos = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+          }) =>
+              WordFormsCompanion.insert(
+            id: id,
+            word: word,
+            formText: formText,
+            formType: formType,
+            pos: pos,
+            source: source,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$WordFormsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $WordFormsTable,
+    WordForm,
+    $$WordFormsTableFilterComposer,
+    $$WordFormsTableOrderingComposer,
+    $$WordFormsTableAnnotationComposer,
+    $$WordFormsTableCreateCompanionBuilder,
+    $$WordFormsTableUpdateCompanionBuilder,
+    (WordForm, BaseReferences<_$AppDatabase, $WordFormsTable, WordForm>),
+    WordForm,
+    PrefetchHooks Function()>;
+typedef $$WordRelationsTableCreateCompanionBuilder = WordRelationsCompanion
+    Function({
+  Value<int> id,
+  required String word,
+  required String targetWord,
+  required String relationType,
+  Value<String?> pos,
+  Value<double?> confidence,
+  Value<String?> source,
+});
+typedef $$WordRelationsTableUpdateCompanionBuilder = WordRelationsCompanion
+    Function({
+  Value<int> id,
+  Value<String> word,
+  Value<String> targetWord,
+  Value<String> relationType,
+  Value<String?> pos,
+  Value<double?> confidence,
+  Value<String?> source,
+});
+
+class $$WordRelationsTableFilterComposer
+    extends Composer<_$AppDatabase, $WordRelationsTable> {
+  $$WordRelationsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get word => $composableBuilder(
+      column: $table.word, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get targetWord => $composableBuilder(
+      column: $table.targetWord, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get relationType => $composableBuilder(
+      column: $table.relationType, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get pos => $composableBuilder(
+      column: $table.pos, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<double> get confidence => $composableBuilder(
+      column: $table.confidence, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnFilters(column));
+}
+
+class $$WordRelationsTableOrderingComposer
+    extends Composer<_$AppDatabase, $WordRelationsTable> {
+  $$WordRelationsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get word => $composableBuilder(
+      column: $table.word, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get targetWord => $composableBuilder(
+      column: $table.targetWord, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get relationType => $composableBuilder(
+      column: $table.relationType,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get pos => $composableBuilder(
+      column: $table.pos, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<double> get confidence => $composableBuilder(
+      column: $table.confidence, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnOrderings(column));
+}
+
+class $$WordRelationsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $WordRelationsTable> {
+  $$WordRelationsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get word =>
+      $composableBuilder(column: $table.word, builder: (column) => column);
+
+  GeneratedColumn<String> get targetWord => $composableBuilder(
+      column: $table.targetWord, builder: (column) => column);
+
+  GeneratedColumn<String> get relationType => $composableBuilder(
+      column: $table.relationType, builder: (column) => column);
+
+  GeneratedColumn<String> get pos =>
+      $composableBuilder(column: $table.pos, builder: (column) => column);
+
+  GeneratedColumn<double> get confidence => $composableBuilder(
+      column: $table.confidence, builder: (column) => column);
+
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+}
+
+class $$WordRelationsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $WordRelationsTable,
+    WordRelation,
+    $$WordRelationsTableFilterComposer,
+    $$WordRelationsTableOrderingComposer,
+    $$WordRelationsTableAnnotationComposer,
+    $$WordRelationsTableCreateCompanionBuilder,
+    $$WordRelationsTableUpdateCompanionBuilder,
+    (
+      WordRelation,
+      BaseReferences<_$AppDatabase, $WordRelationsTable, WordRelation>
+    ),
+    WordRelation,
+    PrefetchHooks Function()> {
+  $$WordRelationsTableTableManager(_$AppDatabase db, $WordRelationsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WordRelationsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WordRelationsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WordRelationsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> word = const Value.absent(),
+            Value<String> targetWord = const Value.absent(),
+            Value<String> relationType = const Value.absent(),
+            Value<String?> pos = const Value.absent(),
+            Value<double?> confidence = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+          }) =>
+              WordRelationsCompanion(
+            id: id,
+            word: word,
+            targetWord: targetWord,
+            relationType: relationType,
+            pos: pos,
+            confidence: confidence,
+            source: source,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String word,
+            required String targetWord,
+            required String relationType,
+            Value<String?> pos = const Value.absent(),
+            Value<double?> confidence = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+          }) =>
+              WordRelationsCompanion.insert(
+            id: id,
+            word: word,
+            targetWord: targetWord,
+            relationType: relationType,
+            pos: pos,
+            confidence: confidence,
+            source: source,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$WordRelationsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $WordRelationsTable,
+    WordRelation,
+    $$WordRelationsTableFilterComposer,
+    $$WordRelationsTableOrderingComposer,
+    $$WordRelationsTableAnnotationComposer,
+    $$WordRelationsTableCreateCompanionBuilder,
+    $$WordRelationsTableUpdateCompanionBuilder,
+    (
+      WordRelation,
+      BaseReferences<_$AppDatabase, $WordRelationsTable, WordRelation>
+    ),
+    WordRelation,
+    PrefetchHooks Function()>;
+typedef $$WordPhrasesTableCreateCompanionBuilder = WordPhrasesCompanion
+    Function({
+  Value<int> id,
+  required String word,
+  required String phraseText,
+  Value<String> phraseType,
+  Value<int?> score,
+  Value<String?> source,
+});
+typedef $$WordPhrasesTableUpdateCompanionBuilder = WordPhrasesCompanion
+    Function({
+  Value<int> id,
+  Value<String> word,
+  Value<String> phraseText,
+  Value<String> phraseType,
+  Value<int?> score,
+  Value<String?> source,
+});
+
+class $$WordPhrasesTableFilterComposer
+    extends Composer<_$AppDatabase, $WordPhrasesTable> {
+  $$WordPhrasesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get word => $composableBuilder(
+      column: $table.word, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get phraseText => $composableBuilder(
+      column: $table.phraseText, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get phraseType => $composableBuilder(
+      column: $table.phraseType, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get score => $composableBuilder(
+      column: $table.score, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnFilters(column));
+}
+
+class $$WordPhrasesTableOrderingComposer
+    extends Composer<_$AppDatabase, $WordPhrasesTable> {
+  $$WordPhrasesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get word => $composableBuilder(
+      column: $table.word, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get phraseText => $composableBuilder(
+      column: $table.phraseText, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get phraseType => $composableBuilder(
+      column: $table.phraseType, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get score => $composableBuilder(
+      column: $table.score, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnOrderings(column));
+}
+
+class $$WordPhrasesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $WordPhrasesTable> {
+  $$WordPhrasesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get word =>
+      $composableBuilder(column: $table.word, builder: (column) => column);
+
+  GeneratedColumn<String> get phraseText => $composableBuilder(
+      column: $table.phraseText, builder: (column) => column);
+
+  GeneratedColumn<String> get phraseType => $composableBuilder(
+      column: $table.phraseType, builder: (column) => column);
+
+  GeneratedColumn<int> get score =>
+      $composableBuilder(column: $table.score, builder: (column) => column);
+
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+}
+
+class $$WordPhrasesTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $WordPhrasesTable,
+    WordPhrase,
+    $$WordPhrasesTableFilterComposer,
+    $$WordPhrasesTableOrderingComposer,
+    $$WordPhrasesTableAnnotationComposer,
+    $$WordPhrasesTableCreateCompanionBuilder,
+    $$WordPhrasesTableUpdateCompanionBuilder,
+    (WordPhrase, BaseReferences<_$AppDatabase, $WordPhrasesTable, WordPhrase>),
+    WordPhrase,
+    PrefetchHooks Function()> {
+  $$WordPhrasesTableTableManager(_$AppDatabase db, $WordPhrasesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WordPhrasesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WordPhrasesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WordPhrasesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> word = const Value.absent(),
+            Value<String> phraseText = const Value.absent(),
+            Value<String> phraseType = const Value.absent(),
+            Value<int?> score = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+          }) =>
+              WordPhrasesCompanion(
+            id: id,
+            word: word,
+            phraseText: phraseText,
+            phraseType: phraseType,
+            score: score,
+            source: source,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String word,
+            required String phraseText,
+            Value<String> phraseType = const Value.absent(),
+            Value<int?> score = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+          }) =>
+              WordPhrasesCompanion.insert(
+            id: id,
+            word: word,
+            phraseText: phraseText,
+            phraseType: phraseType,
+            score: score,
+            source: source,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$WordPhrasesTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $WordPhrasesTable,
+    WordPhrase,
+    $$WordPhrasesTableFilterComposer,
+    $$WordPhrasesTableOrderingComposer,
+    $$WordPhrasesTableAnnotationComposer,
+    $$WordPhrasesTableCreateCompanionBuilder,
+    $$WordPhrasesTableUpdateCompanionBuilder,
+    (WordPhrase, BaseReferences<_$AppDatabase, $WordPhrasesTable, WordPhrase>),
+    WordPhrase,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -7264,4 +10250,14 @@ class $AppDatabaseManager {
       $$WordBookAssignmentsTableTableManager(_db, _db.wordBookAssignments);
   $$ExampleSentencesTableTableManager get exampleSentences =>
       $$ExampleSentencesTableTableManager(_db, _db.exampleSentences);
+  $$SessionsTableTableManager get sessions =>
+      $$SessionsTableTableManager(_db, _db.sessions);
+  $$ReviewRecordsTableTableManager get reviewRecords =>
+      $$ReviewRecordsTableTableManager(_db, _db.reviewRecords);
+  $$WordFormsTableTableManager get wordForms =>
+      $$WordFormsTableTableManager(_db, _db.wordForms);
+  $$WordRelationsTableTableManager get wordRelations =>
+      $$WordRelationsTableTableManager(_db, _db.wordRelations);
+  $$WordPhrasesTableTableManager get wordPhrases =>
+      $$WordPhrasesTableTableManager(_db, _db.wordPhrases);
 }

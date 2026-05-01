@@ -10,7 +10,10 @@ import '../../core/util/pos_label.dart';
 import '../../core/memory/fsrs_service.dart';
 import '../../core/memory/review_rating.dart';
 import '../../core/memory/word_cache_service.dart';
+import '../../core/services/session_store.dart';
+import '../../core/services/session_sync_service.dart';
 import '../../core/services/study_service.dart';
+import '../../core/services/word_enrichment_service.dart';
 import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_database.dart';
 import '../../core/storage/local_settings_service.dart';
@@ -58,7 +61,21 @@ class _StudyPageState extends State<StudyPage> {
   late final FsrsService _fsrsService;
   late final WordCacheService _wordCacheService;
   late final PronunciationService _pronunciationService;
+  late final SessionStore _sessionStore;
+  late final SessionSyncService _sessionSyncService;
+  late final WordEnrichmentService _enrichmentService;
   StreamSubscription<PlayerState>? _audioSub;
+
+  // Need #8 — Local id for the current study session, threaded into every
+  // submitStudyAttempt this page makes. Null until session starts (rare race).
+  String? _sessionId;
+
+  // Need #11 — Optional enrichment payload for the current word.
+  // Empty payload (or null while loading) renders nothing. Always
+  // matches the in-flight word_id below to avoid race-induced
+  // mismatches when the user rates rapidly.
+  WordEnrichment? _enrichment;
+  String? _enrichmentLoadingForWordId;
 
   // ── Word state ────────────────────────────────────────────────────────────
   bool _isPlayingAudio = false;
@@ -101,25 +118,49 @@ class _StudyPageState extends State<StudyPage> {
   void initState() {
     super.initState();
     final appDb = AppDatabase();
+    final apiClient = ApiClient();
     _studyService = StudyService(
-      apiClient: ApiClient(),
+      apiClient: apiClient,
       db: LocalDatabase.instance,
       driftDb: appDb,
     );
     _fsrsService = FsrsService(db: appDb);
     _wordCacheService = WordCacheService(db: appDb);
     _pronunciationService = PronunciationService();
+    _sessionStore = SessionStore(apiClient: apiClient, driftDb: appDb);
+    _sessionSyncService =
+        SessionSyncService(apiClient: apiClient, driftDb: appDb);
+    _enrichmentService = WordEnrichmentService(driftDb: appDb);
     _audioSub = _pronunciationService.onPlayerStateChanged.listen((state) {
       if (mounted) setState(() => _isPlayingAudio = state == PlayerState.playing);
     });
-    // Sync any pending records from previous session
+    // Need #8 — drain any unfinished sessions from prior runs first, then
+    // open a new one for this study page.
+    _sessionSyncService.drainPending();
     _studyService.syncPendingAttempts();
+    _startSession();
     _loadDailyGoal();
     _loadNextWord();
   }
 
+  Future<void> _startSession() async {
+    try {
+      final id = await _sessionStore.startForStudy();
+      if (mounted) setState(() => _sessionId = id);
+    } catch (_) {
+      // Local insert failure is non-fatal for the study flow — attempts will
+      // simply submit without a session_id and rely on the backend's
+      // time-window fallback.
+    }
+  }
+
   @override
   void dispose() {
+    // Need #8 — close the local session row + post finish to cloud.
+    // dispose() runs on Navigator.pop, the Android back button, and app
+    // backgrounding via the framework, so this covers the three required
+    // exit paths (normal completion / manual end / explicit exit).
+    _sessionStore.finish();
     _audioSub?.cancel();
     _pronunciationService.dispose();
     _studyService.dispose();
@@ -169,6 +210,7 @@ class _StudyPageState extends State<StudyPage> {
       if (mounted) {
         setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
         _loadPreviewForWord(entry.word.wordId);
+        _loadEnrichmentForWord(entry.word);
         _prefetchUpcoming();
       }
       return;
@@ -182,6 +224,7 @@ class _StudyPageState extends State<StudyPage> {
         if (mounted) {
           setState(() { _currentWord = word; _isLoading = false; _isSubmitting = false; });
           _loadPreviewForWord(word.wordId);
+          _loadEnrichmentForWord(word);
           _prefetchUpcoming();
 
           // P3.3.17: Cache word locally for offline review queue — fire-and-forget.
@@ -204,6 +247,7 @@ class _StudyPageState extends State<StudyPage> {
         if (mounted) {
           setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
           _loadPreviewForWord(entry.word.wordId);
+          _loadEnrichmentForWord(entry.word);
           _prefetchUpcoming();
         }
         return;
@@ -231,6 +275,27 @@ class _StudyPageState extends State<StudyPage> {
     } catch (_) {
       // Preview is best-effort / reference-only — silently clear on any error.
       if (mounted) setState(() => _previewDurations = null);
+    }
+  }
+
+  /// Need #11 — Load optional enrichment (forms / synonyms+antonyms /
+  /// phrases) for [word]. Always overwrites in-flight load so a fast
+  /// rate sequence can't show stale data; if the user moves on before
+  /// the query returns, we drop the result. Failures clear to empty —
+  /// the UI hides the section, never shows an error.
+  Future<void> _loadEnrichmentForWord(Word word) async {
+    _enrichmentLoadingForWordId = word.wordId;
+    if (mounted) setState(() => _enrichment = null);
+    try {
+      final result = await _enrichmentService.getFor(word.wordText);
+      if (!mounted) return;
+      // Drop if the user already moved on.
+      if (_enrichmentLoadingForWordId != word.wordId) return;
+      setState(() => _enrichment = result);
+    } catch (_) {
+      if (!mounted) return;
+      if (_enrichmentLoadingForWordId != word.wordId) return;
+      setState(() => _enrichment = WordEnrichment.empty);
     }
   }
 
@@ -280,6 +345,7 @@ class _StudyPageState extends State<StudyPage> {
         bookId: _currentWord!.bookId,
         studyType: 'new',
         actionResult: binaryResult,
+        sessionId: _sessionId,
       );
 
       // Step 5 (session_requeue_v1): on 'forgot', requeue with spacing instead of
@@ -583,8 +649,157 @@ class _StudyPageState extends State<StudyPage> {
             ),
             _buildExamplesSection(word.examples!),
           ],
+
+          // ── Need #11: optional enrichment modules ────────────────────────
+          // Each module is independently visible. When _enrichment is null
+          // (still loading) or empty, nothing renders — no titles, no spacers.
+          if (_enrichment != null && !_enrichment!.isEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.only(top: 10, bottom: 8),
+              child: Divider(
+                color: Color(0xFFF4EFE5),
+                thickness: 0.5,
+                height: 1,
+              ),
+            ),
+            _buildEnrichmentSection(_enrichment!),
+          ],
         ],
       ),
+    );
+  }
+
+  // ── Need #11: enrichment modules ──────────────────────────────────────────
+
+  Widget _buildEnrichmentSection(WordEnrichment e) {
+    final blocks = <Widget>[];
+    if (e.hasForms) {
+      blocks.add(_buildEnrichmentBlock(
+        title: '其他形式',
+        child: _formsBody(e.forms),
+      ));
+    }
+    if (e.hasRelations) {
+      blocks.add(_buildEnrichmentBlock(
+        title: '近反义词',
+        child: _relationsBody(e.synonyms, e.antonyms),
+      ));
+    }
+    if (e.hasPhrases) {
+      blocks.add(_buildEnrichmentBlock(
+        title: '常见词组',
+        child: _phrasesBody(e.phrases),
+      ));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < blocks.length; i++) ...[
+          if (i > 0) const SizedBox(height: 10),
+          blocks[i],
+        ],
+      ],
+    );
+  }
+
+  Widget _buildEnrichmentBlock({required String title, required Widget child}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+            color: _kTextGray,
+            letterSpacing: 0.4,
+          ),
+        ),
+        const SizedBox(height: 6),
+        child,
+      ],
+    );
+  }
+
+  static const Map<String, String> _kFormTypeLabel = {
+    'past': '过去式',
+    'past_participle': '过去分词',
+    'present_participle': '现在分词',
+    'third_person_singular': '第三人称单数',
+    'plural': '复数',
+    'comparative': '比较级',
+    'superlative': '最高级',
+  };
+
+  Widget _formsBody(List<WordFormItem> forms) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      children: forms.map((f) {
+        final label = _kFormTypeLabel[f.formType] ?? f.formType;
+        return RichText(
+          text: TextSpan(
+            style: const TextStyle(fontSize: 11, color: _kTextDark, height: 1.45),
+            children: [
+              TextSpan(text: f.formText),
+              TextSpan(
+                text: '（$label）',
+                style: const TextStyle(color: _kTextGray, fontSize: 10),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _relationsBody(List<String> synonyms, List<String> antonyms) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (synonyms.isNotEmpty)
+          _relationRow(label: '近义词', items: synonyms),
+        if (synonyms.isNotEmpty && antonyms.isNotEmpty)
+          const SizedBox(height: 4),
+        if (antonyms.isNotEmpty)
+          _relationRow(label: '反义词', items: antonyms),
+      ],
+    );
+  }
+
+  Widget _relationRow({required String label, required List<String> items}) {
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(fontSize: 11, color: _kTextDark, height: 1.5),
+        children: [
+          TextSpan(
+            text: '$label：',
+            style: const TextStyle(color: _kTextGray, fontSize: 10),
+          ),
+          TextSpan(text: items.join(', ')),
+        ],
+      ),
+    );
+  }
+
+  Widget _phrasesBody(List<String> phrases) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      children: phrases.map((p) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: _kNeutralBg,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: _kNeutralBorder, width: 0.5),
+          ),
+          child: Text(
+            p,
+            style: const TextStyle(fontSize: 11, color: _kNeutralText),
+          ),
+        );
+      }).toList(),
     );
   }
 

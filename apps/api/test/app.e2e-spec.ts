@@ -1651,6 +1651,253 @@ describe('Meow API (e2e)', () => {
     });
   });
 
+  // ============ Need #8: session linkage + duration_seconds + cross-day + legacy fallback ============
+  describe('Session linkage (Need #8)', () => {
+    it('accepts client-supplied session_id and links study attempts via session_id', async () => {
+      const clientSessionId = 'cli-sess-need8-link-001';
+
+      const startRes = await request(app.getHttpServer())
+        .post('/api/v1/sessions')
+        .send({ session_minutes_target: 15, session_id: clientSessionId })
+        .set('X-Idempotency-Key', 'need8-link-start')
+        .expect(200);
+      expect(startRes.body.session_id).toBe(clientSessionId);
+
+      for (let i = 0; i < 5; i++) {
+        await request(app.getHttpServer())
+          .post('/api/v1/me/new-words')
+          .send({
+            word_id: `need8-link-w${i}`,
+            book_id: 'book-001',
+            study_type: 'new',
+            action_result: 'know',
+            session_id: clientSessionId,
+          })
+          .set('X-Idempotency-Key', `need8-link-attempt-${i}`)
+          .expect(200);
+      }
+
+      const finishRes = await request(app.getHttpServer())
+        .post(`/api/v1/sessions/${clientSessionId}/finish`)
+        .set('X-Idempotency-Key', 'need8-link-finish')
+        .expect(200);
+
+      expect(finishRes.body.effective_learning_count).toBe(5);
+      expect(finishRes.body.duration_seconds).toBeDefined();
+      expect(typeof finishRes.body.duration_seconds).toBe('number');
+      expect(finishRes.body.duration_seconds).toBeGreaterThanOrEqual(0);
+      // Without 15-min wait, validation must be invalid (frozen rule).
+      expect(finishRes.body.session_validation_status).toBe('invalid');
+    });
+
+    it('exposes duration_seconds on GET /sessions/:id after finish', async () => {
+      const clientSessionId = 'cli-sess-need8-duration-002';
+      await request(app.getHttpServer())
+        .post('/api/v1/sessions')
+        .send({ session_minutes_target: 15, session_id: clientSessionId })
+        .set('X-Idempotency-Key', 'need8-duration-start')
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/sessions/${clientSessionId}/finish`)
+        .set('X-Idempotency-Key', 'need8-duration-finish')
+        .expect(200);
+
+      const queryRes = await request(app.getHttpServer())
+        .get(`/api/v1/sessions/${clientSessionId}`)
+        .expect(200);
+      expect(queryRes.body.duration_seconds).toBeDefined();
+      expect(typeof queryRes.body.duration_seconds).toBe('number');
+    });
+
+    it('falls back to time-window for legacy attempts without session_id', async () => {
+      // First, submit a study attempt WITHOUT session_id (legacy / offline replay scenario).
+      await request(app.getHttpServer())
+        .post('/api/v1/me/new-words')
+        .send({
+          word_id: 'need8-legacy-w0',
+          book_id: 'book-001',
+          study_type: 'new',
+          action_result: 'know',
+        })
+        .set('X-Idempotency-Key', 'need8-legacy-attempt-0')
+        .expect(200);
+
+      // THEN start a session — its started_at is after the legacy attempt, so the attempt
+      // is OUTSIDE the time window and should NOT be counted. This proves the fallback uses
+      // the (started_at, now) bound and does not double-count earlier attempts.
+      const clientSessionId = 'cli-sess-need8-legacy-003';
+      await request(app.getHttpServer())
+        .post('/api/v1/sessions')
+        .send({ session_minutes_target: 15, session_id: clientSessionId })
+        .set('X-Idempotency-Key', 'need8-legacy-start')
+        .expect(200);
+
+      // Now submit a legacy attempt INSIDE the window (no session_id).
+      await request(app.getHttpServer())
+        .post('/api/v1/me/new-words')
+        .send({
+          word_id: 'need8-legacy-w1',
+          book_id: 'book-001',
+          study_type: 'new',
+          action_result: 'know',
+        })
+        .set('X-Idempotency-Key', 'need8-legacy-attempt-1')
+        .expect(200);
+
+      const finishRes = await request(app.getHttpServer())
+        .post(`/api/v1/sessions/${clientSessionId}/finish`)
+        .set('X-Idempotency-Key', 'need8-legacy-finish')
+        .expect(200);
+      // Inside window: 1 (need8-legacy-w1). Outside window: need8-legacy-w0 must NOT count.
+      expect(finishRes.body.effective_learning_count).toBe(1);
+    });
+
+    it('Need #10 — review-history endpoint returns per-word attempts newest-first with session_id', async () => {
+      // Use the local-batch endpoint so this test does not depend on the
+      // review-groups path (which needs the PG word pool to be loaded —
+      // unrelated to Need #10).
+      const sessId = 'cli-sess-need10-history-001';
+      const targetWordId = 'need10-target-word';
+      const otherWordId = 'need10-other-word';
+
+      await request(app.getHttpServer())
+        .post('/api/v1/sessions')
+        .send({ session_minutes_target: 15, session_id: sessId })
+        .set('X-Idempotency-Key', 'need10-start')
+        .expect(200);
+
+      // First attempt on target word.
+      await request(app.getHttpServer())
+        .post('/api/v1/review-attempts/local-batch')
+        .send({
+          word_attempts: [
+            { word_id: targetWordId, action_result: 'correct' },
+          ],
+          session_id: sessId,
+        })
+        .set('X-Idempotency-Key', 'need10-batch-1')
+        .expect(200);
+
+      // Force created_at to differ.
+      await new Promise(resolve => setTimeout(resolve, 5));
+
+      // Second attempt on target word + an attempt on a different word
+      // that must NOT leak into the per-word history.
+      await request(app.getHttpServer())
+        .post('/api/v1/review-attempts/local-batch')
+        .send({
+          word_attempts: [
+            { word_id: targetWordId, action_result: 'incorrect' },
+            { word_id: otherWordId, action_result: 'correct' },
+          ],
+          session_id: sessId,
+        })
+        .set('X-Idempotency-Key', 'need10-batch-2')
+        .expect(200);
+
+      const histRes = await request(app.getHttpServer())
+        .get(`/api/v1/me/words/${targetWordId}/review-history?limit=10`)
+        .expect(200);
+
+      expect(histRes.body.word_id).toBe(targetWordId);
+      expect(Array.isArray(histRes.body.items)).toBe(true);
+      expect(histRes.body.items.length).toBe(2);
+
+      // Every returned item must reference the queried word and carry session_id.
+      for (const it of histRes.body.items) {
+        expect(it.word_id).toBe(targetWordId);
+        expect(it.reviewed_at).toBeDefined();
+        expect(it.session_id).toBe(sessId);
+      }
+      // Other-word attempts must NOT leak in.
+      for (const it of histRes.body.items) {
+        expect(it.word_id).not.toBe(otherWordId);
+      }
+      // Newest-first ordering: items[0].reviewed_at >= items[1].reviewed_at.
+      const t0 = new Date(histRes.body.items[0].reviewed_at).getTime();
+      const t1 = new Date(histRes.body.items[1].reviewed_at).getTime();
+      expect(t0).toBeGreaterThanOrEqual(t1);
+    });
+
+    it('Need #10 — same word same day produces multiple history entries', async () => {
+      const sessId = 'cli-sess-need10-multi-001';
+      const wordId = 'need10-multi-word';
+
+      await request(app.getHttpServer())
+        .post('/api/v1/sessions')
+        .send({ session_minutes_target: 15, session_id: sessId })
+        .set('X-Idempotency-Key', 'need10-multi-start')
+        .expect(200);
+
+      for (let i = 0; i < 3; i++) {
+        await request(app.getHttpServer())
+          .post('/api/v1/review-attempts/local-batch')
+          .send({
+            word_attempts: [
+              { word_id: wordId, action_result: i % 2 === 0 ? 'correct' : 'incorrect' },
+            ],
+            session_id: sessId,
+          })
+          .set('X-Idempotency-Key', `need10-multi-batch-${i}`)
+          .expect(200);
+        await new Promise(resolve => setTimeout(resolve, 3));
+      }
+
+      const histRes = await request(app.getHttpServer())
+        .get(`/api/v1/me/words/${wordId}/review-history`)
+        .expect(200);
+      expect(histRes.body.items.length).toBe(3);
+      // All carry the same session_id.
+      for (const it of histRes.body.items) {
+        expect(it.session_id).toBe(sessId);
+      }
+    });
+
+    it('Need #10 — limit param caps results and rejects non-positive values', async () => {
+      const histRes = await request(app.getHttpServer())
+        .get('/api/v1/me/words/no-such-word-123/review-history?limit=invalid')
+        .expect(200);
+      expect(histRes.body.limit).toBe(20); // default
+      expect(histRes.body.items.length).toBe(0);
+
+      const capped = await request(app.getHttpServer())
+        .get('/api/v1/me/words/no-such-word-123/review-history?limit=999')
+        .expect(200);
+      expect(capped.body.limit).toBe(200); // clamped
+    });
+
+    it('supports multiple sessions in a day (sequential start/finish)', async () => {
+      const sessA = 'cli-sess-need8-multi-A';
+      const sessB = 'cli-sess-need8-multi-B';
+
+      await request(app.getHttpServer())
+        .post('/api/v1/sessions')
+        .send({ session_minutes_target: 15, session_id: sessA })
+        .set('X-Idempotency-Key', 'need8-multi-startA')
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/sessions/${sessA}/finish`)
+        .set('X-Idempotency-Key', 'need8-multi-finishA')
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/sessions')
+        .send({ session_minutes_target: 15, session_id: sessB })
+        .set('X-Idempotency-Key', 'need8-multi-startB')
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/sessions/${sessB}/finish`)
+        .set('X-Idempotency-Key', 'need8-multi-finishB')
+        .expect(200);
+
+      const a = await request(app.getHttpServer()).get(`/api/v1/sessions/${sessA}`).expect(200);
+      const b = await request(app.getHttpServer()).get(`/api/v1/sessions/${sessB}`).expect(200);
+      expect(a.body.session_id).toBe(sessA);
+      expect(b.body.session_id).toBe(sessB);
+      expect(a.body.session_id).not.toBe(b.body.session_id);
+    });
+  });
+
   describe('POST /api/v1/check-ins', () => {
     it('should complete check-in successfully', () => {
       return request(app.getHttpServer())

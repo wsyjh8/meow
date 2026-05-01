@@ -14,3 +14,4 @@ export * from './equipment.controller';
 export * from './backup.controller';
 export * from './settings.controller';
 export * from './words.controller';
+export * from './me-words.controller';

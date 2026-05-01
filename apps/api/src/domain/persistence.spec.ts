@@ -145,6 +145,37 @@ describe('DevStore Persistence', () => {
     store2.reset();
   });
 
+  it('session duration_seconds and session_id linkage survive simulated restart', () => {
+    const store1 = new DevStore(filePath);
+    store1.reset();
+
+    const clientSessionId = 'cli-sess-persist-001';
+    store1.startSession(15, 'persist-sess-start', clientSessionId);
+    store1.submitStudyAttempt(
+      'persist-sess-w0', 'book-001', 'new', 'know',
+      'persist-sess-attempt-0', clientSessionId,
+    );
+    store1.finishSession(clientSessionId, 'persist-sess-finish');
+
+    const sessBefore = store1.getSession(clientSessionId);
+    expect(sessBefore).not.toBeNull();
+    expect(sessBefore!.duration_seconds).toBeDefined();
+    expect(typeof sessBefore!.duration_seconds).toBe('number');
+    const attemptsBefore = store1.getStudyAttempts().filter(a => a.session_id === clientSessionId);
+    expect(attemptsBefore.length).toBe(1);
+
+    const store2 = new DevStore(filePath);
+    const sessAfter = store2.getSession(clientSessionId);
+    expect(sessAfter).not.toBeNull();
+    expect(sessAfter!.duration_seconds).toBe(sessBefore!.duration_seconds);
+    expect(sessAfter!.session_id).toBe(clientSessionId);
+    const attemptsAfter = store2.getStudyAttempts().filter(a => a.session_id === clientSessionId);
+    expect(attemptsAfter.length).toBe(1);
+    expect(attemptsAfter[0].session_id).toBe(clientSessionId);
+
+    store2.reset();
+  });
+
   it('reset clears persistence file', () => {
     const store = new DevStore(filePath);
     store.reset();
