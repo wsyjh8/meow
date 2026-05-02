@@ -176,6 +176,29 @@ class LocalDatabase {
     await _db!.update('word_records', {'synced': 1}, where: 'id = ?', whereArgs: [id]);
   }
 
+  /// Bug 4 — Distinct word_id values for `study_type='new'` rated TODAY,
+  /// regardless of action_result (`know` or `forgot` both count).
+  ///
+  /// Used by StudyPage as the canonical "unique new words served today"
+  /// gate so the daily goal cannot be exceeded by repeatedly tapping
+  /// 不认识/模糊. The window is the user's LOCAL calendar day,
+  /// converted to UTC bounds since `created_at` is stored as UTC ISO-8601
+  /// (matches [countTodayNewCompleted]'s timezone handling).
+  Future<Set<String>> getTodayServedNewWordIds() async {
+    final now = DateTime.now();
+    final localMidnight = DateTime(now.year, now.month, now.day);
+    final nextLocalMidnight = localMidnight.add(const Duration(days: 1));
+    final startUtcIso = localMidnight.toUtc().toIso8601String();
+    final endUtcIso = nextLocalMidnight.toUtc().toIso8601String();
+    final rows = await _db!.rawQuery(
+      "SELECT DISTINCT word_id FROM word_records "
+      "WHERE study_type = 'new' "
+      "AND created_at >= ? AND created_at < ?",
+      [startUtcIso, endUtcIso],
+    );
+    return rows.map((r) => r['word_id'] as String).toSet();
+  }
+
   /// Count new words successfully studied today.
   /// Used as offline fallback for [TodayState.todayNewCompleted].
   ///

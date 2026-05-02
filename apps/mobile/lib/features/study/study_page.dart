@@ -106,8 +106,21 @@ class _StudyPageState extends State<StudyPage> {
   // ── Today progress ─────────────────────────────────────────────────────────
   /// Number of new words mastered today (cumulative across sessions).
   /// Loaded from LocalDatabase.countTodayNewCompleted() on init,
-  /// then incremented on each binaryResult == 'know'.
+  /// then incremented on each binaryResult == 'know'. Drives the top
+  /// progress text (`今日新词 · X / Y`) — mastered/goal semantics.
   int _todayCompleted = 0;
+
+  /// Bug 4 — Unique new word_ids served today, regardless of
+  /// action_result (know AND forgot both count). Hydrated from SQLite
+  /// on init via [LocalDatabase.getTodayServedNewWordIds] and grown
+  /// in-memory each time [_loadNextWord] hands out a fresh new card.
+  /// Used as the canonical daily-goal gate so 不认识/模糊 cannot
+  /// inflate the served count past _dailyGoal.
+  ///
+  /// Distinct from [_sessionSeenIds] (which is session-scoped and
+  /// drives StudyService.getNextWord exclusion). This set is
+  /// calendar-day-scoped and survives app restarts.
+  final Set<String> _todayServedIds = {};
 
   /// Daily goal loaded from LocalSettingsService. Default 20 until loaded.
   int _dailyGoal = 20;
@@ -183,6 +196,14 @@ class _StudyPageState extends State<StudyPage> {
     } catch (_) {
       // Stay at 0 — non-blocking
     }
+    try {
+      // Bug 4 — Hydrate the served-id gate from SQLite so the daily goal
+      // limit survives app restarts within the same calendar day.
+      final served = await LocalDatabase.instance.getTodayServedNewWordIds();
+      if (mounted) setState(() => _todayServedIds.addAll(served));
+    } catch (_) {
+      // Stay at empty set — non-blocking
+    }
   }
 
   // ── Business logic (FROZEN — do not modify without governance review) ─────
@@ -190,9 +211,12 @@ class _StudyPageState extends State<StudyPage> {
   Future<void> _loadNextWord() async {
     setState(() { _isLoading = true; _error = null; });
 
-    // Daily goal enforcement: stop serving new words once goal is met,
-    // but allow pending requeue cards to finish (user already saw them).
-    if (_todayCompleted >= _dailyGoal && _requeuedWords.isEmpty) {
+    // Daily goal enforcement (Bug 4): stop serving new words once we've
+    // shown _dailyGoal unique new word_ids today, regardless of whether
+    // the user rated them know or forgot. Pending requeue cards still
+    // play out — the user already saw them, requeues only re-show
+    // members of the served set.
+    if (_todayServedIds.length >= _dailyGoal && _requeuedWords.isEmpty) {
       if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
       return;
     }
@@ -221,6 +245,10 @@ class _StudyPageState extends State<StudyPage> {
       final word = await _studyService.getNextWord(extraExclude: _sessionSeenIds);
       if (word != null) {
         _sessionSeenIds.add(word.wordId);
+        // Bug 4 — count this card against today's served-set so the
+        // gate above will trigger when goal is reached, even if the
+        // user only rates 不认识/模糊 (which never bumps _todayCompleted).
+        _todayServedIds.add(word.wordId);
         if (mounted) {
           setState(() { _currentWord = word; _isLoading = false; _isSubmitting = false; });
           _loadPreviewForWord(word.wordId);
