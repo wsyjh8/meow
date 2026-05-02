@@ -437,7 +437,11 @@ class _StudyPageState extends State<StudyPage> {
               children: [
                 Text(
                   '今日新词 · $_todayCompleted / $_dailyGoal',
-                  style: const TextStyle(fontSize: 10, color: _kTextGray),
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w400,
+                    color: _kTextGray,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 ClipRRect(
@@ -506,10 +510,11 @@ class _StudyPageState extends State<StudyPage> {
                     Text(
                       word.wordText,
                       style: const TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w500,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w600,
                         color: _kTextDark,
                         letterSpacing: 0.3,
+                        height: 1.15,
                       ),
                     ),
                     if (word.phonetic != null && word.phonetic!.isNotEmpty)
@@ -517,7 +522,12 @@ class _StudyPageState extends State<StudyPage> {
                         padding: const EdgeInsets.only(top: 3),
                         child: Text(
                           word.phonetic!,
-                          style: const TextStyle(fontSize: 12, color: _kTextGray),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w400,
+                            color: _kTextGray,
+                            height: 1.25,
+                          ),
                         ),
                       ),
                   ],
@@ -594,7 +604,11 @@ class _StudyPageState extends State<StudyPage> {
                   ),
                   child: Text(
                     pos,
-                    style: const TextStyle(fontSize: 10, color: _kPurple),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: _kPurple,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -604,8 +618,9 @@ class _StudyPageState extends State<StudyPage> {
                   word.meaning,
                   style: const TextStyle(
                     fontSize: 15,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                     color: _kTextDark,
+                    height: 1.3,
                   ),
                 ),
               ),
@@ -667,10 +682,12 @@ class _StudyPageState extends State<StudyPage> {
     if (modules.isEmpty) return const [];
 
     // Inject vertical spacing: 14 above the first module (lifts it off
-    // the meaning row), 16 between every pair after that.
+    // the meaning row), 12 between every pair after that. Spec keeps
+    // module gap in 10–12 range — pick the upper bound for breathing
+    // room without dragging the page taller than necessary.
     final out = <Widget>[const SizedBox(height: 14)];
     for (var i = 0; i < modules.length; i++) {
-      if (i > 0) out.add(const SizedBox(height: 16));
+      if (i > 0) out.add(const SizedBox(height: 12));
       out.add(modules[i]);
     }
     return out;
@@ -687,10 +704,11 @@ class _StudyPageState extends State<StudyPage> {
         Text(
           title,
           style: const TextStyle(
-            fontSize: 10,
+            fontSize: 12,
             fontWeight: FontWeight.w500,
             color: _kTextGray,
             letterSpacing: 0.4,
+            height: 1.3,
           ),
         ),
         const SizedBox(height: 6),
@@ -709,7 +727,8 @@ class _StudyPageState extends State<StudyPage> {
             child: Text(
               line,
               style: const TextStyle(
-                fontSize: 12,
+                fontSize: 13,
+                fontWeight: FontWeight.w400,
                 color: _kTextMedium,
                 height: 1.45,
               ),
@@ -736,18 +755,20 @@ class _StudyPageState extends State<StudyPage> {
                 Text(
                   enPlain,
                   style: const TextStyle(
-                    fontSize: 11,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w400,
                     color: _kTextDark,
-                    height: 1.5,
+                    height: 1.4,
                   ),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 3),
                 Text(
                   cnPlain,
                   style: const TextStyle(
-                    fontSize: 10,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
                     color: _kTextGray,
-                    height: 1.45,
+                    height: 1.35,
                   ),
                 ),
               ],
@@ -772,18 +793,27 @@ class _StudyPageState extends State<StudyPage> {
 
   Widget _formsBody(List<WordFormItem> forms) {
     return Wrap(
-      spacing: 8,
+      spacing: 10,
       runSpacing: 4,
       children: forms.map((f) {
         final label = _kFormTypeLabel[f.formType] ?? f.formType;
         return RichText(
           text: TextSpan(
-            style: const TextStyle(fontSize: 11, color: _kTextDark, height: 1.45),
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w400,
+              color: _kTextDark,
+              height: 1.35,
+            ),
             children: [
               TextSpan(text: f.formText),
               TextSpan(
                 text: '（$label）',
-                style: const TextStyle(color: _kTextGray, fontSize: 10),
+                style: const TextStyle(
+                  color: _kTextGray,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w400,
+                ),
               ),
             ],
           ),
@@ -809,11 +839,20 @@ class _StudyPageState extends State<StudyPage> {
   Widget _relationRow({required String label, required List<String> items}) {
     return RichText(
       text: TextSpan(
-        style: const TextStyle(fontSize: 11, color: _kTextDark, height: 1.5),
+        style: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w400,
+          color: _kTextDark,
+          height: 1.35,
+        ),
         children: [
           TextSpan(
             text: '$label：',
-            style: const TextStyle(color: _kTextGray, fontSize: 10),
+            style: const TextStyle(
+              color: _kTextGray,
+              fontSize: 11,
+              fontWeight: FontWeight.w400,
+            ),
           ),
           TextSpan(text: items.join(', ')),
         ],
@@ -823,19 +862,26 @@ class _StudyPageState extends State<StudyPage> {
 
   Widget _phrasesBody(List<String> phrases) {
     return Wrap(
-      spacing: 8,
-      runSpacing: 4,
+      spacing: 6,
+      runSpacing: 6,
       children: phrases.map((p) {
+        // Spec: chip min height 28. fontSize 12 × height 1.2 ≈ 14.4 line-box,
+        // + 7 vertical padding × 2 ≈ 28.4 ≥ 28.
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           decoration: BoxDecoration(
             color: _kNeutralBg,
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(6),
             border: Border.all(color: _kNeutralBorder, width: 0.5),
           ),
           child: Text(
             p,
-            style: const TextStyle(fontSize: 11, color: _kNeutralText),
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: _kNeutralText,
+              height: 1.2,
+            ),
           ),
         );
       }).toList(),
@@ -1205,7 +1251,11 @@ class _CatMoodBadge extends StatelessWidget {
           const SizedBox(width: 4),
           Text(
             mood,
-            style: const TextStyle(fontSize: 10, color: Color(0xFFA68872)),
+            style: const TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFFA68872),
+            ),
           ),
         ],
       ),
@@ -1228,7 +1278,11 @@ class _WordTypeBadge extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: const TextStyle(fontSize: 10, color: _kGreenText),
+        style: const TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w500,
+          color: _kGreenText,
+        ),
       ),
     );
   }
