@@ -26,7 +26,7 @@ final _formsDir = Directory(
   '${_repoRoot.path}${Platform.pathSeparator}docs${Platform.pathSeparator}forms',
 );
 final _outFile = File(
-  'assets${Platform.pathSeparator}seed${Platform.pathSeparator}enrichment_v1.db',
+  'assets${Platform.pathSeparator}seed${Platform.pathSeparator}enrichment_v2.db',
 );
 
 const _chunkSize = 5000;
@@ -74,6 +74,8 @@ void main() {
     final formsCount = _importForms(db);
     final relationsCount = _importRelations(db);
     final phrasesCount = _importPhrases(db);
+    final morphemeCount = _importMorphemes(db);
+    final morphemeMatchCount = _importMorphemeMatches(db);
     stopwatch.stop();
 
     db.execute('VACUUM;');
@@ -82,13 +84,15 @@ void main() {
     final sizeMb = (sizeBytes / 1024 / 1024).toStringAsFixed(2);
 
     stdout.writeln('—' * 60);
-    stdout.writeln('enrichment_v1.db built');
-    stdout.writeln('  forms     : $formsCount rows');
-    stdout.writeln('  relations : $relationsCount rows');
-    stdout.writeln('  phrases   : $phrasesCount rows');
-    stdout.writeln('  total time: ${stopwatch.elapsed.inSeconds}s');
-    stdout.writeln('  file size : ${sizeMb} MB');
-    stdout.writeln('  out path  : ${_outFile.absolute.path}');
+    stdout.writeln('enrichment_v2.db built');
+    stdout.writeln('  forms             : $formsCount rows');
+    stdout.writeln('  relations         : $relationsCount rows');
+    stdout.writeln('  phrases           : $phrasesCount rows');
+    stdout.writeln('  morpheme_entries  : $morphemeCount rows');
+    stdout.writeln('  word_morpheme_matches: $morphemeMatchCount rows');
+    stdout.writeln('  total time        : ${stopwatch.elapsed.inSeconds}s');
+    stdout.writeln('  file size         : ${sizeMb} MB');
+    stdout.writeln('  out path          : ${_outFile.absolute.path}');
   } finally {
     db.dispose();
   }
@@ -133,6 +137,41 @@ void _createSchema(Database db) {
     )
   ''');
   db.execute('CREATE INDEX idx_word_phrases_word ON word_phrases(word)');
+
+  // Need #12: morpheme catalog + per-word matches.
+  db.execute('''
+    CREATE TABLE morpheme_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      morpheme TEXT NOT NULL,
+      normalized_morpheme TEXT NOT NULL,
+      morpheme_type TEXT NOT NULL,
+      meanings_json TEXT NOT NULL,
+      examples_json TEXT,
+      source TEXT,
+      license TEXT
+    )
+  ''');
+  db.execute(
+    'CREATE INDEX idx_morpheme_entries_norm ON morpheme_entries(normalized_morpheme)',
+  );
+
+  db.execute('''
+    CREATE TABLE word_morpheme_matches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      word TEXT NOT NULL,
+      morpheme TEXT NOT NULL,
+      normalized_morpheme TEXT NOT NULL,
+      morpheme_type TEXT NOT NULL,
+      position TEXT NOT NULL,
+      meanings_json TEXT NOT NULL,
+      match_method TEXT,
+      confidence REAL,
+      source TEXT
+    )
+  ''');
+  db.execute(
+    'CREATE INDEX idx_word_morpheme_matches_word ON word_morpheme_matches(word)',
+  );
 }
 
 int _importForms(Database db) {
@@ -196,6 +235,61 @@ int _importPhrases(Database db) {
         m['phrase_text'],
         m['phrase_type'] ?? 'common_phrase',
         (m['score'] as num?)?.toInt(),
+        m['source'],
+      ]);
+    });
+  } finally {
+    stmt.dispose();
+  }
+}
+
+int _importMorphemes(Database db) {
+  final file =
+      File('${_formsDir.path}${Platform.pathSeparator}morphemes.jsonl');
+  final stmt = db.prepare(
+    'INSERT INTO morpheme_entries '
+    '(morpheme, normalized_morpheme, morpheme_type, meanings_json, '
+    'examples_json, source, license) '
+    'VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  try {
+    return _streamInsert(db, file, (m) {
+      stmt.execute([
+        m['morpheme'],
+        m['normalized_morpheme'],
+        m['morpheme_type'],
+        json.encode(m['meanings'] ?? const []),
+        m['examples'] != null ? json.encode(m['examples']) : null,
+        m['source'],
+        m['license'],
+      ]);
+    });
+  } finally {
+    stmt.dispose();
+  }
+}
+
+int _importMorphemeMatches(Database db) {
+  final file = File(
+    '${_formsDir.path}${Platform.pathSeparator}word_morpheme_matches.jsonl',
+  );
+  final stmt = db.prepare(
+    'INSERT INTO word_morpheme_matches '
+    '(word, morpheme, normalized_morpheme, morpheme_type, position, '
+    'meanings_json, match_method, confidence, source) '
+    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  try {
+    return _streamInsert(db, file, (m) {
+      stmt.execute([
+        (m['word'] as String).toLowerCase(),
+        m['morpheme'],
+        m['normalized_morpheme'],
+        m['morpheme_type'],
+        m['position'],
+        json.encode(m['meanings'] ?? const []),
+        m['match_method'],
+        (m['confidence'] as num?)?.toDouble(),
         m['source'],
       ]);
     });

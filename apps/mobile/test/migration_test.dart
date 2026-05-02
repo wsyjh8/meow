@@ -301,6 +301,83 @@ void main() {
       await db.close();
     });
 
+    test('upgrade from v7: morpheme tables created (v8, Need #12)', () async {
+      // Simulate a v7 device — Need #11 tables exist, Need #12 tables don't.
+      final nativeDb = NativeDatabase.memory(
+        setup: (rawDb) {
+          rawDb.execute('PRAGMA user_version = 7');
+          rawDb.execute('CREATE TABLE word_records (id INTEGER PRIMARY KEY AUTOINCREMENT, word_id TEXT NOT NULL, book_id TEXT NOT NULL, study_type TEXT NOT NULL DEFAULT \'new\', action_result TEXT NOT NULL, created_at TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0, session_id TEXT)');
+          rawDb.execute('CREATE TABLE wordbook_progress (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT UNIQUE, total_words INTEGER, completed_words INTEGER, updated_at TEXT)');
+          rawDb.execute('CREATE TABLE daily_checkins (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE, checked_in INTEGER, created_at TEXT)');
+          rawDb.execute('CREATE TABLE custom_wordbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, word_count INTEGER, created_at TEXT)');
+          rawDb.execute('CREATE TABLE vocabulary_notebook (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT, meaning TEXT, note TEXT, created_at TEXT)');
+          rawDb.execute('CREATE TABLE sessions (id TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_seconds INTEGER, session_minutes_target INTEGER NOT NULL DEFAULT 15, cached_validation_status TEXT, synced INTEGER NOT NULL DEFAULT 0)');
+          rawDb.execute('CREATE TABLE review_records (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, review_group_id TEXT NOT NULL, word_id TEXT NOT NULL, action_result TEXT NOT NULL, session_id TEXT NULL, created_at TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0, rating INTEGER NULL)');
+          rawDb.execute('CREATE TABLE word_forms (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, form_text TEXT NOT NULL, form_type TEXT NOT NULL, pos TEXT, source TEXT)');
+          rawDb.execute('CREATE TABLE word_relations (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, target_word TEXT NOT NULL, relation_type TEXT NOT NULL, pos TEXT, confidence REAL, source TEXT)');
+          rawDb.execute('CREATE TABLE word_phrases (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, phrase_text TEXT NOT NULL, phrase_type TEXT NOT NULL DEFAULT \'common_phrase\', score INTEGER, source TEXT)');
+        },
+      );
+      final db = AppDatabase.forTesting(nativeDb);
+
+      // The 2 new morpheme tables exist + are empty.
+      expect(await db.select(db.morphemeEntries).get(), isEmpty);
+      expect(await db.select(db.wordMorphemeMatches).get(), isEmpty);
+
+      // Inserts work end-to-end.
+      await db.into(db.morphemeEntries).insert(
+            MorphemeEntriesCompanion.insert(
+              morpheme: 'ab-',
+              normalizedMorpheme: 'ab',
+              morphemeType: 'prefix',
+              meaningsJson: '["away from"]',
+            ),
+          );
+      await db.into(db.wordMorphemeMatches).insert(
+            WordMorphemeMatchesCompanion.insert(
+              word: 'abandon',
+              morpheme: 'ab-',
+              normalizedMorpheme: 'ab',
+              morphemeType: 'prefix',
+              position: 'prefix',
+              meaningsJson: '["away from"]',
+            ),
+          );
+      expect((await db.select(db.morphemeEntries).get()).length, 1);
+      expect((await db.select(db.wordMorphemeMatches).get()).length, 1);
+
+      await db.close();
+    });
+
+    test('upgrade from v7: idempotent when morpheme tables already pre-exist',
+        () async {
+      // Some dev devices accumulate state where tables were partially
+      // created by an earlier build. v8 onUpgrade must not crash with
+      // "table already exists".
+      final nativeDb = NativeDatabase.memory(
+        setup: (rawDb) {
+          rawDb.execute('PRAGMA user_version = 7');
+          rawDb.execute('CREATE TABLE word_records (id INTEGER PRIMARY KEY AUTOINCREMENT, word_id TEXT NOT NULL, book_id TEXT NOT NULL, study_type TEXT NOT NULL DEFAULT \'new\', action_result TEXT NOT NULL, created_at TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0, session_id TEXT)');
+          rawDb.execute('CREATE TABLE wordbook_progress (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT UNIQUE, total_words INTEGER, completed_words INTEGER, updated_at TEXT)');
+          rawDb.execute('CREATE TABLE daily_checkins (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE, checked_in INTEGER, created_at TEXT)');
+          rawDb.execute('CREATE TABLE custom_wordbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, word_count INTEGER, created_at TEXT)');
+          rawDb.execute('CREATE TABLE vocabulary_notebook (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT, meaning TEXT, note TEXT, created_at TEXT)');
+          rawDb.execute('CREATE TABLE sessions (id TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_seconds INTEGER, session_minutes_target INTEGER NOT NULL DEFAULT 15, cached_validation_status TEXT, synced INTEGER NOT NULL DEFAULT 0)');
+          rawDb.execute('CREATE TABLE review_records (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, review_group_id TEXT NOT NULL, word_id TEXT NOT NULL, action_result TEXT NOT NULL, session_id TEXT NULL, created_at TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0, rating INTEGER NULL)');
+          rawDb.execute('CREATE TABLE word_forms (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, form_text TEXT NOT NULL, form_type TEXT NOT NULL, pos TEXT, source TEXT)');
+          rawDb.execute('CREATE TABLE word_relations (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, target_word TEXT NOT NULL, relation_type TEXT NOT NULL, pos TEXT, confidence REAL, source TEXT)');
+          rawDb.execute('CREATE TABLE word_phrases (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, phrase_text TEXT NOT NULL, phrase_type TEXT NOT NULL DEFAULT \'common_phrase\', score INTEGER, source TEXT)');
+          // v8 tables ALREADY there from some earlier dev build.
+          rawDb.execute('CREATE TABLE morpheme_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, morpheme TEXT NOT NULL, normalized_morpheme TEXT NOT NULL, morpheme_type TEXT NOT NULL, meanings_json TEXT NOT NULL, examples_json TEXT, source TEXT, license TEXT)');
+          rawDb.execute('CREATE TABLE word_morpheme_matches (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, morpheme TEXT NOT NULL, normalized_morpheme TEXT NOT NULL, morpheme_type TEXT NOT NULL, position TEXT NOT NULL, meanings_json TEXT NOT NULL, match_method TEXT, confidence REAL, source TEXT)');
+        },
+      );
+      // Migration must succeed without "table already exists".
+      final db = AppDatabase.forTesting(nativeDb);
+      expect(await db.select(db.morphemeEntries).get(), isEmpty);
+      await db.close();
+    });
+
     test('upgrade from v6: enrichment tables created (v7, Need #11)', () async {
       // Simulate a v6 database (sessions + review_records WITH rating, no
       // enrichment tables yet).

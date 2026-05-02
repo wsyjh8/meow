@@ -115,6 +115,98 @@ void main() {
       expect(identical(res, WordEnrichment.empty), isTrue);
     });
 
+    test('morpheme matches: empty when no rows exist (Need #12)', () async {
+      final res = await svc.getFor('xyz-no-matches');
+      expect(res.morphemes, isEmpty);
+      expect(res.hasMorphemes, isFalse);
+    });
+
+    test('morpheme matches: sorted prefix → root → suffix; cap=5 (Need #12)',
+        () async {
+      // Seed 7 matches in a deliberately wrong order to prove the
+      // service re-sorts them.
+      Future<void> insert({
+        required String morpheme,
+        required String type,
+        double conf = 0.5,
+        String? meanings,
+      }) async {
+        await db.into(db.wordMorphemeMatches).insert(
+              WordMorphemeMatchesCompanion.insert(
+                word: 'long-word',
+                morpheme: morpheme,
+                normalizedMorpheme: morpheme.replaceAll('-', ''),
+                morphemeType: type,
+                position: type == 'prefix' ? 'prefix' : 'suffix',
+                meaningsJson: '["${meanings ?? "x"}"]',
+                confidence: Value(conf),
+              ),
+            );
+      }
+
+      // suffixes (low priority)
+      await insert(morpheme: '-ing', type: 'suffix', conf: 0.9);
+      await insert(morpheme: '-tion', type: 'suffix', conf: 0.7);
+      // prefixes (top priority) — within group, higher conf comes first
+      await insert(morpheme: 'pre-', type: 'prefix', conf: 0.6);
+      await insert(morpheme: 'un-', type: 'prefix', conf: 0.95);
+      // root_or_stem (middle)
+      await insert(morpheme: 'spect', type: 'root_or_stem', conf: 0.85);
+      // 6th + 7th elements should be cut by cap=5
+      await insert(morpheme: '-ize', type: 'suffix', conf: 0.5);
+      await insert(morpheme: '-ly', type: 'suffix', conf: 0.4);
+
+      final res = await svc.getFor('long-word');
+      expect(res.morphemes.length, 5, reason: 'cap = 5');
+
+      // Ordering: un-(prefix,0.95) → pre-(prefix,0.6) →
+      // spect(root,0.85) → -ing(suffix,0.9) → -tion(suffix,0.7)
+      final ms = res.morphemes;
+      expect(ms[0].morpheme, 'un-');
+      expect(ms[1].morpheme, 'pre-');
+      expect(ms[2].morpheme, 'spect');
+      expect(ms[3].morpheme, '-ing');
+      expect(ms[4].morpheme, '-tion');
+    });
+
+    test('morpheme matches: meanings_json parsed into list (Need #12)',
+        () async {
+      await db.into(db.wordMorphemeMatches).insert(
+            WordMorphemeMatchesCompanion.insert(
+              word: 'abandon',
+              morpheme: 'ab-',
+              normalizedMorpheme: 'ab',
+              morphemeType: 'prefix',
+              position: 'prefix',
+              meaningsJson: '["away from", "off"]',
+              confidence: const Value(0.85),
+            ),
+          );
+      final res = await svc.getFor('abandon');
+      expect(res.hasMorphemes, isTrue);
+      expect(res.morphemes.first.morpheme, 'ab-');
+      expect(res.morphemes.first.meanings, ['away from', 'off']);
+      expect(res.morphemes.first.confidence, closeTo(0.85, 1e-6));
+    });
+
+    test('morpheme matches: malformed JSON falls back to empty meanings',
+        () async {
+      await db.into(db.wordMorphemeMatches).insert(
+            WordMorphemeMatchesCompanion.insert(
+              word: 'broken',
+              morpheme: 'ab-',
+              normalizedMorpheme: 'ab',
+              morphemeType: 'prefix',
+              position: 'prefix',
+              // Not valid JSON.
+              meaningsJson: 'this is not json',
+            ),
+          );
+      final res = await svc.getFor('broken');
+      expect(res.hasMorphemes, isTrue);
+      expect(res.morphemes.first.meanings, isEmpty);
+    });
+
     test('hasRelations is true with only synonyms or only antonyms', () async {
       await db.into(db.wordRelations).insert(WordRelationsCompanion.insert(
             word: 'only-syn',

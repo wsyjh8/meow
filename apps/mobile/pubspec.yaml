@@ -42,4 +42,4 @@ flutter:
     # tools/build_enrichment_seed.dart from docs/forms/*.jsonl. The
     # JSONL files are no longer bundled — bootstrap copies this seed
     # and INSERTs in <1s instead of JSON-parsing 18MB on device.
-    - assets/seed/enrichment_v1.db
+    - assets/seed/enrichment_v2.db

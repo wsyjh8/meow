@@ -38,9 +38,27 @@ void main() async {
   await wordbookLoader.loadIfNeeded('zk');
   await wordbookLoader.loadIfNeeded('gk');
 
-  runApp(const MeowApp());
+  // Need #11/#12 (Bug 1 follow-up) — bootstrap is now AWAITED, not
+  // fire-and-forget. The seed is a tiny, fast SQLite copy (~9 MB →
+  // ATTACH + INSERT-SELECT) and finishes in well under a second on
+  // real hardware. Awaiting guarantees the very first frame of
+  // StudyPage already has the 4 enrichment modules' data — users
+  // never have to manually trigger anything.
+  //
+  // We bound the wait at 5s with a timeout so a corrupted seed file
+  // can't lock the app at splash; on timeout we fall through to
+  // launching the UI and the catch-all inside ensurePopulated already
+  // logs the failure for diagnosis.
+  try {
+    await EnrichmentBootstrap(driftDb: appDb)
+        .ensurePopulated()
+        .timeout(const Duration(seconds: 5));
+  } on TimeoutException {
+    debugPrint('[main] enrichment bootstrap timed out after 5s — '
+        'launching UI anyway; check for slow disk / corrupt seed.');
+  } catch (e, st) {
+    debugPrint('[main] enrichment bootstrap threw: $e\n$st');
+  }
 
-  // Need #11 — non-blocking enrichment seed. Must happen AFTER runApp so
-  // the user sees the home page immediately rather than a 30-60s splash.
-  unawaited(EnrichmentBootstrap(driftDb: appDb).ensurePopulated());
+  runApp(const MeowApp());
 }

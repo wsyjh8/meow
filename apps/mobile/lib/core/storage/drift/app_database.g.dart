@@ -6616,6 +6616,959 @@ class WordPhrasesCompanion extends UpdateCompanion<WordPhrase> {
   }
 }
 
+class $MorphemeEntriesTable extends MorphemeEntries
+    with TableInfo<$MorphemeEntriesTable, MorphemeEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $MorphemeEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _morphemeMeta =
+      const VerificationMeta('morpheme');
+  @override
+  late final GeneratedColumn<String> morpheme = GeneratedColumn<String>(
+      'morpheme', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _normalizedMorphemeMeta =
+      const VerificationMeta('normalizedMorpheme');
+  @override
+  late final GeneratedColumn<String> normalizedMorpheme =
+      GeneratedColumn<String>('normalized_morpheme', aliasedName, false,
+          type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _morphemeTypeMeta =
+      const VerificationMeta('morphemeType');
+  @override
+  late final GeneratedColumn<String> morphemeType = GeneratedColumn<String>(
+      'morpheme_type', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _meaningsJsonMeta =
+      const VerificationMeta('meaningsJson');
+  @override
+  late final GeneratedColumn<String> meaningsJson = GeneratedColumn<String>(
+      'meanings_json', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _examplesJsonMeta =
+      const VerificationMeta('examplesJson');
+  @override
+  late final GeneratedColumn<String> examplesJson = GeneratedColumn<String>(
+      'examples_json', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+      'source', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _licenseMeta =
+      const VerificationMeta('license');
+  @override
+  late final GeneratedColumn<String> license = GeneratedColumn<String>(
+      'license', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        morpheme,
+        normalizedMorpheme,
+        morphemeType,
+        meaningsJson,
+        examplesJson,
+        source,
+        license
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'morpheme_entries';
+  @override
+  VerificationContext validateIntegrity(Insertable<MorphemeEntry> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('morpheme')) {
+      context.handle(_morphemeMeta,
+          morpheme.isAcceptableOrUnknown(data['morpheme']!, _morphemeMeta));
+    } else if (isInserting) {
+      context.missing(_morphemeMeta);
+    }
+    if (data.containsKey('normalized_morpheme')) {
+      context.handle(
+          _normalizedMorphemeMeta,
+          normalizedMorpheme.isAcceptableOrUnknown(
+              data['normalized_morpheme']!, _normalizedMorphemeMeta));
+    } else if (isInserting) {
+      context.missing(_normalizedMorphemeMeta);
+    }
+    if (data.containsKey('morpheme_type')) {
+      context.handle(
+          _morphemeTypeMeta,
+          morphemeType.isAcceptableOrUnknown(
+              data['morpheme_type']!, _morphemeTypeMeta));
+    } else if (isInserting) {
+      context.missing(_morphemeTypeMeta);
+    }
+    if (data.containsKey('meanings_json')) {
+      context.handle(
+          _meaningsJsonMeta,
+          meaningsJson.isAcceptableOrUnknown(
+              data['meanings_json']!, _meaningsJsonMeta));
+    } else if (isInserting) {
+      context.missing(_meaningsJsonMeta);
+    }
+    if (data.containsKey('examples_json')) {
+      context.handle(
+          _examplesJsonMeta,
+          examplesJson.isAcceptableOrUnknown(
+              data['examples_json']!, _examplesJsonMeta));
+    }
+    if (data.containsKey('source')) {
+      context.handle(_sourceMeta,
+          source.isAcceptableOrUnknown(data['source']!, _sourceMeta));
+    }
+    if (data.containsKey('license')) {
+      context.handle(_licenseMeta,
+          license.isAcceptableOrUnknown(data['license']!, _licenseMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  MorphemeEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return MorphemeEntry(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      morpheme: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}morpheme'])!,
+      normalizedMorpheme: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}normalized_morpheme'])!,
+      morphemeType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}morpheme_type'])!,
+      meaningsJson: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}meanings_json'])!,
+      examplesJson: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}examples_json']),
+      source: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}source']),
+      license: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}license']),
+    );
+  }
+
+  @override
+  $MorphemeEntriesTable createAlias(String alias) {
+    return $MorphemeEntriesTable(attachedDatabase, alias);
+  }
+}
+
+class MorphemeEntry extends DataClass implements Insertable<MorphemeEntry> {
+  final int id;
+  final String morpheme;
+  final String normalizedMorpheme;
+  final String morphemeType;
+  final String meaningsJson;
+  final String? examplesJson;
+  final String? source;
+  final String? license;
+  const MorphemeEntry(
+      {required this.id,
+      required this.morpheme,
+      required this.normalizedMorpheme,
+      required this.morphemeType,
+      required this.meaningsJson,
+      this.examplesJson,
+      this.source,
+      this.license});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['morpheme'] = Variable<String>(morpheme);
+    map['normalized_morpheme'] = Variable<String>(normalizedMorpheme);
+    map['morpheme_type'] = Variable<String>(morphemeType);
+    map['meanings_json'] = Variable<String>(meaningsJson);
+    if (!nullToAbsent || examplesJson != null) {
+      map['examples_json'] = Variable<String>(examplesJson);
+    }
+    if (!nullToAbsent || source != null) {
+      map['source'] = Variable<String>(source);
+    }
+    if (!nullToAbsent || license != null) {
+      map['license'] = Variable<String>(license);
+    }
+    return map;
+  }
+
+  MorphemeEntriesCompanion toCompanion(bool nullToAbsent) {
+    return MorphemeEntriesCompanion(
+      id: Value(id),
+      morpheme: Value(morpheme),
+      normalizedMorpheme: Value(normalizedMorpheme),
+      morphemeType: Value(morphemeType),
+      meaningsJson: Value(meaningsJson),
+      examplesJson: examplesJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(examplesJson),
+      source:
+          source == null && nullToAbsent ? const Value.absent() : Value(source),
+      license: license == null && nullToAbsent
+          ? const Value.absent()
+          : Value(license),
+    );
+  }
+
+  factory MorphemeEntry.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return MorphemeEntry(
+      id: serializer.fromJson<int>(json['id']),
+      morpheme: serializer.fromJson<String>(json['morpheme']),
+      normalizedMorpheme:
+          serializer.fromJson<String>(json['normalizedMorpheme']),
+      morphemeType: serializer.fromJson<String>(json['morphemeType']),
+      meaningsJson: serializer.fromJson<String>(json['meaningsJson']),
+      examplesJson: serializer.fromJson<String?>(json['examplesJson']),
+      source: serializer.fromJson<String?>(json['source']),
+      license: serializer.fromJson<String?>(json['license']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'morpheme': serializer.toJson<String>(morpheme),
+      'normalizedMorpheme': serializer.toJson<String>(normalizedMorpheme),
+      'morphemeType': serializer.toJson<String>(morphemeType),
+      'meaningsJson': serializer.toJson<String>(meaningsJson),
+      'examplesJson': serializer.toJson<String?>(examplesJson),
+      'source': serializer.toJson<String?>(source),
+      'license': serializer.toJson<String?>(license),
+    };
+  }
+
+  MorphemeEntry copyWith(
+          {int? id,
+          String? morpheme,
+          String? normalizedMorpheme,
+          String? morphemeType,
+          String? meaningsJson,
+          Value<String?> examplesJson = const Value.absent(),
+          Value<String?> source = const Value.absent(),
+          Value<String?> license = const Value.absent()}) =>
+      MorphemeEntry(
+        id: id ?? this.id,
+        morpheme: morpheme ?? this.morpheme,
+        normalizedMorpheme: normalizedMorpheme ?? this.normalizedMorpheme,
+        morphemeType: morphemeType ?? this.morphemeType,
+        meaningsJson: meaningsJson ?? this.meaningsJson,
+        examplesJson:
+            examplesJson.present ? examplesJson.value : this.examplesJson,
+        source: source.present ? source.value : this.source,
+        license: license.present ? license.value : this.license,
+      );
+  MorphemeEntry copyWithCompanion(MorphemeEntriesCompanion data) {
+    return MorphemeEntry(
+      id: data.id.present ? data.id.value : this.id,
+      morpheme: data.morpheme.present ? data.morpheme.value : this.morpheme,
+      normalizedMorpheme: data.normalizedMorpheme.present
+          ? data.normalizedMorpheme.value
+          : this.normalizedMorpheme,
+      morphemeType: data.morphemeType.present
+          ? data.morphemeType.value
+          : this.morphemeType,
+      meaningsJson: data.meaningsJson.present
+          ? data.meaningsJson.value
+          : this.meaningsJson,
+      examplesJson: data.examplesJson.present
+          ? data.examplesJson.value
+          : this.examplesJson,
+      source: data.source.present ? data.source.value : this.source,
+      license: data.license.present ? data.license.value : this.license,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MorphemeEntry(')
+          ..write('id: $id, ')
+          ..write('morpheme: $morpheme, ')
+          ..write('normalizedMorpheme: $normalizedMorpheme, ')
+          ..write('morphemeType: $morphemeType, ')
+          ..write('meaningsJson: $meaningsJson, ')
+          ..write('examplesJson: $examplesJson, ')
+          ..write('source: $source, ')
+          ..write('license: $license')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, morpheme, normalizedMorpheme,
+      morphemeType, meaningsJson, examplesJson, source, license);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is MorphemeEntry &&
+          other.id == this.id &&
+          other.morpheme == this.morpheme &&
+          other.normalizedMorpheme == this.normalizedMorpheme &&
+          other.morphemeType == this.morphemeType &&
+          other.meaningsJson == this.meaningsJson &&
+          other.examplesJson == this.examplesJson &&
+          other.source == this.source &&
+          other.license == this.license);
+}
+
+class MorphemeEntriesCompanion extends UpdateCompanion<MorphemeEntry> {
+  final Value<int> id;
+  final Value<String> morpheme;
+  final Value<String> normalizedMorpheme;
+  final Value<String> morphemeType;
+  final Value<String> meaningsJson;
+  final Value<String?> examplesJson;
+  final Value<String?> source;
+  final Value<String?> license;
+  const MorphemeEntriesCompanion({
+    this.id = const Value.absent(),
+    this.morpheme = const Value.absent(),
+    this.normalizedMorpheme = const Value.absent(),
+    this.morphemeType = const Value.absent(),
+    this.meaningsJson = const Value.absent(),
+    this.examplesJson = const Value.absent(),
+    this.source = const Value.absent(),
+    this.license = const Value.absent(),
+  });
+  MorphemeEntriesCompanion.insert({
+    this.id = const Value.absent(),
+    required String morpheme,
+    required String normalizedMorpheme,
+    required String morphemeType,
+    required String meaningsJson,
+    this.examplesJson = const Value.absent(),
+    this.source = const Value.absent(),
+    this.license = const Value.absent(),
+  })  : morpheme = Value(morpheme),
+        normalizedMorpheme = Value(normalizedMorpheme),
+        morphemeType = Value(morphemeType),
+        meaningsJson = Value(meaningsJson);
+  static Insertable<MorphemeEntry> custom({
+    Expression<int>? id,
+    Expression<String>? morpheme,
+    Expression<String>? normalizedMorpheme,
+    Expression<String>? morphemeType,
+    Expression<String>? meaningsJson,
+    Expression<String>? examplesJson,
+    Expression<String>? source,
+    Expression<String>? license,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (morpheme != null) 'morpheme': morpheme,
+      if (normalizedMorpheme != null) 'normalized_morpheme': normalizedMorpheme,
+      if (morphemeType != null) 'morpheme_type': morphemeType,
+      if (meaningsJson != null) 'meanings_json': meaningsJson,
+      if (examplesJson != null) 'examples_json': examplesJson,
+      if (source != null) 'source': source,
+      if (license != null) 'license': license,
+    });
+  }
+
+  MorphemeEntriesCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? morpheme,
+      Value<String>? normalizedMorpheme,
+      Value<String>? morphemeType,
+      Value<String>? meaningsJson,
+      Value<String?>? examplesJson,
+      Value<String?>? source,
+      Value<String?>? license}) {
+    return MorphemeEntriesCompanion(
+      id: id ?? this.id,
+      morpheme: morpheme ?? this.morpheme,
+      normalizedMorpheme: normalizedMorpheme ?? this.normalizedMorpheme,
+      morphemeType: morphemeType ?? this.morphemeType,
+      meaningsJson: meaningsJson ?? this.meaningsJson,
+      examplesJson: examplesJson ?? this.examplesJson,
+      source: source ?? this.source,
+      license: license ?? this.license,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (morpheme.present) {
+      map['morpheme'] = Variable<String>(morpheme.value);
+    }
+    if (normalizedMorpheme.present) {
+      map['normalized_morpheme'] = Variable<String>(normalizedMorpheme.value);
+    }
+    if (morphemeType.present) {
+      map['morpheme_type'] = Variable<String>(morphemeType.value);
+    }
+    if (meaningsJson.present) {
+      map['meanings_json'] = Variable<String>(meaningsJson.value);
+    }
+    if (examplesJson.present) {
+      map['examples_json'] = Variable<String>(examplesJson.value);
+    }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
+    if (license.present) {
+      map['license'] = Variable<String>(license.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MorphemeEntriesCompanion(')
+          ..write('id: $id, ')
+          ..write('morpheme: $morpheme, ')
+          ..write('normalizedMorpheme: $normalizedMorpheme, ')
+          ..write('morphemeType: $morphemeType, ')
+          ..write('meaningsJson: $meaningsJson, ')
+          ..write('examplesJson: $examplesJson, ')
+          ..write('source: $source, ')
+          ..write('license: $license')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $WordMorphemeMatchesTable extends WordMorphemeMatches
+    with TableInfo<$WordMorphemeMatchesTable, WordMorphemeMatche> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WordMorphemeMatchesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _wordMeta = const VerificationMeta('word');
+  @override
+  late final GeneratedColumn<String> word = GeneratedColumn<String>(
+      'word', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _morphemeMeta =
+      const VerificationMeta('morpheme');
+  @override
+  late final GeneratedColumn<String> morpheme = GeneratedColumn<String>(
+      'morpheme', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _normalizedMorphemeMeta =
+      const VerificationMeta('normalizedMorpheme');
+  @override
+  late final GeneratedColumn<String> normalizedMorpheme =
+      GeneratedColumn<String>('normalized_morpheme', aliasedName, false,
+          type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _morphemeTypeMeta =
+      const VerificationMeta('morphemeType');
+  @override
+  late final GeneratedColumn<String> morphemeType = GeneratedColumn<String>(
+      'morpheme_type', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _positionMeta =
+      const VerificationMeta('position');
+  @override
+  late final GeneratedColumn<String> position = GeneratedColumn<String>(
+      'position', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _meaningsJsonMeta =
+      const VerificationMeta('meaningsJson');
+  @override
+  late final GeneratedColumn<String> meaningsJson = GeneratedColumn<String>(
+      'meanings_json', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _matchMethodMeta =
+      const VerificationMeta('matchMethod');
+  @override
+  late final GeneratedColumn<String> matchMethod = GeneratedColumn<String>(
+      'match_method', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _confidenceMeta =
+      const VerificationMeta('confidence');
+  @override
+  late final GeneratedColumn<double> confidence = GeneratedColumn<double>(
+      'confidence', aliasedName, true,
+      type: DriftSqlType.double, requiredDuringInsert: false);
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+      'source', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        word,
+        morpheme,
+        normalizedMorpheme,
+        morphemeType,
+        position,
+        meaningsJson,
+        matchMethod,
+        confidence,
+        source
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'word_morpheme_matches';
+  @override
+  VerificationContext validateIntegrity(Insertable<WordMorphemeMatche> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('word')) {
+      context.handle(
+          _wordMeta, word.isAcceptableOrUnknown(data['word']!, _wordMeta));
+    } else if (isInserting) {
+      context.missing(_wordMeta);
+    }
+    if (data.containsKey('morpheme')) {
+      context.handle(_morphemeMeta,
+          morpheme.isAcceptableOrUnknown(data['morpheme']!, _morphemeMeta));
+    } else if (isInserting) {
+      context.missing(_morphemeMeta);
+    }
+    if (data.containsKey('normalized_morpheme')) {
+      context.handle(
+          _normalizedMorphemeMeta,
+          normalizedMorpheme.isAcceptableOrUnknown(
+              data['normalized_morpheme']!, _normalizedMorphemeMeta));
+    } else if (isInserting) {
+      context.missing(_normalizedMorphemeMeta);
+    }
+    if (data.containsKey('morpheme_type')) {
+      context.handle(
+          _morphemeTypeMeta,
+          morphemeType.isAcceptableOrUnknown(
+              data['morpheme_type']!, _morphemeTypeMeta));
+    } else if (isInserting) {
+      context.missing(_morphemeTypeMeta);
+    }
+    if (data.containsKey('position')) {
+      context.handle(_positionMeta,
+          position.isAcceptableOrUnknown(data['position']!, _positionMeta));
+    } else if (isInserting) {
+      context.missing(_positionMeta);
+    }
+    if (data.containsKey('meanings_json')) {
+      context.handle(
+          _meaningsJsonMeta,
+          meaningsJson.isAcceptableOrUnknown(
+              data['meanings_json']!, _meaningsJsonMeta));
+    } else if (isInserting) {
+      context.missing(_meaningsJsonMeta);
+    }
+    if (data.containsKey('match_method')) {
+      context.handle(
+          _matchMethodMeta,
+          matchMethod.isAcceptableOrUnknown(
+              data['match_method']!, _matchMethodMeta));
+    }
+    if (data.containsKey('confidence')) {
+      context.handle(
+          _confidenceMeta,
+          confidence.isAcceptableOrUnknown(
+              data['confidence']!, _confidenceMeta));
+    }
+    if (data.containsKey('source')) {
+      context.handle(_sourceMeta,
+          source.isAcceptableOrUnknown(data['source']!, _sourceMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  WordMorphemeMatche map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WordMorphemeMatche(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      word: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}word'])!,
+      morpheme: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}morpheme'])!,
+      normalizedMorpheme: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}normalized_morpheme'])!,
+      morphemeType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}morpheme_type'])!,
+      position: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}position'])!,
+      meaningsJson: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}meanings_json'])!,
+      matchMethod: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}match_method']),
+      confidence: attachedDatabase.typeMapping
+          .read(DriftSqlType.double, data['${effectivePrefix}confidence']),
+      source: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}source']),
+    );
+  }
+
+  @override
+  $WordMorphemeMatchesTable createAlias(String alias) {
+    return $WordMorphemeMatchesTable(attachedDatabase, alias);
+  }
+}
+
+class WordMorphemeMatche extends DataClass
+    implements Insertable<WordMorphemeMatche> {
+  final int id;
+  final String word;
+  final String morpheme;
+  final String normalizedMorpheme;
+  final String morphemeType;
+  final String position;
+  final String meaningsJson;
+  final String? matchMethod;
+  final double? confidence;
+  final String? source;
+  const WordMorphemeMatche(
+      {required this.id,
+      required this.word,
+      required this.morpheme,
+      required this.normalizedMorpheme,
+      required this.morphemeType,
+      required this.position,
+      required this.meaningsJson,
+      this.matchMethod,
+      this.confidence,
+      this.source});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['word'] = Variable<String>(word);
+    map['morpheme'] = Variable<String>(morpheme);
+    map['normalized_morpheme'] = Variable<String>(normalizedMorpheme);
+    map['morpheme_type'] = Variable<String>(morphemeType);
+    map['position'] = Variable<String>(position);
+    map['meanings_json'] = Variable<String>(meaningsJson);
+    if (!nullToAbsent || matchMethod != null) {
+      map['match_method'] = Variable<String>(matchMethod);
+    }
+    if (!nullToAbsent || confidence != null) {
+      map['confidence'] = Variable<double>(confidence);
+    }
+    if (!nullToAbsent || source != null) {
+      map['source'] = Variable<String>(source);
+    }
+    return map;
+  }
+
+  WordMorphemeMatchesCompanion toCompanion(bool nullToAbsent) {
+    return WordMorphemeMatchesCompanion(
+      id: Value(id),
+      word: Value(word),
+      morpheme: Value(morpheme),
+      normalizedMorpheme: Value(normalizedMorpheme),
+      morphemeType: Value(morphemeType),
+      position: Value(position),
+      meaningsJson: Value(meaningsJson),
+      matchMethod: matchMethod == null && nullToAbsent
+          ? const Value.absent()
+          : Value(matchMethod),
+      confidence: confidence == null && nullToAbsent
+          ? const Value.absent()
+          : Value(confidence),
+      source:
+          source == null && nullToAbsent ? const Value.absent() : Value(source),
+    );
+  }
+
+  factory WordMorphemeMatche.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WordMorphemeMatche(
+      id: serializer.fromJson<int>(json['id']),
+      word: serializer.fromJson<String>(json['word']),
+      morpheme: serializer.fromJson<String>(json['morpheme']),
+      normalizedMorpheme:
+          serializer.fromJson<String>(json['normalizedMorpheme']),
+      morphemeType: serializer.fromJson<String>(json['morphemeType']),
+      position: serializer.fromJson<String>(json['position']),
+      meaningsJson: serializer.fromJson<String>(json['meaningsJson']),
+      matchMethod: serializer.fromJson<String?>(json['matchMethod']),
+      confidence: serializer.fromJson<double?>(json['confidence']),
+      source: serializer.fromJson<String?>(json['source']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'word': serializer.toJson<String>(word),
+      'morpheme': serializer.toJson<String>(morpheme),
+      'normalizedMorpheme': serializer.toJson<String>(normalizedMorpheme),
+      'morphemeType': serializer.toJson<String>(morphemeType),
+      'position': serializer.toJson<String>(position),
+      'meaningsJson': serializer.toJson<String>(meaningsJson),
+      'matchMethod': serializer.toJson<String?>(matchMethod),
+      'confidence': serializer.toJson<double?>(confidence),
+      'source': serializer.toJson<String?>(source),
+    };
+  }
+
+  WordMorphemeMatche copyWith(
+          {int? id,
+          String? word,
+          String? morpheme,
+          String? normalizedMorpheme,
+          String? morphemeType,
+          String? position,
+          String? meaningsJson,
+          Value<String?> matchMethod = const Value.absent(),
+          Value<double?> confidence = const Value.absent(),
+          Value<String?> source = const Value.absent()}) =>
+      WordMorphemeMatche(
+        id: id ?? this.id,
+        word: word ?? this.word,
+        morpheme: morpheme ?? this.morpheme,
+        normalizedMorpheme: normalizedMorpheme ?? this.normalizedMorpheme,
+        morphemeType: morphemeType ?? this.morphemeType,
+        position: position ?? this.position,
+        meaningsJson: meaningsJson ?? this.meaningsJson,
+        matchMethod: matchMethod.present ? matchMethod.value : this.matchMethod,
+        confidence: confidence.present ? confidence.value : this.confidence,
+        source: source.present ? source.value : this.source,
+      );
+  WordMorphemeMatche copyWithCompanion(WordMorphemeMatchesCompanion data) {
+    return WordMorphemeMatche(
+      id: data.id.present ? data.id.value : this.id,
+      word: data.word.present ? data.word.value : this.word,
+      morpheme: data.morpheme.present ? data.morpheme.value : this.morpheme,
+      normalizedMorpheme: data.normalizedMorpheme.present
+          ? data.normalizedMorpheme.value
+          : this.normalizedMorpheme,
+      morphemeType: data.morphemeType.present
+          ? data.morphemeType.value
+          : this.morphemeType,
+      position: data.position.present ? data.position.value : this.position,
+      meaningsJson: data.meaningsJson.present
+          ? data.meaningsJson.value
+          : this.meaningsJson,
+      matchMethod:
+          data.matchMethod.present ? data.matchMethod.value : this.matchMethod,
+      confidence:
+          data.confidence.present ? data.confidence.value : this.confidence,
+      source: data.source.present ? data.source.value : this.source,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WordMorphemeMatche(')
+          ..write('id: $id, ')
+          ..write('word: $word, ')
+          ..write('morpheme: $morpheme, ')
+          ..write('normalizedMorpheme: $normalizedMorpheme, ')
+          ..write('morphemeType: $morphemeType, ')
+          ..write('position: $position, ')
+          ..write('meaningsJson: $meaningsJson, ')
+          ..write('matchMethod: $matchMethod, ')
+          ..write('confidence: $confidence, ')
+          ..write('source: $source')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, word, morpheme, normalizedMorpheme,
+      morphemeType, position, meaningsJson, matchMethod, confidence, source);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WordMorphemeMatche &&
+          other.id == this.id &&
+          other.word == this.word &&
+          other.morpheme == this.morpheme &&
+          other.normalizedMorpheme == this.normalizedMorpheme &&
+          other.morphemeType == this.morphemeType &&
+          other.position == this.position &&
+          other.meaningsJson == this.meaningsJson &&
+          other.matchMethod == this.matchMethod &&
+          other.confidence == this.confidence &&
+          other.source == this.source);
+}
+
+class WordMorphemeMatchesCompanion extends UpdateCompanion<WordMorphemeMatche> {
+  final Value<int> id;
+  final Value<String> word;
+  final Value<String> morpheme;
+  final Value<String> normalizedMorpheme;
+  final Value<String> morphemeType;
+  final Value<String> position;
+  final Value<String> meaningsJson;
+  final Value<String?> matchMethod;
+  final Value<double?> confidence;
+  final Value<String?> source;
+  const WordMorphemeMatchesCompanion({
+    this.id = const Value.absent(),
+    this.word = const Value.absent(),
+    this.morpheme = const Value.absent(),
+    this.normalizedMorpheme = const Value.absent(),
+    this.morphemeType = const Value.absent(),
+    this.position = const Value.absent(),
+    this.meaningsJson = const Value.absent(),
+    this.matchMethod = const Value.absent(),
+    this.confidence = const Value.absent(),
+    this.source = const Value.absent(),
+  });
+  WordMorphemeMatchesCompanion.insert({
+    this.id = const Value.absent(),
+    required String word,
+    required String morpheme,
+    required String normalizedMorpheme,
+    required String morphemeType,
+    required String position,
+    required String meaningsJson,
+    this.matchMethod = const Value.absent(),
+    this.confidence = const Value.absent(),
+    this.source = const Value.absent(),
+  })  : word = Value(word),
+        morpheme = Value(morpheme),
+        normalizedMorpheme = Value(normalizedMorpheme),
+        morphemeType = Value(morphemeType),
+        position = Value(position),
+        meaningsJson = Value(meaningsJson);
+  static Insertable<WordMorphemeMatche> custom({
+    Expression<int>? id,
+    Expression<String>? word,
+    Expression<String>? morpheme,
+    Expression<String>? normalizedMorpheme,
+    Expression<String>? morphemeType,
+    Expression<String>? position,
+    Expression<String>? meaningsJson,
+    Expression<String>? matchMethod,
+    Expression<double>? confidence,
+    Expression<String>? source,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (word != null) 'word': word,
+      if (morpheme != null) 'morpheme': morpheme,
+      if (normalizedMorpheme != null) 'normalized_morpheme': normalizedMorpheme,
+      if (morphemeType != null) 'morpheme_type': morphemeType,
+      if (position != null) 'position': position,
+      if (meaningsJson != null) 'meanings_json': meaningsJson,
+      if (matchMethod != null) 'match_method': matchMethod,
+      if (confidence != null) 'confidence': confidence,
+      if (source != null) 'source': source,
+    });
+  }
+
+  WordMorphemeMatchesCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? word,
+      Value<String>? morpheme,
+      Value<String>? normalizedMorpheme,
+      Value<String>? morphemeType,
+      Value<String>? position,
+      Value<String>? meaningsJson,
+      Value<String?>? matchMethod,
+      Value<double?>? confidence,
+      Value<String?>? source}) {
+    return WordMorphemeMatchesCompanion(
+      id: id ?? this.id,
+      word: word ?? this.word,
+      morpheme: morpheme ?? this.morpheme,
+      normalizedMorpheme: normalizedMorpheme ?? this.normalizedMorpheme,
+      morphemeType: morphemeType ?? this.morphemeType,
+      position: position ?? this.position,
+      meaningsJson: meaningsJson ?? this.meaningsJson,
+      matchMethod: matchMethod ?? this.matchMethod,
+      confidence: confidence ?? this.confidence,
+      source: source ?? this.source,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (word.present) {
+      map['word'] = Variable<String>(word.value);
+    }
+    if (morpheme.present) {
+      map['morpheme'] = Variable<String>(morpheme.value);
+    }
+    if (normalizedMorpheme.present) {
+      map['normalized_morpheme'] = Variable<String>(normalizedMorpheme.value);
+    }
+    if (morphemeType.present) {
+      map['morpheme_type'] = Variable<String>(morphemeType.value);
+    }
+    if (position.present) {
+      map['position'] = Variable<String>(position.value);
+    }
+    if (meaningsJson.present) {
+      map['meanings_json'] = Variable<String>(meaningsJson.value);
+    }
+    if (matchMethod.present) {
+      map['match_method'] = Variable<String>(matchMethod.value);
+    }
+    if (confidence.present) {
+      map['confidence'] = Variable<double>(confidence.value);
+    }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WordMorphemeMatchesCompanion(')
+          ..write('id: $id, ')
+          ..write('word: $word, ')
+          ..write('morpheme: $morpheme, ')
+          ..write('normalizedMorpheme: $normalizedMorpheme, ')
+          ..write('morphemeType: $morphemeType, ')
+          ..write('position: $position, ')
+          ..write('meaningsJson: $meaningsJson, ')
+          ..write('matchMethod: $matchMethod, ')
+          ..write('confidence: $confidence, ')
+          ..write('source: $source')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -6642,6 +7595,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $WordFormsTable wordForms = $WordFormsTable(this);
   late final $WordRelationsTable wordRelations = $WordRelationsTable(this);
   late final $WordPhrasesTable wordPhrases = $WordPhrasesTable(this);
+  late final $MorphemeEntriesTable morphemeEntries =
+      $MorphemeEntriesTable(this);
+  late final $WordMorphemeMatchesTable wordMorphemeMatches =
+      $WordMorphemeMatchesTable(this);
   late final Index idxCardStatesDue = Index('idx_card_states_due',
       'CREATE INDEX idx_card_states_due ON card_states (due)');
   late final Index idxCardStatesState = Index('idx_card_states_state',
@@ -6661,6 +7618,11 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       'CREATE INDEX idx_word_relations_word ON word_relations (word)');
   late final Index idxWordPhrasesWord = Index('idx_word_phrases_word',
       'CREATE INDEX idx_word_phrases_word ON word_phrases (word)');
+  late final Index idxMorphemeEntriesNorm = Index('idx_morpheme_entries_norm',
+      'CREATE INDEX idx_morpheme_entries_norm ON morpheme_entries (normalized_morpheme)');
+  late final Index idxWordMorphemeMatchesWord = Index(
+      'idx_word_morpheme_matches_word',
+      'CREATE INDEX idx_word_morpheme_matches_word ON word_morpheme_matches (word)');
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -6683,6 +7645,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         wordForms,
         wordRelations,
         wordPhrases,
+        morphemeEntries,
+        wordMorphemeMatches,
         idxCardStatesDue,
         idxCardStatesState,
         idxReviewLogsWordId,
@@ -6691,7 +7655,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         idxEsWordOrder,
         idxWordFormsWord,
         idxWordRelationsWord,
-        idxWordPhrasesWord
+        idxWordPhrasesWord,
+        idxMorphemeEntriesNorm,
+        idxWordMorphemeMatchesWord
       ];
 }
 
@@ -10222,6 +11188,475 @@ typedef $$WordPhrasesTableProcessedTableManager = ProcessedTableManager<
     (WordPhrase, BaseReferences<_$AppDatabase, $WordPhrasesTable, WordPhrase>),
     WordPhrase,
     PrefetchHooks Function()>;
+typedef $$MorphemeEntriesTableCreateCompanionBuilder = MorphemeEntriesCompanion
+    Function({
+  Value<int> id,
+  required String morpheme,
+  required String normalizedMorpheme,
+  required String morphemeType,
+  required String meaningsJson,
+  Value<String?> examplesJson,
+  Value<String?> source,
+  Value<String?> license,
+});
+typedef $$MorphemeEntriesTableUpdateCompanionBuilder = MorphemeEntriesCompanion
+    Function({
+  Value<int> id,
+  Value<String> morpheme,
+  Value<String> normalizedMorpheme,
+  Value<String> morphemeType,
+  Value<String> meaningsJson,
+  Value<String?> examplesJson,
+  Value<String?> source,
+  Value<String?> license,
+});
+
+class $$MorphemeEntriesTableFilterComposer
+    extends Composer<_$AppDatabase, $MorphemeEntriesTable> {
+  $$MorphemeEntriesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get morpheme => $composableBuilder(
+      column: $table.morpheme, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get normalizedMorpheme => $composableBuilder(
+      column: $table.normalizedMorpheme,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get morphemeType => $composableBuilder(
+      column: $table.morphemeType, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get meaningsJson => $composableBuilder(
+      column: $table.meaningsJson, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get examplesJson => $composableBuilder(
+      column: $table.examplesJson, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get license => $composableBuilder(
+      column: $table.license, builder: (column) => ColumnFilters(column));
+}
+
+class $$MorphemeEntriesTableOrderingComposer
+    extends Composer<_$AppDatabase, $MorphemeEntriesTable> {
+  $$MorphemeEntriesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get morpheme => $composableBuilder(
+      column: $table.morpheme, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get normalizedMorpheme => $composableBuilder(
+      column: $table.normalizedMorpheme,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get morphemeType => $composableBuilder(
+      column: $table.morphemeType,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get meaningsJson => $composableBuilder(
+      column: $table.meaningsJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get examplesJson => $composableBuilder(
+      column: $table.examplesJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get license => $composableBuilder(
+      column: $table.license, builder: (column) => ColumnOrderings(column));
+}
+
+class $$MorphemeEntriesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $MorphemeEntriesTable> {
+  $$MorphemeEntriesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get morpheme =>
+      $composableBuilder(column: $table.morpheme, builder: (column) => column);
+
+  GeneratedColumn<String> get normalizedMorpheme => $composableBuilder(
+      column: $table.normalizedMorpheme, builder: (column) => column);
+
+  GeneratedColumn<String> get morphemeType => $composableBuilder(
+      column: $table.morphemeType, builder: (column) => column);
+
+  GeneratedColumn<String> get meaningsJson => $composableBuilder(
+      column: $table.meaningsJson, builder: (column) => column);
+
+  GeneratedColumn<String> get examplesJson => $composableBuilder(
+      column: $table.examplesJson, builder: (column) => column);
+
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+
+  GeneratedColumn<String> get license =>
+      $composableBuilder(column: $table.license, builder: (column) => column);
+}
+
+class $$MorphemeEntriesTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $MorphemeEntriesTable,
+    MorphemeEntry,
+    $$MorphemeEntriesTableFilterComposer,
+    $$MorphemeEntriesTableOrderingComposer,
+    $$MorphemeEntriesTableAnnotationComposer,
+    $$MorphemeEntriesTableCreateCompanionBuilder,
+    $$MorphemeEntriesTableUpdateCompanionBuilder,
+    (
+      MorphemeEntry,
+      BaseReferences<_$AppDatabase, $MorphemeEntriesTable, MorphemeEntry>
+    ),
+    MorphemeEntry,
+    PrefetchHooks Function()> {
+  $$MorphemeEntriesTableTableManager(
+      _$AppDatabase db, $MorphemeEntriesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$MorphemeEntriesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$MorphemeEntriesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$MorphemeEntriesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> morpheme = const Value.absent(),
+            Value<String> normalizedMorpheme = const Value.absent(),
+            Value<String> morphemeType = const Value.absent(),
+            Value<String> meaningsJson = const Value.absent(),
+            Value<String?> examplesJson = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+            Value<String?> license = const Value.absent(),
+          }) =>
+              MorphemeEntriesCompanion(
+            id: id,
+            morpheme: morpheme,
+            normalizedMorpheme: normalizedMorpheme,
+            morphemeType: morphemeType,
+            meaningsJson: meaningsJson,
+            examplesJson: examplesJson,
+            source: source,
+            license: license,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String morpheme,
+            required String normalizedMorpheme,
+            required String morphemeType,
+            required String meaningsJson,
+            Value<String?> examplesJson = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+            Value<String?> license = const Value.absent(),
+          }) =>
+              MorphemeEntriesCompanion.insert(
+            id: id,
+            morpheme: morpheme,
+            normalizedMorpheme: normalizedMorpheme,
+            morphemeType: morphemeType,
+            meaningsJson: meaningsJson,
+            examplesJson: examplesJson,
+            source: source,
+            license: license,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$MorphemeEntriesTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $MorphemeEntriesTable,
+    MorphemeEntry,
+    $$MorphemeEntriesTableFilterComposer,
+    $$MorphemeEntriesTableOrderingComposer,
+    $$MorphemeEntriesTableAnnotationComposer,
+    $$MorphemeEntriesTableCreateCompanionBuilder,
+    $$MorphemeEntriesTableUpdateCompanionBuilder,
+    (
+      MorphemeEntry,
+      BaseReferences<_$AppDatabase, $MorphemeEntriesTable, MorphemeEntry>
+    ),
+    MorphemeEntry,
+    PrefetchHooks Function()>;
+typedef $$WordMorphemeMatchesTableCreateCompanionBuilder
+    = WordMorphemeMatchesCompanion Function({
+  Value<int> id,
+  required String word,
+  required String morpheme,
+  required String normalizedMorpheme,
+  required String morphemeType,
+  required String position,
+  required String meaningsJson,
+  Value<String?> matchMethod,
+  Value<double?> confidence,
+  Value<String?> source,
+});
+typedef $$WordMorphemeMatchesTableUpdateCompanionBuilder
+    = WordMorphemeMatchesCompanion Function({
+  Value<int> id,
+  Value<String> word,
+  Value<String> morpheme,
+  Value<String> normalizedMorpheme,
+  Value<String> morphemeType,
+  Value<String> position,
+  Value<String> meaningsJson,
+  Value<String?> matchMethod,
+  Value<double?> confidence,
+  Value<String?> source,
+});
+
+class $$WordMorphemeMatchesTableFilterComposer
+    extends Composer<_$AppDatabase, $WordMorphemeMatchesTable> {
+  $$WordMorphemeMatchesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get word => $composableBuilder(
+      column: $table.word, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get morpheme => $composableBuilder(
+      column: $table.morpheme, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get normalizedMorpheme => $composableBuilder(
+      column: $table.normalizedMorpheme,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get morphemeType => $composableBuilder(
+      column: $table.morphemeType, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get position => $composableBuilder(
+      column: $table.position, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get meaningsJson => $composableBuilder(
+      column: $table.meaningsJson, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get matchMethod => $composableBuilder(
+      column: $table.matchMethod, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<double> get confidence => $composableBuilder(
+      column: $table.confidence, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnFilters(column));
+}
+
+class $$WordMorphemeMatchesTableOrderingComposer
+    extends Composer<_$AppDatabase, $WordMorphemeMatchesTable> {
+  $$WordMorphemeMatchesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get word => $composableBuilder(
+      column: $table.word, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get morpheme => $composableBuilder(
+      column: $table.morpheme, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get normalizedMorpheme => $composableBuilder(
+      column: $table.normalizedMorpheme,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get morphemeType => $composableBuilder(
+      column: $table.morphemeType,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get position => $composableBuilder(
+      column: $table.position, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get meaningsJson => $composableBuilder(
+      column: $table.meaningsJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get matchMethod => $composableBuilder(
+      column: $table.matchMethod, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<double> get confidence => $composableBuilder(
+      column: $table.confidence, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnOrderings(column));
+}
+
+class $$WordMorphemeMatchesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $WordMorphemeMatchesTable> {
+  $$WordMorphemeMatchesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get word =>
+      $composableBuilder(column: $table.word, builder: (column) => column);
+
+  GeneratedColumn<String> get morpheme =>
+      $composableBuilder(column: $table.morpheme, builder: (column) => column);
+
+  GeneratedColumn<String> get normalizedMorpheme => $composableBuilder(
+      column: $table.normalizedMorpheme, builder: (column) => column);
+
+  GeneratedColumn<String> get morphemeType => $composableBuilder(
+      column: $table.morphemeType, builder: (column) => column);
+
+  GeneratedColumn<String> get position =>
+      $composableBuilder(column: $table.position, builder: (column) => column);
+
+  GeneratedColumn<String> get meaningsJson => $composableBuilder(
+      column: $table.meaningsJson, builder: (column) => column);
+
+  GeneratedColumn<String> get matchMethod => $composableBuilder(
+      column: $table.matchMethod, builder: (column) => column);
+
+  GeneratedColumn<double> get confidence => $composableBuilder(
+      column: $table.confidence, builder: (column) => column);
+
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+}
+
+class $$WordMorphemeMatchesTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $WordMorphemeMatchesTable,
+    WordMorphemeMatche,
+    $$WordMorphemeMatchesTableFilterComposer,
+    $$WordMorphemeMatchesTableOrderingComposer,
+    $$WordMorphemeMatchesTableAnnotationComposer,
+    $$WordMorphemeMatchesTableCreateCompanionBuilder,
+    $$WordMorphemeMatchesTableUpdateCompanionBuilder,
+    (
+      WordMorphemeMatche,
+      BaseReferences<_$AppDatabase, $WordMorphemeMatchesTable,
+          WordMorphemeMatche>
+    ),
+    WordMorphemeMatche,
+    PrefetchHooks Function()> {
+  $$WordMorphemeMatchesTableTableManager(
+      _$AppDatabase db, $WordMorphemeMatchesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WordMorphemeMatchesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WordMorphemeMatchesTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WordMorphemeMatchesTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> word = const Value.absent(),
+            Value<String> morpheme = const Value.absent(),
+            Value<String> normalizedMorpheme = const Value.absent(),
+            Value<String> morphemeType = const Value.absent(),
+            Value<String> position = const Value.absent(),
+            Value<String> meaningsJson = const Value.absent(),
+            Value<String?> matchMethod = const Value.absent(),
+            Value<double?> confidence = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+          }) =>
+              WordMorphemeMatchesCompanion(
+            id: id,
+            word: word,
+            morpheme: morpheme,
+            normalizedMorpheme: normalizedMorpheme,
+            morphemeType: morphemeType,
+            position: position,
+            meaningsJson: meaningsJson,
+            matchMethod: matchMethod,
+            confidence: confidence,
+            source: source,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String word,
+            required String morpheme,
+            required String normalizedMorpheme,
+            required String morphemeType,
+            required String position,
+            required String meaningsJson,
+            Value<String?> matchMethod = const Value.absent(),
+            Value<double?> confidence = const Value.absent(),
+            Value<String?> source = const Value.absent(),
+          }) =>
+              WordMorphemeMatchesCompanion.insert(
+            id: id,
+            word: word,
+            morpheme: morpheme,
+            normalizedMorpheme: normalizedMorpheme,
+            morphemeType: morphemeType,
+            position: position,
+            meaningsJson: meaningsJson,
+            matchMethod: matchMethod,
+            confidence: confidence,
+            source: source,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$WordMorphemeMatchesTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $WordMorphemeMatchesTable,
+    WordMorphemeMatche,
+    $$WordMorphemeMatchesTableFilterComposer,
+    $$WordMorphemeMatchesTableOrderingComposer,
+    $$WordMorphemeMatchesTableAnnotationComposer,
+    $$WordMorphemeMatchesTableCreateCompanionBuilder,
+    $$WordMorphemeMatchesTableUpdateCompanionBuilder,
+    (
+      WordMorphemeMatche,
+      BaseReferences<_$AppDatabase, $WordMorphemeMatchesTable,
+          WordMorphemeMatche>
+    ),
+    WordMorphemeMatche,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -10260,4 +11695,8 @@ class $AppDatabaseManager {
       $$WordRelationsTableTableManager(_db, _db.wordRelations);
   $$WordPhrasesTableTableManager get wordPhrases =>
       $$WordPhrasesTableTableManager(_db, _db.wordPhrases);
+  $$MorphemeEntriesTableTableManager get morphemeEntries =>
+      $$MorphemeEntriesTableTableManager(_db, _db.morphemeEntries);
+  $$WordMorphemeMatchesTableTableManager get wordMorphemeMatches =>
+      $$WordMorphemeMatchesTableTableManager(_db, _db.wordMorphemeMatches);
 }
