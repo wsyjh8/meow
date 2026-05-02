@@ -80,8 +80,18 @@ class ReviewButtonsSection extends StatelessWidget {
               );
             }).toList(),
           ),
-          if (previewDurations != null)
-            const Padding(
+          // Need #16 — always reserve disclaimer space so the rating row
+          // doesn't shift between cards while previewDurations toggles
+          // null↔value (cleared synchronously on tap, repopulated async
+          // by FsrsService.previewSchedule). Visibility(maintainSize)
+          // keeps the layout stable; the P3.3.4 text contract is
+          // unchanged — only its visibility is gated.
+          Visibility(
+            visible: previewDurations != null,
+            maintainSize: true,
+            maintainAnimation: true,
+            maintainState: true,
+            child: const Padding(
               padding: EdgeInsets.only(top: 4),
               child: Text(
                 '预计间隔（仅供参考）',
@@ -89,6 +99,7 @@ class ReviewButtonsSection extends StatelessWidget {
                 style: TextStyle(fontSize: 10, color: Color(0xFFAAAAAA)),
               ),
             ),
+          ),
         ],
       ),
     );
