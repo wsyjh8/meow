@@ -2,6 +2,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/router/app_router.dart';
+import '../../features/room_canvas/data/room_item_visuals.dart';
 import '../../spec/theme/tokens.dart';
 import '../../spec/widgets/spec_back_to_study_chip.dart';
 
@@ -48,23 +50,13 @@ class _RoomPageState extends State<RoomPage>
     'floor': '地板',
   };
 
-  // 房间物品 emoji 映射
-  static const _itemEmoji = <String, String>{
-    'room_lamp_warm':    '💡',
-    'room_rug_soft':     '🟫',
-    'room_plant_small':  '🌿',
-    'room_cushion_cloud':'☁️',
-  };
+  // 房间物品 emoji 映射 — 与 RoomCanvasPage 共享
+  static const _itemEmoji = RoomItemVisuals.emoji;
 
-  // 房间装饰图层（emoji 场景）
-  static const _roomDecorEmoji = <String, String>{
-    'room_lamp_warm':    '💡',
-    'room_plant_small':  '🌿',
-  };
-  static const _roomFloorEmoji = <String, String>{
-    'room_rug_soft':     '🟫',
-    'room_cushion_cloud':'☁️',
-  };
+  // 装饰槽（顶部）允许的物品
+  static const _decorSlotItems = {'room_lamp_warm', 'room_plant_small'};
+  // 地板槽（底部）允许的物品
+  static const _floorSlotItems = {'room_rug_soft', 'room_cushion_cloud'};
 
   @override
   void initState() {
@@ -365,8 +357,12 @@ class _RoomPageState extends State<RoomPage>
   Widget _buildRoomPreview() {
     final decorId  = _getEquippedInSlot('decor');
     final floorId  = _getEquippedInSlot('floor');
-    final decorEmoji = decorId != null ? (_roomDecorEmoji[decorId] ?? '✨') : null;
-    final floorEmoji = floorId != null ? (_roomFloorEmoji[floorId] ?? '🟫') : null;
+    final decorEmoji = decorId != null && _decorSlotItems.contains(decorId)
+        ? RoomItemVisuals.emojiFor(decorId)
+        : (decorId != null ? '✨' : null);
+    final floorEmoji = floorId != null && _floorSlotItems.contains(floorId)
+        ? RoomItemVisuals.emojiFor(floorId)
+        : (floorId != null ? '🟫' : null);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: SpecSpacing.pageH),
@@ -460,12 +456,36 @@ class _RoomPageState extends State<RoomPage>
             if (decorId == null && floorId == null)
               const Positioned(
                 bottom: 12,
-                right: 14,
+                left: 14,
                 child: Text(
                   '小窝还空空的喵~',
                   style: TextStyle(fontSize: SpecTypo.sizeTiny, color: SpecText.tertiary),
                 ),
               ),
+
+            // 进入布置画布入口
+            Positioned(
+              bottom: 10,
+              right: 12,
+              child: GestureDetector(
+                onTap: () => Navigator.pushNamed(context, AppRouter.roomCanvas),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9A825),
+                    borderRadius: SpecRadius.pillRadius,
+                  ),
+                  child: const Text(
+                    '进入布置 →',
+                    style: TextStyle(
+                      fontSize: SpecTypo.sizeTiny,
+                      fontWeight: SpecTypo.medium,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),

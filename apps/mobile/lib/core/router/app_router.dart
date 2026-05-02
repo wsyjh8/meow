@@ -13,6 +13,7 @@ import '../../spec/pages/books_page.dart';
 import '../../spec/pages/fishing_page.dart';
 import '../../spec/pages/lottery_gate_page.dart';
 import '../../spec/pages/room_page.dart';
+import '../../spec/pages/room_canvas_page.dart';
 
 class AppRouter {
   static const String today = '/';
@@ -27,6 +28,7 @@ class AppRouter {
   static const String settings = '/settings';
   static const String books = '/books';
   static const String room = '/room';
+  static const String roomCanvas = '/room/canvas';
   // Phase D
   static const String fishing = '/fishing';
   static const String lottery = '/lottery';
@@ -57,6 +59,8 @@ class AppRouter {
         return _buildPage(const BooksPage(), settings);
       case room:
         return _buildPage(const RoomPage(), settings);
+      case roomCanvas:
+        return _buildPage(const RoomCanvasPage(), settings);
       case fishing:
         return _buildPage(const FishingPage(), settings);
       case lottery:
