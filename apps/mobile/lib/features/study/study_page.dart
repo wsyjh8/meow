@@ -612,97 +612,75 @@ class _StudyPageState extends State<StudyPage> {
             ],
           ),
 
-          // ── Translation lines (full breakdown) ───────────────────────────
-          if (lines.isNotEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10),
-              child: Divider(
-                color: Color(0xFFF4EFE5),
-                thickness: 0.5,
-                height: 1,
-              ),
-            ),
-            ...lines.map(
-              (line) => Padding(
-                padding: const EdgeInsets.only(bottom: 5),
-                child: Text(
-                  line,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: _kTextMedium,
-                    height: 1.45,
-                  ),
-                ),
-              ),
-            ),
-          ],
-
-          // ── Example sentences (v3 content enhancement) ───────────────────
-          if (word.examples != null && word.examples!.isNotEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.only(top: 10, bottom: 8),
-              child: Divider(
-                color: Color(0xFFF4EFE5),
-                thickness: 0.5,
-                height: 1,
-              ),
-            ),
-            _buildExamplesSection(word.examples!),
-          ],
-
-          // ── Need #11: optional enrichment modules ────────────────────────
-          // Each module is independently visible. When _enrichment is null
-          // (still loading) or empty, nothing renders — no titles, no spacers.
-          if (_enrichment != null && !_enrichment!.isEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.only(top: 10, bottom: 8),
-              child: Divider(
-                color: Color(0xFFF4EFE5),
-                thickness: 0.5,
-                height: 1,
-              ),
-            ),
-            _buildEnrichmentSection(_enrichment!),
-          ],
+          // ── Independent content modules ──────────────────────────────────
+          // Each section (释义 / 例句 / 其他形式 / 近反义词 / 常见词组) is
+          // its own visually-distinct block. Empty sections are skipped
+          // entirely — no title, no spacer. Between two visible modules
+          // there is always a 16px gap; before the first one there is
+          // a 14px gap from the primary meaning row above.
+          ..._buildContentModules(word, lines),
         ],
       ),
     );
   }
 
-  // ── Need #11: enrichment modules ──────────────────────────────────────────
+  /// Need #11 — Build the ordered list of content modules below the
+  /// primary meaning row. Each module is fully self-contained (title +
+  /// body) and only emitted when its data is non-empty.
+  List<Widget> _buildContentModules(Word word, List<String> lines) {
+    final modules = <Widget>[];
 
-  Widget _buildEnrichmentSection(WordEnrichment e) {
-    final blocks = <Widget>[];
-    if (e.hasForms) {
-      blocks.add(_buildEnrichmentBlock(
-        title: '其他形式',
-        child: _formsBody(e.forms),
+    if (lines.isNotEmpty) {
+      modules.add(_buildSection(
+        title: '释义',
+        body: _translationBody(lines),
       ));
     }
-    if (e.hasRelations) {
-      blocks.add(_buildEnrichmentBlock(
-        title: '近反义词',
-        child: _relationsBody(e.synonyms, e.antonyms),
+    if (word.examples != null && word.examples!.isNotEmpty) {
+      modules.add(_buildSection(
+        title: '例句',
+        body: _examplesBody(word.examples!),
       ));
     }
-    if (e.hasPhrases) {
-      blocks.add(_buildEnrichmentBlock(
-        title: '常见词组',
-        child: _phrasesBody(e.phrases),
-      ));
+    final e = _enrichment;
+    if (e != null) {
+      if (e.hasForms) {
+        modules.add(_buildSection(
+          title: '其他形式',
+          body: _formsBody(e.forms),
+        ));
+      }
+      if (e.hasRelations) {
+        modules.add(_buildSection(
+          title: '近反义词',
+          body: _relationsBody(e.synonyms, e.antonyms),
+        ));
+      }
+      if (e.hasPhrases) {
+        modules.add(_buildSection(
+          title: '常见词组',
+          body: _phrasesBody(e.phrases),
+        ));
+      }
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (var i = 0; i < blocks.length; i++) ...[
-          if (i > 0) const SizedBox(height: 10),
-          blocks[i],
-        ],
-      ],
-    );
+
+    if (modules.isEmpty) return const [];
+
+    // Inject vertical spacing: 14 above the first module (lifts it off
+    // the meaning row), 16 between every pair after that.
+    final out = <Widget>[const SizedBox(height: 14)];
+    for (var i = 0; i < modules.length; i++) {
+      if (i > 0) out.add(const SizedBox(height: 16));
+      out.add(modules[i]);
+    }
+    return out;
   }
 
-  Widget _buildEnrichmentBlock({required String title, required Widget child}) {
+  /// Generic titled-block container shared by every content module.
+  /// Title styling is intentionally small + gray + tracked so it reads
+  /// as a quiet section label, not as a heading that competes with the
+  /// primary meaning row.
+  Widget _buildSection({required String title, required Widget body}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -716,10 +694,71 @@ class _StudyPageState extends State<StudyPage> {
           ),
         ),
         const SizedBox(height: 6),
-        child,
+        body,
       ],
     );
   }
+
+  Widget _translationBody(List<String> lines) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final line in lines)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              line,
+              style: const TextStyle(
+                fontSize: 12,
+                color: _kTextMedium,
+                height: 1.45,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _examplesBody(List<WordExample> examples) {
+    final shown = examples.take(2).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < shown.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          Builder(builder: (_) {
+            final ex = shown[i];
+            final enPlain = ex.en.replaceAll(RegExp(r'\[|\]'), '');
+            final cnPlain = ex.cn.replaceAll(RegExp(r'\[|\]'), '');
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  enPlain,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: _kTextDark,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  cnPlain,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: _kTextGray,
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            );
+          }),
+        ],
+      ],
+    );
+  }
+
+  // ── Need #11: enrichment body widgets (titles handled by _buildSection) ──
 
   static const Map<String, String> _kFormTypeLabel = {
     'past': '过去式',
@@ -800,57 +839,6 @@ class _StudyPageState extends State<StudyPage> {
           ),
         );
       }).toList(),
-    );
-  }
-
-  // ── Example sentences section ─────────────────────────────────────────────
-
-  Widget _buildExamplesSection(List<WordExample> examples) {
-    // Show up to 2 examples; strip [bracket] markers for clean plain display.
-    final shown = examples.take(2).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          '例句',
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w500,
-            color: _kTextGray,
-            letterSpacing: 0.4,
-          ),
-        ),
-        const SizedBox(height: 6),
-        ...shown.map((ex) {
-          final enPlain = ex.en.replaceAll(RegExp(r'\[|\]'), '');
-          final cnPlain = ex.cn.replaceAll(RegExp(r'\[|\]'), '');
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  enPlain,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: _kTextDark,
-                    height: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  cnPlain,
-                  style: const TextStyle(
-                    fontSize: 10,
-                    color: _kTextGray,
-                    height: 1.45,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }),
-      ],
     );
   }
 

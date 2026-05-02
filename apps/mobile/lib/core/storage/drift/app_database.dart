@@ -324,6 +324,11 @@ class AppDatabase extends _$AppDatabase {
 
   /// Return up to [limit] example sentences for [wordId] from [example_sentences],
   /// ordered by sort_order ASC.
+  ///
+  /// Legacy (pre Need #11 follow-up): example_sentences is keyed on the
+  /// per-wordbook word_id — so CET-4 'ability' (cet4-…) does NOT see ZK
+  /// 'ability' (zk-…) examples. Prefer [getExamplesForWordText] in new
+  /// callers; this method stays for backward compatibility.
   Future<List<ExampleSentence>> getExamplesForWord(
     String wordId, {
     int limit = 3,
@@ -333,6 +338,37 @@ class AppDatabase extends _$AppDatabase {
       'ORDER BY sort_order ASC LIMIT $limit',
       variables: [Variable.withString(wordId)],
       readsFrom: {exampleSentences},
+    ).get();
+    return rows
+        .map((r) => ExampleSentence(
+              id: r.read<int>('id'),
+              wordId: r.read<String>('word_id'),
+              sense: r.read<String>('sense'),
+              en: r.read<String>('en'),
+              cn: r.read<String>('cn'),
+              sortOrder: r.read<int>('sort_order'),
+            ))
+        .toList();
+  }
+
+  /// Return up to [limit] example sentences for any word whose lowercased
+  /// `word_text` matches [wordText]. Joins through `word_entries` so the
+  /// same English word in different books (CET-4 / ZK / GK) shares one
+  /// example pool — same approach Need #11 used for forms / relations /
+  /// phrases. `LOWER(?)` keeps the comparison case-insensitive.
+  Future<List<ExampleSentence>> getExamplesForWordText(
+    String wordText, {
+    int limit = 3,
+  }) async {
+    final key = wordText.trim().toLowerCase();
+    if (key.isEmpty) return const [];
+    final rows = await customSelect(
+      'SELECT es.* FROM example_sentences es '
+      'JOIN word_entries we ON we.word_id = es.word_id '
+      'WHERE LOWER(we.word_text) = ? '
+      'ORDER BY es.sort_order ASC LIMIT $limit',
+      variables: [Variable.withString(key)],
+      readsFrom: {exampleSentences, wordEntries},
     ).get();
     return rows
         .map((r) => ExampleSentence(

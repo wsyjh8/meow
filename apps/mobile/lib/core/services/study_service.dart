@@ -109,10 +109,19 @@ class StudyService {
     }
 
     // 3. Attach examples (both paths — best-effort, silently ignored on failure)
+    //
+    // Need #11 follow-up: lookup is by word_text rather than word_id, so
+    // CET-4 'ability' inherits ZK / GK example sentences for the same
+    // English word. Falls back to the legacy word_id query when nothing
+    // is found via word_text (covers the unusual case where a word has
+    // examples bound only to its specific book id).
     if (word != null) {
       try {
-        final exRows =
-            await _driftDb.getExamplesForWord(word.wordId, limit: 3);
+        var exRows =
+            await _driftDb.getExamplesForWordText(word.wordText, limit: 3);
+        if (exRows.isEmpty) {
+          exRows = await _driftDb.getExamplesForWord(word.wordId, limit: 3);
+        }
         if (exRows.isNotEmpty) {
           word = _withExamples(word, exRows);
         }
