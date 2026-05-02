@@ -17,27 +17,15 @@ import '../../core/services/word_enrichment_service.dart';
 import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_database.dart';
 import '../../core/storage/local_settings_service.dart';
-
-// ── Design tokens (local to this file) ──────────────────────────────────────
-const _kBg = Color(0xFFF5F1EA);
-const _kCardBg = Color(0xFFFFFFFF);
-const _kPurple = Color(0xFF6B4FA8);
-const _kSoftPurpleBg = Color(0xFFF2EFFA);
-const _kPurpleBorder = Color(0xFFB8A8D4);
-const _kOrangeBg = Color(0xFFFAECE7);
-const _kOrangeBorder = Color(0xFFF0D4C0);
-const _kOrangeText = Color(0xFFA68872);
-const _kNeutralBg = Color(0xFFFDFBF7);
-const _kNeutralBorder = Color(0xFFE8E2D8);
-const _kNeutralText = Color(0xFF5C554C);
-const _kTextDark = Color(0xFF2C2C2A);
-const _kTextGray = Color(0xFF9C948A);
-const _kTextMedium = Color(0xFF5C554C);
-const _kBorderColor = Color(0xFFEFEBE4);
-const _kProgressBg = Color(0xFFEFEBE4);
-const _kGreenBg = Color(0xFFE8F2ED);
-const _kGreenText = Color(0xFF3F7A5F);
-const _kBarBg = Color(0xFFB8B0A4);
+import 'widgets/example_sentence_section.dart';
+import 'widgets/meaning_section.dart';
+import 'widgets/review_buttons_section.dart';
+import 'widgets/study_tokens.dart';
+import 'widgets/word_forms_section.dart';
+import 'widgets/word_header_section.dart';
+import 'widgets/word_morphemes_section.dart';
+import 'widgets/word_phrases_section.dart';
+import 'widgets/word_relations_section.dart';
 
 /// StudyPage — 新词学习 (SQLite-first)
 ///
@@ -97,11 +85,17 @@ class _StudyPageState extends State<StudyPage> {
   // _requeuedWords: words pending re-show, ordered by insertion time.
   //   Each entry carries a counter; the word is shown again once enough
   //   other cards have been displayed.
-  // _requeuedOnceIds: tracks words that have already been requeued once
-  //   so a second "forgot" rating simply moves on (no infinite loop).
+  //
+  // Bug 2 follow-up: there used to be a `_requeuedOnceIds` set that
+  // capped a card to a single requeue cycle — second 不认识 would
+  // bypass the requeue and end the card. This caused the completion
+  // screen to fire after roughly 2N taps even if the user mastered
+  // zero. New behaviour: forgot ALWAYS requeues. The done gate moved
+  // from "_todayServedIds full + queue empty" to "_todayCompleted ≥
+  // _dailyGoal" so the user can only finish the day by mastering N
+  // cards (i.e. N taps of 认识/熟悉), not by tapping 不认识 enough times.
   final Set<String> _sessionSeenIds = {};
   final List<_RequeueEntry> _requeuedWords = [];
-  final Set<String> _requeuedOnceIds = {};
 
   // ── Today progress ─────────────────────────────────────────────────────────
   /// Number of new words mastered today (cumulative across sessions).
@@ -211,11 +205,25 @@ class _StudyPageState extends State<StudyPage> {
   Future<void> _loadNextWord() async {
     setState(() { _isLoading = true; _error = null; });
 
-    // Daily goal enforcement (Bug 4): stop serving new words once we've
-    // shown _dailyGoal unique new word_ids today, regardless of whether
-    // the user rated them know or forgot. Pending requeue cards still
-    // play out — the user already saw them, requeues only re-show
-    // members of the served set.
+    // ── "Today is done" gate (Bug 2 follow-up: mastered, not served) ──
+    // Mastered count reaching the daily goal = today is complete.
+    // Whether the requeue still holds cards or not is irrelevant —
+    // the user has internalised _dailyGoal new words today.
+    if (_todayCompleted >= _dailyGoal) {
+      if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
+      return;
+    }
+
+    // ── "Don't pull more new words" cap (Bug 4 — kept) ──
+    // Even though completion is now driven by mastered count, we still
+    // refuse to enqueue NEW words past _dailyGoal unique seen-today.
+    // This bounds the queue size so a forever-不认识 user can't
+    // accidentally inflate the served pool. Requeue cycle keeps
+    // running; user must master existing cards to drain it.
+    //
+    // Edge case (probably unreachable now that forgot always requeues):
+    // served cap hit AND queue empty AND mastered < goal. We still
+    // declare today done so the page doesn't get stuck on a blank card.
     if (_todayServedIds.length >= _dailyGoal && _requeuedWords.isEmpty) {
       if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
       return;
@@ -376,15 +384,23 @@ class _StudyPageState extends State<StudyPage> {
         sessionId: _sessionId,
       );
 
-      // Step 5 (session_requeue_v1): on 'forgot', requeue with spacing instead of
-      // immediately fetching the next new word.
-      if (binaryResult == 'forgot' && !_requeuedOnceIds.contains(_currentWord!.wordId)) {
-        // First forgot this session — requeue with a short inter-card delay.
+      // Step 5 (session_requeue_v1, Bug 2 follow-up):
+      // On 'forgot' (不认识 / 模糊), ALWAYS requeue the card with the
+      // configured short delay — even if we've already requeued it
+      // before. This is intentional: today is "complete" only when
+      // _todayCompleted (mastered) reaches _dailyGoal, so a card the
+      // user can't recall must keep coming back until they finally
+      // tap 认识/熟悉.
+      //
+      // The previous implementation capped each card to a single
+      // requeue cycle via `_requeuedOnceIds`; that caused completion
+      // to fire after roughly 2 × _dailyGoal taps even with mastered
+      // = 0. Removed.
+      if (binaryResult == 'forgot') {
         // again (不认识) = 3 cards; hard (模糊) = 2 cards.
         final delay = rating == ReviewRating.again ? 3 : 2;
         _sessionSeenIds.add(_currentWord!.wordId); // exclude from new-word picks
         _requeuedWords.add(_RequeueEntry(word: _currentWord!, cardsNeededBefore: delay));
-        _requeuedOnceIds.add(_currentWord!.wordId);
       }
 
       // Step 6: Track mastered words for session progress.
@@ -407,10 +423,10 @@ class _StudyPageState extends State<StudyPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _kBg,
+      backgroundColor: StudyTokens.bg,
       body: SafeArea(
         child: _isLoading && _currentWord == null
-            ? const Center(child: CircularProgressIndicator(color: _kPurple))
+            ? const Center(child: CircularProgressIndicator(color: StudyTokens.purple))
             : _error != null
                 ? _buildErrorState()
                 : _currentWord == null
@@ -421,16 +437,25 @@ class _StudyPageState extends State<StudyPage> {
   }
 
   Widget _buildStudyContent() {
+    // Need #14 v2 — three-layer composition:
+    //   1. Fixed top bar (back + progress + settings)
+    //   2. Expanded card body — fixed WordHeaderSection on top + scrollable
+    //      content modules below (only the modules scroll, never the header)
+    //   3. Fixed bottom: rating buttons + bottom action pills
     return Column(
       children: [
         _buildTopBar(),
         Expanded(
-          child: SingleChildScrollView(
+          child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
             child: _buildWordCard(),
           ),
         ),
-        _buildActionButtons(),
+        ReviewButtonsSection(
+          enabled: !_isSubmitting,
+          previewDurations: _previewDurations,
+          onRate: _onRate,
+        ),
         _buildBottomActions(),
         const SizedBox(height: 16),
       ],
@@ -454,7 +479,7 @@ class _StudyPageState extends State<StudyPage> {
             child: const Icon(
               Icons.arrow_back_ios_new_rounded,
               size: 18,
-              color: _kBarBg,
+              color: StudyTokens.barBg,
             ),
           ),
           const SizedBox(width: 12),
@@ -468,7 +493,7 @@ class _StudyPageState extends State<StudyPage> {
                   style: const TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w400,
-                    color: _kTextGray,
+                    color: StudyTokens.textGray,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -477,8 +502,8 @@ class _StudyPageState extends State<StudyPage> {
                   child: LinearProgressIndicator(
                     value: progress,
                     minHeight: 3,
-                    backgroundColor: _kProgressBg,
-                    valueColor: const AlwaysStoppedAnimation<Color>(_kPurple),
+                    backgroundColor: StudyTokens.progressBg,
+                    valueColor: const AlwaysStoppedAnimation<Color>(StudyTokens.purple),
                   ),
                 ),
               ],
@@ -486,7 +511,7 @@ class _StudyPageState extends State<StudyPage> {
           ),
           const SizedBox(width: 12),
           // Settings icon (stub — navigates nowhere yet)
-          const Icon(Icons.settings_outlined, size: 18, color: _kBarBg),
+          const Icon(Icons.settings_outlined, size: 18, color: StudyTokens.barBg),
         ],
       ),
     );
@@ -494,18 +519,22 @@ class _StudyPageState extends State<StudyPage> {
 
   // ── Word card ─────────────────────────────────────────────────────────────
 
+  /// Need #14 v2 — Slimmed word card. Composes Section widgets defined
+  /// in `widgets/`. The outer Container preserves the single-card visual
+  /// (white bg + rounded corners + soft shadow); inside, [WordHeaderSection]
+  /// is fixed-height and sits ABOVE the SingleChildScrollView so it
+  /// never scrolls. Only the content modules below it scroll.
   Widget _buildWordCard() {
     final word = _currentWord!;
-    final pos = posLabel(word.translation);
     final lines = translationLines(word.translation);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
       decoration: BoxDecoration(
-        color: _kCardBg,
+        color: StudyTokens.cardBg,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _kBorderColor, width: 0.5),
+        border: Border.all(color: StudyTokens.borderColor, width: 0.5),
         boxShadow: const [
           BoxShadow(
             color: Color(0x0A6B4FA8),
@@ -517,483 +546,92 @@ class _StudyPageState extends State<StudyPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Badge row ────────────────────────────────────────────────────
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _CatMoodBadge(completed: _todayCompleted, goal: _dailyGoal),
-              const _WordTypeBadge(label: '新词'),
-            ],
+          // PRD #14 §4 — fixed page header, never scrolls.
+          WordHeaderSection(
+            word: word,
+            isPlayingAudio: _isPlayingAudio,
+            todayCompleted: _todayCompleted,
+            dailyGoal: _dailyGoal,
+            onSpeakerTap: _playPronunciation,
           ),
-          const SizedBox(height: 10),
-
-          // ── Word + speaker ───────────────────────────────────────────────
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      word.wordText,
-                      style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w600,
-                        color: _kTextDark,
-                        letterSpacing: 0.3,
-                        height: 1.15,
-                      ),
-                    ),
-                    if (word.phonetic != null && word.phonetic!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(
-                          word.phonetic!,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w400,
-                            color: _kTextGray,
-                            height: 1.25,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              // Speaker button
-              GestureDetector(
-                onTap: _isPlayingAudio
-                    ? null
-                    : () async {
-                        try {
-                          await _pronunciationService.play(word.wordText);
-                        } catch (_) {
-                          if (mounted) {
-                            setState(() => _isPlayingAudio = false);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: const Text('发音加载失败'),
-                                duration: const Duration(seconds: 2),
-                                behavior: SnackBarBehavior.floating,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                            );
-                          }
-                        }
-                      },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 11),
-                  decoration: BoxDecoration(
-                    color: _kOrangeBg,
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: _isPlayingAudio
-                      ? const SizedBox(
-                          width: 38,
-                          height: 14,
-                          child: Center(
-                            child: SizedBox(
-                              width: 10,
-                              height: 10,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 1.5,
-                                color: _kOrangeText,
-                              ),
-                            ),
-                          ),
-                        )
-                      : const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.volume_up_outlined, size: 14, color: _kOrangeText),
-                            SizedBox(width: 4),
-                            Text('发音', style: TextStyle(fontSize: 10, color: _kOrangeText)),
-                          ],
-                        ),
-                ),
-              ),
-            ],
+          // PRD #14 §5 — only the modules below the header scroll.
+          Expanded(
+            child: SingleChildScrollView(
+              child: _buildScrollableContent(word, lines),
+            ),
           ),
-          const SizedBox(height: 14),
-
-          // ── POS pill + primary meaning ───────────────────────────────────
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              if (pos.isNotEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: _kSoftPurpleBg,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    pos,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: _kPurple,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: Text(
-                  word.meaning,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: _kTextDark,
-                    height: 1.3,
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          // ── Independent content modules ──────────────────────────────────
-          // Each section (释义 / 例句 / 其他形式 / 近反义词 / 常见词组) is
-          // its own visually-distinct block. Empty sections are skipped
-          // entirely — no title, no spacer. Between two visible modules
-          // there is always a 16px gap; before the first one there is
-          // a 14px gap from the primary meaning row above.
-          ..._buildContentModules(word, lines),
         ],
       ),
     );
   }
 
-  /// Need #11 — Build the ordered list of content modules below the
-  /// primary meaning row. Each module is fully self-contained (title +
-  /// body) and only emitted when its data is non-empty.
-  List<Widget> _buildContentModules(Word word, List<String> lines) {
+  /// Builds the ordered, gap-injected list of visible content modules.
+  /// Empty modules are skipped entirely (no title, no spacer) — Need #11 / #12.
+  Widget _buildScrollableContent(Word word, List<String> lines) {
     final modules = <Widget>[];
 
     if (lines.isNotEmpty) {
-      modules.add(_buildSection(
-        title: '释义',
-        body: _translationBody(lines),
-      ));
+      modules.add(MeaningSection(lines: lines));
     }
     if (word.examples != null && word.examples!.isNotEmpty) {
-      modules.add(_buildSection(
-        title: '例句',
-        body: _examplesBody(word.examples!),
-      ));
+      modules.add(ExampleSentenceSection(examples: word.examples!));
     }
     final e = _enrichment;
     if (e != null) {
-      if (e.hasForms) {
-        modules.add(_buildSection(
-          title: '其他形式',
-          body: _formsBody(e.forms),
-        ));
-      }
+      if (e.hasForms) modules.add(WordFormsSection(forms: e.forms));
       if (e.hasRelations) {
-        modules.add(_buildSection(
-          title: '近反义词',
-          body: _relationsBody(e.synonyms, e.antonyms),
+        modules.add(WordRelationsSection(
+          synonyms: e.synonyms,
+          antonyms: e.antonyms,
         ));
       }
-      if (e.hasPhrases) {
-        modules.add(_buildSection(
-          title: '常见词组',
-          body: _phrasesBody(e.phrases),
-        ));
+      if (e.hasPhrases) modules.add(WordPhrasesSection(phrases: e.phrases));
+      if (e.hasMorphemes) {
+        modules.add(WordMorphemesSection(morphemes: e.morphemes));
       }
     }
 
-    if (modules.isEmpty) return const [];
+    if (modules.isEmpty) return const SizedBox.shrink();
 
-    // Inject vertical spacing: 14 above the first module (lifts it off
-    // the meaning row), 12 between every pair after that. Spec keeps
-    // module gap in 10–12 range — pick the upper bound for breathing
-    // room without dragging the page taller than necessary.
-    final out = <Widget>[const SizedBox(height: 14)];
-    for (var i = 0; i < modules.length; i++) {
-      if (i > 0) out.add(const SizedBox(height: 12));
-      out.add(modules[i]);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 14), // gap between Header and first module
+        for (var i = 0; i < modules.length; i++) ...[
+          if (i > 0) const SizedBox(height: 12),
+          modules[i],
+        ],
+      ],
+    );
+  }
+
+  /// Speaker button handler — extracted so [WordHeaderSection] can stay
+  /// purely presentational. Mirrors the previous inline GestureDetector
+  /// onTap body (catch + SnackBar on failure).
+  Future<void> _playPronunciation() async {
+    final word = _currentWord;
+    if (word == null) return;
+    try {
+      await _pronunciationService.play(word.wordText);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isPlayingAudio = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('发音加载失败'),
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        );
+      }
     }
-    return out;
-  }
-
-  /// Generic titled-block container shared by every content module.
-  /// Title styling is intentionally small + gray + tracked so it reads
-  /// as a quiet section label, not as a heading that competes with the
-  /// primary meaning row.
-  Widget _buildSection({required String title, required Widget body}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: _kTextGray,
-            letterSpacing: 0.4,
-            height: 1.3,
-          ),
-        ),
-        const SizedBox(height: 6),
-        body,
-      ],
-    );
-  }
-
-  Widget _translationBody(List<String> lines) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final line in lines)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Text(
-              line,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w400,
-                color: _kTextMedium,
-                height: 1.45,
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _examplesBody(List<WordExample> examples) {
-    final shown = examples.take(2).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (var i = 0; i < shown.length; i++) ...[
-          if (i > 0) const SizedBox(height: 8),
-          Builder(builder: (_) {
-            final ex = shown[i];
-            final enPlain = ex.en.replaceAll(RegExp(r'\[|\]'), '');
-            final cnPlain = ex.cn.replaceAll(RegExp(r'\[|\]'), '');
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  enPlain,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w400,
-                    color: _kTextDark,
-                    height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  cnPlain,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w400,
-                    color: _kTextGray,
-                    height: 1.35,
-                  ),
-                ),
-              ],
-            );
-          }),
-        ],
-      ],
-    );
-  }
-
-  // ── Need #11: enrichment body widgets (titles handled by _buildSection) ──
-
-  static const Map<String, String> _kFormTypeLabel = {
-    'past': '过去式',
-    'past_participle': '过去分词',
-    'present_participle': '现在分词',
-    'third_person_singular': '第三人称单数',
-    'plural': '复数',
-    'comparative': '比较级',
-    'superlative': '最高级',
-  };
-
-  Widget _formsBody(List<WordFormItem> forms) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 4,
-      children: forms.map((f) {
-        final label = _kFormTypeLabel[f.formType] ?? f.formType;
-        return RichText(
-          text: TextSpan(
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w400,
-              color: _kTextDark,
-              height: 1.35,
-            ),
-            children: [
-              TextSpan(text: f.formText),
-              TextSpan(
-                text: '（$label）',
-                style: const TextStyle(
-                  color: _kTextGray,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _relationsBody(List<String> synonyms, List<String> antonyms) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (synonyms.isNotEmpty)
-          _relationRow(label: '近义词', items: synonyms),
-        if (synonyms.isNotEmpty && antonyms.isNotEmpty)
-          const SizedBox(height: 4),
-        if (antonyms.isNotEmpty)
-          _relationRow(label: '反义词', items: antonyms),
-      ],
-    );
-  }
-
-  Widget _relationRow({required String label, required List<String> items}) {
-    return RichText(
-      text: TextSpan(
-        style: const TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w400,
-          color: _kTextDark,
-          height: 1.35,
-        ),
-        children: [
-          TextSpan(
-            text: '$label：',
-            style: const TextStyle(
-              color: _kTextGray,
-              fontSize: 11,
-              fontWeight: FontWeight.w400,
-            ),
-          ),
-          TextSpan(text: items.join(', ')),
-        ],
-      ),
-    );
-  }
-
-  Widget _phrasesBody(List<String> phrases) {
-    return Wrap(
-      spacing: 6,
-      runSpacing: 6,
-      children: phrases.map((p) {
-        // Spec: chip min height 28. fontSize 12 × height 1.2 ≈ 14.4 line-box,
-        // + 7 vertical padding × 2 ≈ 28.4 ≥ 28.
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-          decoration: BoxDecoration(
-            color: _kNeutralBg,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: _kNeutralBorder, width: 0.5),
-          ),
-          child: Text(
-            p,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: _kNeutralText,
-              height: 1.2,
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  // ── Action buttons ────────────────────────────────────────────────────────
-
-  /// P3.3.1: 4-button rating. Label update per v5 UI spec.
-  /// Rating mapping (FROZEN): 熟悉→easy / 认识→good / 模糊→hard / 不认识→again.
-  ///
-  /// preview_durations_reentry_contract_v1 (FROZEN, P3.3.4):
-  ///   previewDurations = local FSRS candidate hint — NOT cloud serving truth.
-  ///   Disclaimer shown when preview is loaded.
-  ///   MUST NOT say: "下次将在X天后复习" / "系统已安排" / "已更新计划".
-  Widget _buildActionButtons() {
-    const configs = [
-      _StudyBtn(
-        label: '熟悉',
-        rating: ReviewRating.easy,
-        bgColor: _kPurple,
-        borderColor: _kPurple,
-        textColor: Colors.white,
-        hasTick: true,
-      ),
-      _StudyBtn(
-        label: '认识',
-        rating: ReviewRating.good,
-        bgColor: _kSoftPurpleBg,
-        borderColor: _kPurpleBorder,
-        textColor: _kPurple,
-      ),
-      _StudyBtn(
-        label: '模糊',
-        rating: ReviewRating.hard,
-        bgColor: _kOrangeBg,
-        borderColor: _kOrangeBorder,
-        textColor: _kOrangeText,
-      ),
-      _StudyBtn(
-        label: '不认识',
-        rating: ReviewRating.again,
-        bgColor: _kNeutralBg,
-        borderColor: _kNeutralBorder,
-        textColor: _kNeutralText,
-      ),
-    ];
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-      child: Column(
-        children: [
-          Row(
-            children: configs.asMap().entries.map((e) {
-              final i = e.key;
-              final cfg = e.value;
-              return Expanded(
-                child: Padding(
-                  padding: EdgeInsets.only(left: i == 0 ? 0 : 6),
-                  child: _RatingButton(
-                    config: cfg,
-                    enabled: !_isSubmitting,
-                    onTap: () => _onRate(cfg.rating),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-          // preview_durations_reentry_contract_v1 disclaimer (FROZEN, P3.3.4)
-          if (_previewDurations != null)
-            const Padding(
-              padding: EdgeInsets.only(top: 4),
-              child: Text(
-                '预计间隔（仅供参考）',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10, color: Color(0xFFAAAAAA)),
-              ),
-            ),
-        ],
-      ),
-    );
   }
 
   // ── Bottom action pills ───────────────────────────────────────────────────
+  // (4-rating row + preview disclaimer moved to ReviewButtonsSection.)
 
   Widget _buildBottomActions() {
     return Padding(
@@ -1057,13 +695,13 @@ class _StudyPageState extends State<StudyPage> {
                   style: const TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w600,
-                    color: _kTextDark,
+                    color: StudyTokens.textDark,
                   ),
                 ),
                 const Spacer(),
                 GestureDetector(
                   onTap: () => Navigator.pop(context),
-                  child: const Icon(Icons.close, size: 20, color: _kTextGray),
+                  child: const Icon(Icons.close, size: 20, color: StudyTokens.textGray),
                 ),
               ],
             ),
@@ -1071,10 +709,10 @@ class _StudyPageState extends State<StudyPage> {
             if (word.phonetic != null && word.phonetic!.isNotEmpty)
               Text(
                 word.phonetic!,
-                style: const TextStyle(fontSize: 12, color: _kTextGray),
+                style: const TextStyle(fontSize: 12, color: StudyTokens.textGray),
               ),
             const SizedBox(height: 16),
-            const Divider(color: _kBorderColor, thickness: 0.5, height: 1),
+            const Divider(color: StudyTokens.borderColor, thickness: 0.5, height: 1),
             const SizedBox(height: 12),
             // All translation lines
             ...translationLines(translation).map(
@@ -1084,7 +722,7 @@ class _StudyPageState extends State<StudyPage> {
                   line,
                   style: const TextStyle(
                     fontSize: 14,
-                    color: _kTextMedium,
+                    color: StudyTokens.textMedium,
                     height: 1.5,
                   ),
                 ),
@@ -1105,27 +743,27 @@ class _StudyPageState extends State<StudyPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.error_outline, color: _kOrangeText, size: 48),
+            const Icon(Icons.error_outline, color: StudyTokens.orangeText, size: 48),
             const SizedBox(height: 16),
             const Text(
               '加载失败',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w500,
-                color: _kTextDark,
+                color: StudyTokens.textDark,
               ),
             ),
             const SizedBox(height: 8),
             Text(
               _error ?? '',
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: _kTextGray),
+              style: const TextStyle(fontSize: 12, color: StudyTokens.textGray),
             ),
             const SizedBox(height: 24),
             ElevatedButton(
               onPressed: _loadNextWord,
               style: ElevatedButton.styleFrom(
-                backgroundColor: _kPurple,
+                backgroundColor: StudyTokens.purple,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -1140,6 +778,14 @@ class _StudyPageState extends State<StudyPage> {
   }
 
   Widget _buildDoneState() {
+    // Bug 2 follow-up: show mastered/goal explicitly. The earlier
+    // copy "今日已学 0 个单词" was misleading after a session of all-
+    // forgot taps. Now mastered count is the actual completion driver
+    // (_todayCompleted >= _dailyGoal) so the displayed value is also
+    // the truth-of-completion. The edge case where served=N but
+    // mastered<N is reachable only via the legacy fallback gate; we
+    // detect it and add a softer second line so the user understands.
+    final reachedTarget = _todayCompleted >= _dailyGoal;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -1151,19 +797,27 @@ class _StudyPageState extends State<StudyPage> {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w500,
-              color: _kTextDark,
+              color: StudyTokens.textDark,
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            '今日已学 $_todayCompleted 个单词',
-            style: const TextStyle(fontSize: 14, color: _kTextGray),
+            '今日掌握 $_todayCompleted / $_dailyGoal 个',
+            style: const TextStyle(fontSize: 14, color: StudyTokens.textGray),
           ),
+          if (!reachedTarget) ...[
+            const SizedBox(height: 4),
+            const Text(
+              '今天可学的词都过了一遍，明天 FSRS 会再排你复习',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11, color: StudyTokens.textGray),
+            ),
+          ],
           const SizedBox(height: 28),
           ElevatedButton(
             onPressed: () => Navigator.pop(context),
             style: ElevatedButton.styleFrom(
-              backgroundColor: _kPurple,
+              backgroundColor: StudyTokens.purple,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -1178,143 +832,9 @@ class _StudyPageState extends State<StudyPage> {
   }
 }
 
-// ── Private helper data classes ───────────────────────────────────────────────
-
-/// Button config for the 4-button rating row.
-class _StudyBtn {
-  final String label;
-  final ReviewRating rating;
-  final Color bgColor;
-  final Color borderColor;
-  final Color textColor;
-  final bool hasTick;
-
-  const _StudyBtn({
-    required this.label,
-    required this.rating,
-    required this.bgColor,
-    required this.borderColor,
-    required this.textColor,
-    this.hasTick = false,
-  });
-}
-
 // ── Private helper widgets ────────────────────────────────────────────────────
-
-/// A single rating button used in the horizontal 4-button row.
-class _RatingButton extends StatelessWidget {
-  final _StudyBtn config;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  const _RatingButton({
-    required this.config,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedOpacity(
-      opacity: enabled ? 1.0 : 0.5,
-      duration: const Duration(milliseconds: 150),
-      child: GestureDetector(
-        onTap: enabled ? onTap : null,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 13),
-          decoration: BoxDecoration(
-            color: config.bgColor,
-            borderRadius: BorderRadius.circular(13),
-            border: Border.all(color: config.borderColor, width: 0.8),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                config.label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  color: config.textColor,
-                ),
-              ),
-              if (config.hasTick) ...[
-                const SizedBox(width: 3),
-                Icon(Icons.check_rounded, size: 12, color: config.textColor),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Cat mood badge — shows cat emoji + mood text based on session progress.
-class _CatMoodBadge extends StatelessWidget {
-  final int completed;
-  final int goal;
-
-  const _CatMoodBadge({required this.completed, required this.goal});
-
-  @override
-  Widget build(BuildContext context) {
-    final ratio = goal > 0 ? completed / goal : 0.0;
-    final (emoji, mood) = ratio >= 0.7
-        ? ('😸', '状态很棒')
-        : ratio >= 0.3
-            ? ('😺', '不错加油')
-            : ('🐱', '今日状态稳定');
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(6, 3, 10, 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFAECE7),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(emoji, style: const TextStyle(fontSize: 12)),
-          const SizedBox(width: 4),
-          Text(
-            mood,
-            style: const TextStyle(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFFA68872),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Word type badge — e.g. "新词" or "复习".
-class _WordTypeBadge extends StatelessWidget {
-  final String label;
-  const _WordTypeBadge({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-      decoration: BoxDecoration(
-        color: _kGreenBg,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 10.5,
-          fontWeight: FontWeight.w500,
-          color: _kGreenText,
-        ),
-      ),
-    );
-  }
-}
+// (4-rating row + _CatMoodBadge + _WordTypeBadge + _StudyBtn moved to
+//  widgets/review_buttons_section.dart and widgets/word_header_section.dart.)
 
 /// Pill-shaped tappable button for bottom actions.
 class _PillBtn extends StatelessWidget {

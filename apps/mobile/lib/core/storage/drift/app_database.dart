@@ -44,6 +44,9 @@ part 'app_database.g.dart';
   WordForms,
   WordRelations,
   WordPhrases,
+  // Morpheme layer (v8, Need #12: word root / affix catalog + per-word matches)
+  MorphemeEntries,
+  WordMorphemeMatches,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
@@ -52,7 +55,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -126,6 +129,13 @@ class AppDatabase extends _$AppDatabase {
             await _safeCreateTable(m, wordForms);
             await _safeCreateTable(m, wordRelations);
             await _safeCreateTable(m, wordPhrases);
+          }
+          if (from < 8) {
+            // v8 (Need #12): word root / affix catalog + per-word matches.
+            // Same idempotent guard so partially-applied dev devices
+            // don't crash on re-run.
+            await _safeCreateTable(m, morphemeEntries);
+            await _safeCreateTable(m, wordMorphemeMatches);
           }
         },
       );
