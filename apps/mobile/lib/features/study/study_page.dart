@@ -12,8 +12,8 @@ import '../../core/memory/review_rating.dart';
 import '../../core/memory/word_cache_service.dart';
 import '../../core/services/session_store.dart';
 import '../../core/services/session_sync_service.dart';
+import '../../core/services/learning_word_detail.dart';
 import '../../core/services/study_service.dart';
-import '../../core/services/word_enrichment_service.dart';
 import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_database.dart';
 import '../../core/storage/local_settings_service.dart';
@@ -51,26 +51,28 @@ class _StudyPageState extends State<StudyPage> {
   late final PronunciationService _pronunciationService;
   late final SessionStore _sessionStore;
   late final SessionSyncService _sessionSyncService;
-  late final WordEnrichmentService _enrichmentService;
   StreamSubscription<PlayerState>? _audioSub;
 
   // Need #8 — Local id for the current study session, threaded into every
   // submitStudyAttempt this page makes. Null until session starts (rare race).
   String? _sessionId;
 
-  // Need #11 — Optional enrichment payload for the current word.
-  // Empty payload (or null while loading) renders nothing. Always
-  // matches the in-flight word_id below to avoid race-induced
-  // mismatches when the user rates rapidly.
-  WordEnrichment? _enrichment;
-  String? _enrichmentLoadingForWordId;
-
   // ── Word state ────────────────────────────────────────────────────────────
   bool _isPlayingAudio = false;
-  Word? _currentWord;
+  // Aggregated word + enrichment for the currently displayed card.
+  // Null while loading the very first word, between sessions, or when
+  // the daily goal has been reached. See [LearningWordDetail].
+  LearningWordDetail? _currentDetail;
   bool _isLoading = false;
   bool _isSubmitting = false;
   String? _error;
+
+  // Monotonic ticket bumped on every [_loadNextWord] entry. Each path
+  // through [_loadNextWord] must compare its captured `seq` against
+  // [_loadSeq] after every await before doing setState — this protects
+  // against a stale prior load completing after a fresh one has begun
+  // and overwriting [_currentDetail] with the wrong word's data.
+  int _loadSeq = 0;
 
   /// preview_durations_reentry_contract_v1 (FROZEN, P3.3.4):
   /// Source: local FSRS candidate only (FsrsService.previewSchedule).
@@ -137,7 +139,6 @@ class _StudyPageState extends State<StudyPage> {
     _sessionStore = SessionStore(apiClient: apiClient, driftDb: appDb);
     _sessionSyncService =
         SessionSyncService(apiClient: apiClient, driftDb: appDb);
-    _enrichmentService = WordEnrichmentService(driftDb: appDb);
     _audioSub = _pronunciationService.onPlayerStateChanged.listen((state) {
       if (mounted) setState(() => _isPlayingAudio = state == PlayerState.playing);
     });
@@ -203,6 +204,7 @@ class _StudyPageState extends State<StudyPage> {
   // ── Business logic (FROZEN — do not modify without governance review) ─────
 
   Future<void> _loadNextWord() async {
+    final seq = ++_loadSeq;
     setState(() { _isLoading = true; _error = null; });
 
     // ── "Today is done" gate (Bug 2 follow-up: mastered, not served) ──
@@ -210,7 +212,7 @@ class _StudyPageState extends State<StudyPage> {
     // Whether the requeue still holds cards or not is irrelevant —
     // the user has internalised _dailyGoal new words today.
     if (_todayCompleted >= _dailyGoal) {
-      if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
+      if (mounted) setState(() { _currentDetail = null; _isLoading = false; _isSubmitting = false; });
       return;
     }
 
@@ -225,7 +227,7 @@ class _StudyPageState extends State<StudyPage> {
     // served cap hit AND queue empty AND mastered < goal. We still
     // declare today done so the page doesn't get stuck on a blank card.
     if (_todayServedIds.length >= _dailyGoal && _requeuedWords.isEmpty) {
-      if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
+      if (mounted) setState(() { _currentDetail = null; _isLoading = false; _isSubmitting = false; });
       return;
     }
 
@@ -239,60 +241,59 @@ class _StudyPageState extends State<StudyPage> {
     final readyIdx = _requeuedWords.indexWhere((e) => e.isReady);
     if (readyIdx >= 0) {
       final entry = _requeuedWords.removeAt(readyIdx);
-      if (mounted) {
-        setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
-        _loadPreviewForWord(entry.word.wordId);
-        _loadEnrichmentForWord(entry.word);
-        _prefetchUpcoming();
-      }
+      final detail = await _studyService.attachEnrichment(entry.word);
+      if (!mounted || seq != _loadSeq) return;
+      setState(() { _currentDetail = detail; _isLoading = false; _isSubmitting = false; });
+      _loadPreviewForWord(detail.wordId);
+      _prefetchUpcoming();
       return;
     }
 
     // 2. Get next unseen word, excluding all session-seen words.
     try {
       final word = await _studyService.getNextWord(extraExclude: _sessionSeenIds);
+      if (!mounted || seq != _loadSeq) return;
       if (word != null) {
         _sessionSeenIds.add(word.wordId);
         // Bug 4 — count this card against today's served-set so the
         // gate above will trigger when goal is reached, even if the
         // user only rates 不认识/模糊 (which never bumps _todayCompleted).
         _todayServedIds.add(word.wordId);
-        if (mounted) {
-          setState(() { _currentWord = word; _isLoading = false; _isSubmitting = false; });
-          _loadPreviewForWord(word.wordId);
-          _loadEnrichmentForWord(word);
-          _prefetchUpcoming();
+        final detail = await _studyService.attachEnrichment(word);
+        if (!mounted || seq != _loadSeq) return;
+        setState(() { _currentDetail = detail; _isLoading = false; _isSubmitting = false; });
+        _loadPreviewForWord(detail.wordId);
+        _prefetchUpcoming();
 
-          // P3.3.17: Cache word locally for offline review queue — fire-and-forget.
-          _wordCacheService.insertWord(
-            wordId: word.wordId,
-            bookId: word.bookId,
-            wordText: word.wordText,
-            meaning: word.meaning,
-            phonetic: word.phonetic,
-            translation: word.translation,
-            frequencyRank: word.frequencyRank,
-          ).catchError((_) {});
-        }
+        // P3.3.17: Cache word locally for offline review queue — fire-and-forget.
+        unawaited(_wordCacheService.insertWord(
+          wordId: word.wordId,
+          bookId: word.bookId,
+          wordText: word.wordText,
+          meaning: word.meaning,
+          phonetic: word.phonetic,
+          translation: word.translation,
+          frequencyRank: word.frequencyRank,
+        ).catchError((_) {}));
         return;
       }
 
       // 3. No new unseen words — show earliest requeued word even if not ready yet.
       if (_requeuedWords.isNotEmpty) {
         final entry = _requeuedWords.removeAt(0);
-        if (mounted) {
-          setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
-          _loadPreviewForWord(entry.word.wordId);
-          _loadEnrichmentForWord(entry.word);
-          _prefetchUpcoming();
-        }
+        final detail = await _studyService.attachEnrichment(entry.word);
+        if (!mounted || seq != _loadSeq) return;
+        setState(() { _currentDetail = detail; _isLoading = false; _isSubmitting = false; });
+        _loadPreviewForWord(detail.wordId);
+        _prefetchUpcoming();
         return;
       }
 
       // 4. Truly done for this session.
-      if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
+      if (mounted) setState(() { _currentDetail = null; _isLoading = false; _isSubmitting = false; });
     } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _isLoading = false; });
+      if (!mounted || seq != _loadSeq) return;
+      setState(() { _error = e.toString(); _isLoading = false; });
     }
   }
 
@@ -314,41 +315,23 @@ class _StudyPageState extends State<StudyPage> {
     }
   }
 
-  /// Need #11 — Load optional enrichment (forms / synonyms+antonyms /
-  /// phrases) for [word]. Always overwrites in-flight load so a fast
-  /// rate sequence can't show stale data; if the user moves on before
-  /// the query returns, we drop the result. Failures clear to empty —
-  /// the UI hides the section, never shows an error.
-  Future<void> _loadEnrichmentForWord(Word word) async {
-    _enrichmentLoadingForWordId = word.wordId;
-    if (mounted) setState(() => _enrichment = null);
-    try {
-      final result = await _enrichmentService.getFor(word.wordText);
-      if (!mounted) return;
-      // Drop if the user already moved on.
-      if (_enrichmentLoadingForWordId != word.wordId) return;
-      setState(() => _enrichment = result);
-    } catch (_) {
-      if (!mounted) return;
-      if (_enrichmentLoadingForWordId != word.wordId) return;
-      setState(() => _enrichment = WordEnrichment.empty);
-    }
-  }
-
-  /// Prefetch pronunciation audio for the next ~5 upcoming words.
-  ///
-  /// Queries the DB for unstudied words after the current one, then hands
-  /// their word_text values to [PronunciationService.prefetch] which
-  /// downloads WAV files in the background. Already-cached words are skipped.
+  /// Prefetch pronunciation audio + enrichment for the next ~5 upcoming
+  /// words. Pronunciation download and enrichment SQL pre-warm both run
+  /// off the same `peekNextWordTexts` result so we only ask the DB once.
+  /// All errors are silently swallowed at every layer (peek, prefetch,
+  /// warmUp) — best-effort.
   void _prefetchUpcoming() {
-    // Build exclude set: mastered words are handled by the service;
-    // we only need to add session-seen IDs + current word.
     final exclude = Set<String>.from(_sessionSeenIds);
-    if (_currentWord != null) exclude.add(_currentWord!.wordId);
-    _studyService
-        .peekNextWordTexts(5, extraExclude: exclude)
-        .then((wordTexts) => _pronunciationService.prefetch(wordTexts))
-        .catchError((_) {}); // best-effort — silent on failure
+    if (_currentDetail != null) exclude.add(_currentDetail!.word.wordId);
+    unawaited(
+      _studyService
+          .peekNextWordTexts(5, extraExclude: exclude)
+          .then((wordTexts) {
+            _pronunciationService.prefetch(wordTexts);
+            unawaited(_studyService.warmUpWordTexts(wordTexts));
+          })
+          .catchError((_) {}),
+    );
   }
 
   // P3.3.1: 4-button rating handler.
@@ -358,16 +341,17 @@ class _StudyPageState extends State<StudyPage> {
   //   again / hard → local-only write + requeue (first time) or advance (second time).
   //   good / easy  → mark mastered, advance to next new word.
   Future<void> _onRate(ReviewRating rating) async {
-    if (_isSubmitting || _currentWord == null) return;
+    final currentWord = _currentDetail?.word;
+    if (_isSubmitting || currentWord == null) return;
     // Clear preview during submission — buttons are disabled anyway.
     if (mounted) setState(() { _isSubmitting = true; _error = null; _previewDurations = null; });
 
     try {
       // Step 1: Ensure FSRS card exists (idempotent — no-op if already initialized)
-      await _fsrsService.initCardForWord(_currentWord!.wordId);
+      await _fsrsService.initCardForWord(currentWord.wordId);
 
       // Step 2: Apply FSRS rating — atomic local write (review_logs INSERT + card_states UPDATE)
-      await _fsrsService.rateCard(_currentWord!.wordId, rating);
+      await _fsrsService.rateCard(currentWord.wordId, rating);
 
       // Step 3: Binary mapping for StudyService / cloud sync
       // again/hard → 'forgot' | good/easy → 'know'
@@ -377,8 +361,8 @@ class _StudyPageState extends State<StudyPage> {
 
       // Step 4: StudyService — local-first write + async cloud sync
       await _studyService.submitStudyAttempt(
-        wordId: _currentWord!.wordId,
-        bookId: _currentWord!.bookId,
+        wordId: currentWord.wordId,
+        bookId: currentWord.bookId,
         studyType: 'new',
         actionResult: binaryResult,
         sessionId: _sessionId,
@@ -399,8 +383,8 @@ class _StudyPageState extends State<StudyPage> {
       if (binaryResult == 'forgot') {
         // again (不认识) = 3 cards; hard (模糊) = 2 cards.
         final delay = rating == ReviewRating.again ? 3 : 2;
-        _sessionSeenIds.add(_currentWord!.wordId); // exclude from new-word picks
-        _requeuedWords.add(_RequeueEntry(word: _currentWord!, cardsNeededBefore: delay));
+        _sessionSeenIds.add(currentWord.wordId); // exclude from new-word picks
+        _requeuedWords.add(_RequeueEntry(word: currentWord, cardsNeededBefore: delay));
       }
 
       // Step 6: Track mastered words for session progress.
@@ -425,11 +409,11 @@ class _StudyPageState extends State<StudyPage> {
     return Scaffold(
       backgroundColor: StudyTokens.bg,
       body: SafeArea(
-        child: _isLoading && _currentWord == null
+        child: _isLoading && _currentDetail == null
             ? const Center(child: CircularProgressIndicator(color: StudyTokens.purple))
             : _error != null
                 ? _buildErrorState()
-                : _currentWord == null
+                : _currentDetail == null
                     ? _buildDoneState()
                     : _buildStudyContent(),
       ),
@@ -525,7 +509,8 @@ class _StudyPageState extends State<StudyPage> {
   /// is fixed-height and sits ABOVE the SingleChildScrollView so it
   /// never scrolls. Only the content modules below it scroll.
   Widget _buildWordCard() {
-    final word = _currentWord!;
+    final detail = _currentDetail!;
+    final word = detail.word;
     final lines = translationLines(word.translation);
 
     return Container(
@@ -557,7 +542,7 @@ class _StudyPageState extends State<StudyPage> {
           // PRD #14 §5 — only the modules below the header scroll.
           Expanded(
             child: SingleChildScrollView(
-              child: _buildScrollableContent(word, lines),
+              child: _buildScrollableContent(detail, lines),
             ),
           ),
         ],
@@ -567,7 +552,9 @@ class _StudyPageState extends State<StudyPage> {
 
   /// Builds the ordered, gap-injected list of visible content modules.
   /// Empty modules are skipped entirely (no title, no spacer) — Need #11 / #12.
-  Widget _buildScrollableContent(Word word, List<String> lines) {
+  Widget _buildScrollableContent(LearningWordDetail detail, List<String> lines) {
+    final word = detail.word;
+    final e = detail.enrichment;
     final modules = <Widget>[];
 
     if (lines.isNotEmpty) {
@@ -576,19 +563,16 @@ class _StudyPageState extends State<StudyPage> {
     if (word.examples != null && word.examples!.isNotEmpty) {
       modules.add(ExampleSentenceSection(examples: word.examples!));
     }
-    final e = _enrichment;
-    if (e != null) {
-      if (e.hasForms) modules.add(WordFormsSection(forms: e.forms));
-      if (e.hasRelations) {
-        modules.add(WordRelationsSection(
-          synonyms: e.synonyms,
-          antonyms: e.antonyms,
-        ));
-      }
-      if (e.hasPhrases) modules.add(WordPhrasesSection(phrases: e.phrases));
-      if (e.hasMorphemes) {
-        modules.add(WordMorphemesSection(morphemes: e.morphemes));
-      }
+    if (e.hasForms) modules.add(WordFormsSection(forms: e.forms));
+    if (e.hasRelations) {
+      modules.add(WordRelationsSection(
+        synonyms: e.synonyms,
+        antonyms: e.antonyms,
+      ));
+    }
+    if (e.hasPhrases) modules.add(WordPhrasesSection(phrases: e.phrases));
+    if (e.hasMorphemes) {
+      modules.add(WordMorphemesSection(morphemes: e.morphemes));
     }
 
     if (modules.isEmpty) return const SizedBox.shrink();
@@ -609,7 +593,7 @@ class _StudyPageState extends State<StudyPage> {
   /// purely presentational. Mirrors the previous inline GestureDetector
   /// onTap body (catch + SnackBar on failure).
   Future<void> _playPronunciation() async {
-    final word = _currentWord;
+    final word = _currentDetail?.word;
     if (word == null) return;
     try {
       await _pronunciationService.play(word.wordText);
@@ -670,7 +654,7 @@ class _StudyPageState extends State<StudyPage> {
   }
 
   void _showMoreMeanings() {
-    final word = _currentWord;
+    final word = _currentDetail?.word;
     final translation = word?.translation;
     if (translation == null || translation.isEmpty) {
       _showComingSoon('更多释义');
