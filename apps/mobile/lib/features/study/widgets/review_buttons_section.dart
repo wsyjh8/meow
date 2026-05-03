@@ -80,8 +80,18 @@ class ReviewButtonsSection extends StatelessWidget {
               );
             }).toList(),
           ),
-          if (previewDurations != null)
-            const Padding(
+          // Need #16 — always reserve disclaimer space so the rating row
+          // doesn't shift between cards while previewDurations toggles
+          // null↔value (cleared synchronously on tap, repopulated async
+          // by FsrsService.previewSchedule). Visibility(maintainSize)
+          // keeps the layout stable; the P3.3.4 text contract is
+          // unchanged — only its visibility is gated.
+          Visibility(
+            visible: previewDurations != null,
+            maintainSize: true,
+            maintainAnimation: true,
+            maintainState: true,
+            child: const Padding(
               padding: EdgeInsets.only(top: 4),
               child: Text(
                 '预计间隔（仅供参考）',
@@ -89,6 +99,7 @@ class ReviewButtonsSection extends StatelessWidget {
                 style: TextStyle(fontSize: 10, color: Color(0xFFAAAAAA)),
               ),
             ),
+          ),
         ],
       ),
     );
@@ -127,35 +138,36 @@ class _RatingButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedOpacity(
-      opacity: enabled ? 1.0 : 0.5,
-      duration: const Duration(milliseconds: 150),
-      child: GestureDetector(
-        onTap: enabled ? onTap : null,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 13),
-          decoration: BoxDecoration(
-            color: config.bgColor,
-            borderRadius: BorderRadius.circular(13),
-            border: Border.all(color: config.borderColor, width: 0.8),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                config.label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  color: config.textColor,
-                ),
+    // Need #16 — no opacity animation while _isSubmitting toggles.
+    // The submit→load-next flow is local SQLite (typ. 30–80ms) which
+    // is faster than the 150ms fade, so the buttons would visibly dim
+    // and snap back on every tap. Tap suppression via onTap=null is
+    // sufficient to block double-taps; the dim added no information.
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 13),
+        decoration: BoxDecoration(
+          color: config.bgColor,
+          borderRadius: BorderRadius.circular(13),
+          border: Border.all(color: config.borderColor, width: 0.8),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              config.label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: config.textColor,
               ),
-              if (config.hasTick) ...[
-                const SizedBox(width: 3),
-                Icon(Icons.check_rounded, size: 12, color: config.textColor),
-              ],
+            ),
+            if (config.hasTick) ...[
+              const SizedBox(width: 3),
+              Icon(Icons.check_rounded, size: 12, color: config.textColor),
             ],
-          ),
+          ],
         ),
       ),
     );
