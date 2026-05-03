@@ -36,7 +36,12 @@ const _kBarBg = Color(0xFFB8B0A4);
 ///
 /// Data source  : [FsrsService.listDueCards] → word lookup via [AppDatabase]
 /// Rating write : [FsrsService.rateCard] (local FSRS only — no cloud call)
-/// Requeue      : again / hard → shown once more after a short delay (session_requeue_v1)
+///                Per-word once per session (need #17): rateCard 仅在第一次评分时调用。
+/// Reinforcement: session_reinforcement_v1 (need #17)
+///   - 第一次评分锁定 FSRS（rateCard 仅调一次）
+///   - 第一次 again/hard → 进入巩固队列
+///   - 巩固结束条件：连续两次 good/easy（中途 again/hard → streak 归零）
+///   - 后续巩固点击不再调 rateCard，不覆盖 card_states.due
 ///
 /// The old [ReviewPage] (features/review/review_page.dart) is intentionally
 /// preserved but not routed to. This page replaces it at the /review route.
@@ -68,9 +73,18 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
   // ── Review queue ───────────────────────────────────────────────────────────
   List<CardStateData> _queue = [];
 
-  // ── Session requeue state (session_requeue_v1) ────────────────────────────
+  // ── Session reinforcement state (session_reinforcement_v1, need #17) ──────
+  //
+  // _requeuedCards: 已经第一次评分为 again/hard 的卡片，正在巩固期。
+  // _formalRatedIds: 本 session 内已完成第一次正式 FSRS 评分的 wordId 集合。
+  //   一旦在集合内，后续点击不再调 rateCard、不覆盖 card_states.due。
+  // _activeRequeueEntry: 当前展示中的卡片对应的 entry（仅当从 _requeuedCards
+  //   取出时非 null），由 _loadNextCard() 维护，由 _onRate() 决定是否加回。
+  // _kRequiredReinforcementStreak: 巩固结束所需的连续 good/easy 次数。
   final List<_RequeueEntry> _requeuedCards = [];
-  final Set<String> _requeuedOnceIds = {};
+  final Set<String> _formalRatedIds = {};
+  _RequeueEntry? _activeRequeueEntry;
+  static const int _kRequiredReinforcementStreak = 2;
 
   // ── Progress ───────────────────────────────────────────────────────────────
   int _totalDue = 0;
@@ -135,7 +149,12 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
     if (readyIdx >= 0) {
       final entry = _requeuedCards.removeAt(readyIdx);
       if (mounted) {
-        setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
+        setState(() {
+          _currentWord = entry.word;
+          _activeRequeueEntry = entry;
+          _isLoading = false;
+          _isSubmitting = false;
+        });
         _loadPreviewForWord(entry.word.wordId);
         _prefetchUpcoming();
       }
@@ -148,7 +167,12 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
       final word = await _fetchWordForCard(card);
       if (word != null) {
         if (mounted) {
-          setState(() { _currentWord = word; _isLoading = false; _isSubmitting = false; });
+          setState(() {
+            _currentWord = word;
+            _activeRequeueEntry = null;
+            _isLoading = false;
+            _isSubmitting = false;
+          });
           _loadPreviewForWord(word.wordId);
           _prefetchUpcoming();
         }
@@ -163,7 +187,12 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
     if (_requeuedCards.isNotEmpty) {
       final entry = _requeuedCards.removeAt(0);
       if (mounted) {
-        setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
+        setState(() {
+          _currentWord = entry.word;
+          _activeRequeueEntry = entry;
+          _isLoading = false;
+          _isSubmitting = false;
+        });
         _loadPreviewForWord(entry.word.wordId);
         _prefetchUpcoming();
       }
@@ -171,7 +200,14 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
     }
 
     // 4. All done.
-    if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
+    if (mounted) {
+      setState(() {
+        _currentWord = null;
+        _activeRequeueEntry = null;
+        _isLoading = false;
+        _isSubmitting = false;
+      });
+    }
   }
 
   /// Resolve word details for a [CardStateData] row.
@@ -252,20 +288,49 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
     if (mounted) setState(() { _isSubmitting = true; _error = null; _previewDurations = null; });
 
     try {
-      // FSRS update (local only — no cloud call for review session page)
-      await _fsrsService.initCardForWord(_currentWord!.wordId);
-      await _fsrsService.rateCard(_currentWord!.wordId, rating);
+      final wordId = _currentWord!.wordId;
+      final isFormalRated = _formalRatedIds.contains(wordId);
+      final decision = ReinforcementDecision.compute(
+        rating: rating,
+        isFormalRated: isFormalRated,
+        currentPositiveStreak: _activeRequeueEntry?.positiveStreak ?? 0,
+        requiredStreak: _kRequiredReinforcementStreak,
+      );
 
-      // session_requeue_v1: again / hard → requeue once before counting as reviewed
-      if ((rating == ReviewRating.again || rating == ReviewRating.hard) &&
-          !_requeuedOnceIds.contains(_currentWord!.wordId)) {
-        _requeuedOnceIds.add(_currentWord!.wordId);
-        final delay = rating == ReviewRating.again ? 3 : 2;
-        _requeuedCards.add(_RequeueEntry(word: _currentWord!, cardsNeededBefore: delay));
-      } else {
-        _reviewed++;
+      // ── 分支 A：第一次评分（FSRS-locking）─────────────────────────────
+      if (decision.callRateCard) {
+        _formalRatedIds.add(wordId);
+        // 唯一一次 rateCard 调用：写正式 review_logs + 更新 card_states.due
+        await _fsrsService.initCardForWord(wordId);
+        await _fsrsService.rateCard(wordId, rating);
+
+        if (decision.requeueCard) {
+          // again / hard：进入巩固队列（streak 默认 0）
+          _requeuedCards.add(_RequeueEntry(
+            word: _currentWord!,
+            cardsNeededBefore: decision.cardsNeededBefore!,
+          ));
+        }
+      }
+      // ── 分支 B：巩固期（不再调 rateCard）────────────────────────────────
+      else {
+        // 当前展示的卡片由 _loadNextCard 从 _requeuedCards 取出，
+        // entry 暂存在 _activeRequeueEntry 上。理论上不会为 null；
+        // 防御性地兜底重建一个 entry。
+        final entry = _activeRequeueEntry ??
+            _RequeueEntry(word: _currentWord!, cardsNeededBefore: 1);
+        entry.positiveStreak = decision.newPositiveStreak!;
+        if (decision.requeueCard) {
+          // 重新入队尾，等几张卡之后再次出现
+          entry.cardsSinceRequeue = 0;
+          _requeuedCards.add(entry);
+        }
+        // 若 !requeueCard，巩固完成 — 不再加回 _requeuedCards
       }
 
+      if (decision.incrementReviewed) _reviewed++;
+
+      _activeRequeueEntry = null;
       await _loadNextCard();
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _isSubmitting = false; });
@@ -762,10 +827,108 @@ class _RequeueEntry {
   final Word word;
   final int cardsNeededBefore;
   int cardsSinceRequeue = 0;
+  // session_reinforcement_v1 (need #17): 当前连续 good/easy 次数。
+  // 中途 again/hard 重置为 0；达到 _kRequiredReinforcementStreak 时巩固结束。
+  int positiveStreak = 0;
 
   _RequeueEntry({required this.word, required this.cardsNeededBefore});
 
   bool get isReady => cardsSinceRequeue >= cardsNeededBefore;
+}
+
+/// session_reinforcement_v1 (need #17) 的纯决策类。
+///
+/// 把 [_SpecReviewPageState._onRate] 内部的状态转移决策抽离出来，
+/// 让 6 条规则可以脱离 widget 直接单测。
+///
+/// 输入：当前 [rating]、wordId 是否已正式评分 [isFormalRated]、
+///       当前 entry 的 [currentPositiveStreak]、所需 [requiredStreak]。
+/// 输出：是否调 rateCard、是否计入 reviewed、是否重新入队、新 streak、入队延迟。
+class ReinforcementDecision {
+  /// 是否触发 [FsrsService.rateCard]（仅第一次评分时为 true）。
+  final bool callRateCard;
+
+  /// 是否将该单词计入 `_reviewed`（第一次 good/easy 或巩固完成时为 true）。
+  final bool incrementReviewed;
+
+  /// 是否将卡片重新加入 `_requeuedCards`。
+  final bool requeueCard;
+
+  /// 第一次 again/hard 进巩固时的延迟参数（仅 callRateCard && requeueCard 时非 null）。
+  final int? cardsNeededBefore;
+
+  /// 巩固期决策后写回 entry.positiveStreak 的新值（仅巩固分支非 null）。
+  final int? newPositiveStreak;
+
+  const ReinforcementDecision({
+    required this.callRateCard,
+    required this.incrementReviewed,
+    required this.requeueCard,
+    this.cardsNeededBefore,
+    this.newPositiveStreak,
+  });
+
+  /// 计算下一步动作。
+  ///
+  /// 规则总表（见需求 17）：
+  /// - 第一次 good/easy   → callRateCard, incrementReviewed
+  /// - 第一次 again/hard  → callRateCard, requeueCard, delay=3 或 2
+  /// - 巩固 good/easy    → newStreak = currentPositiveStreak + 1
+  ///                        - >= required → incrementReviewed (出队)
+  ///                        - <  required → requeueCard
+  /// - 巩固 again/hard   → newPositiveStreak=0, requeueCard
+  static ReinforcementDecision compute({
+    required ReviewRating rating,
+    required bool isFormalRated,
+    required int currentPositiveStreak,
+    required int requiredStreak,
+  }) {
+    final isPositive =
+        rating == ReviewRating.good || rating == ReviewRating.easy;
+
+    if (!isFormalRated) {
+      if (isPositive) {
+        return const ReinforcementDecision(
+          callRateCard: true,
+          incrementReviewed: true,
+          requeueCard: false,
+        );
+      }
+      return ReinforcementDecision(
+        callRateCard: true,
+        incrementReviewed: false,
+        requeueCard: true,
+        cardsNeededBefore: rating == ReviewRating.again ? 3 : 2,
+      );
+    }
+
+    // 巩固期
+    if (isPositive) {
+      final newStreak = currentPositiveStreak + 1;
+      if (newStreak >= requiredStreak) {
+        return ReinforcementDecision(
+          callRateCard: false,
+          incrementReviewed: true,
+          requeueCard: false,
+          newPositiveStreak: newStreak,
+        );
+      }
+      return ReinforcementDecision(
+        callRateCard: false,
+        incrementReviewed: false,
+        requeueCard: true,
+        newPositiveStreak: newStreak,
+      );
+    }
+
+    // again / hard：streak 重置 + 重新入队
+    return const ReinforcementDecision(
+      callRateCard: false,
+      incrementReviewed: false,
+      requeueCard: true,
+      newPositiveStreak: 0,
+    );
+  }
 }
 
 // ── Private widgets ───────────────────────────────────────────────────────────
