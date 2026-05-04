@@ -133,7 +133,11 @@ class WordHeaderSection extends StatelessWidget {
                   if (word.phonetic != null && word.phonetic!.isNotEmpty)
                     Flexible(
                       child: Text(
-                        word.phonetic!,
+                        // Wrap with / / so it reads as IPA. Skip if the
+                        // source string already carries the slashes.
+                        word.phonetic!.startsWith('/')
+                            ? word.phonetic!
+                            : '/${word.phonetic!}/',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: StudyTokens.mono(
