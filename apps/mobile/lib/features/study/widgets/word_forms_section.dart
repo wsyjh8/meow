@@ -4,10 +4,11 @@ import '../../../core/services/word_enrichment_service.dart';
 import 'section_frame.dart';
 import 'study_tokens.dart';
 
-/// 其他形式 — inflected variants of the word (past / past_participle /
-/// present_participle / third_person_singular / plural / comparative /
-/// superlative). PRD-mandated naming uses the Chinese label:
-/// abandoned (过去式) / abandoning (现在分词) etc.
+/// 其他形式 — inflected variants in a 2-column cream grid.
+///
+/// Cream-Café spec: `display: grid; grid-template-columns: 1fr 1fr; gap: 8`
+/// — small cream cards holding a label (10px ink-soft) above the form
+/// (Fraunces 13.5/500). PRD-mandated naming uses Chinese type labels.
 class WordFormsSection extends StatelessWidget {
   final List<WordFormItem> forms;
 
@@ -28,33 +29,57 @@ class WordFormsSection extends StatelessWidget {
     if (forms.isEmpty) return const SizedBox.shrink();
     return SectionFrame(
       title: '其他形式',
-      body: Wrap(
-        spacing: 10,
-        runSpacing: 4,
-        children: forms.map((f) {
-          final label = _typeLabel[f.formType] ?? f.formType;
-          return RichText(
-            text: TextSpan(
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w400,
-                color: StudyTokens.textDark,
-                height: 1.35,
-              ),
-              children: [
-                TextSpan(text: f.formText),
-                TextSpan(
-                  text: '（$label）',
-                  style: const TextStyle(
-                    color: StudyTokens.textGray,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w400,
+      emoji: '🔀',
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // Two equal-width columns with 8px gap.
+          const gap = 8.0;
+          final cellWidth = (constraints.maxWidth - gap) / 2;
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
+            children: forms.map((f) {
+              final label = _typeLabel[f.formType] ?? f.formType;
+              return SizedBox(
+                width: cellWidth,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 11, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: StudyTokens.cream,
+                    borderRadius:
+                        BorderRadius.circular(StudyTokens.radiusPill),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        label,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: StudyTokens.inkSoft,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        f.formText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: StudyTokens.serif(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w500,
+                          color: StudyTokens.ink,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
+              );
+            }).toList(),
           );
-        }).toList(),
+        },
       ),
     );
   }

@@ -12,11 +12,12 @@ import '../../core/memory/review_rating.dart';
 import '../../core/memory/word_cache_service.dart';
 import '../../core/services/session_store.dart';
 import '../../core/services/session_sync_service.dart';
-import '../../core/services/learning_word_detail.dart';
 import '../../core/services/study_service.dart';
+import '../../core/services/word_enrichment_service.dart';
 import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_database.dart';
 import '../../core/storage/local_settings_service.dart';
+import 'widgets/cat_companion_strip.dart';
 import 'widgets/example_sentence_section.dart';
 import 'widgets/meaning_section.dart';
 import 'widgets/review_buttons_section.dart';
@@ -51,28 +52,26 @@ class _StudyPageState extends State<StudyPage> {
   late final PronunciationService _pronunciationService;
   late final SessionStore _sessionStore;
   late final SessionSyncService _sessionSyncService;
+  late final WordEnrichmentService _enrichmentService;
   StreamSubscription<PlayerState>? _audioSub;
 
   // Need #8 — Local id for the current study session, threaded into every
   // submitStudyAttempt this page makes. Null until session starts (rare race).
   String? _sessionId;
 
+  // Need #11 — Optional enrichment payload for the current word.
+  // Empty payload (or null while loading) renders nothing. Always
+  // matches the in-flight word_id below to avoid race-induced
+  // mismatches when the user rates rapidly.
+  WordEnrichment? _enrichment;
+  String? _enrichmentLoadingForWordId;
+
   // ── Word state ────────────────────────────────────────────────────────────
   bool _isPlayingAudio = false;
-  // Aggregated word + enrichment for the currently displayed card.
-  // Null while loading the very first word, between sessions, or when
-  // the daily goal has been reached. See [LearningWordDetail].
-  LearningWordDetail? _currentDetail;
+  Word? _currentWord;
   bool _isLoading = false;
   bool _isSubmitting = false;
   String? _error;
-
-  // Monotonic ticket bumped on every [_loadNextWord] entry. Each path
-  // through [_loadNextWord] must compare its captured `seq` against
-  // [_loadSeq] after every await before doing setState — this protects
-  // against a stale prior load completing after a fresh one has begun
-  // and overwriting [_currentDetail] with the wrong word's data.
-  int _loadSeq = 0;
 
   /// preview_durations_reentry_contract_v1 (FROZEN, P3.3.4):
   /// Source: local FSRS candidate only (FsrsService.previewSchedule).
@@ -121,6 +120,13 @@ class _StudyPageState extends State<StudyPage> {
   /// Daily goal loaded from LocalSettingsService. Default 20 until loaded.
   int _dailyGoal = 20;
 
+  // ── Cream-Café UI placeholders (Need #18 visual revamp) ─────────────────
+  // Star and fish-counter live in the top app bar but are not yet wired
+  // to backend state — they show a "coming soon" snackbar on tap and
+  // toggle local visual state only. Real wiring (favourites table + cat
+  // fish reward) lands in a later need.
+  bool _isStarred = false;
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
@@ -139,6 +145,7 @@ class _StudyPageState extends State<StudyPage> {
     _sessionStore = SessionStore(apiClient: apiClient, driftDb: appDb);
     _sessionSyncService =
         SessionSyncService(apiClient: apiClient, driftDb: appDb);
+    _enrichmentService = WordEnrichmentService(driftDb: appDb);
     _audioSub = _pronunciationService.onPlayerStateChanged.listen((state) {
       if (mounted) setState(() => _isPlayingAudio = state == PlayerState.playing);
     });
@@ -204,7 +211,6 @@ class _StudyPageState extends State<StudyPage> {
   // ── Business logic (FROZEN — do not modify without governance review) ─────
 
   Future<void> _loadNextWord() async {
-    final seq = ++_loadSeq;
     setState(() { _isLoading = true; _error = null; });
 
     // ── "Today is done" gate (Bug 2 follow-up: mastered, not served) ──
@@ -212,7 +218,7 @@ class _StudyPageState extends State<StudyPage> {
     // Whether the requeue still holds cards or not is irrelevant —
     // the user has internalised _dailyGoal new words today.
     if (_todayCompleted >= _dailyGoal) {
-      if (mounted) setState(() { _currentDetail = null; _isLoading = false; _isSubmitting = false; });
+      if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
       return;
     }
 
@@ -227,7 +233,7 @@ class _StudyPageState extends State<StudyPage> {
     // served cap hit AND queue empty AND mastered < goal. We still
     // declare today done so the page doesn't get stuck on a blank card.
     if (_todayServedIds.length >= _dailyGoal && _requeuedWords.isEmpty) {
-      if (mounted) setState(() { _currentDetail = null; _isLoading = false; _isSubmitting = false; });
+      if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
       return;
     }
 
@@ -241,59 +247,60 @@ class _StudyPageState extends State<StudyPage> {
     final readyIdx = _requeuedWords.indexWhere((e) => e.isReady);
     if (readyIdx >= 0) {
       final entry = _requeuedWords.removeAt(readyIdx);
-      final detail = await _studyService.attachEnrichment(entry.word);
-      if (!mounted || seq != _loadSeq) return;
-      setState(() { _currentDetail = detail; _isLoading = false; _isSubmitting = false; });
-      _loadPreviewForWord(detail.wordId);
-      _prefetchUpcoming();
+      if (mounted) {
+        setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
+        _loadPreviewForWord(entry.word.wordId);
+        _loadEnrichmentForWord(entry.word);
+        _prefetchUpcoming();
+      }
       return;
     }
 
     // 2. Get next unseen word, excluding all session-seen words.
     try {
       final word = await _studyService.getNextWord(extraExclude: _sessionSeenIds);
-      if (!mounted || seq != _loadSeq) return;
       if (word != null) {
         _sessionSeenIds.add(word.wordId);
         // Bug 4 — count this card against today's served-set so the
         // gate above will trigger when goal is reached, even if the
         // user only rates 不认识/模糊 (which never bumps _todayCompleted).
         _todayServedIds.add(word.wordId);
-        final detail = await _studyService.attachEnrichment(word);
-        if (!mounted || seq != _loadSeq) return;
-        setState(() { _currentDetail = detail; _isLoading = false; _isSubmitting = false; });
-        _loadPreviewForWord(detail.wordId);
-        _prefetchUpcoming();
+        if (mounted) {
+          setState(() { _currentWord = word; _isLoading = false; _isSubmitting = false; });
+          _loadPreviewForWord(word.wordId);
+          _loadEnrichmentForWord(word);
+          _prefetchUpcoming();
 
-        // P3.3.17: Cache word locally for offline review queue — fire-and-forget.
-        unawaited(_wordCacheService.insertWord(
-          wordId: word.wordId,
-          bookId: word.bookId,
-          wordText: word.wordText,
-          meaning: word.meaning,
-          phonetic: word.phonetic,
-          translation: word.translation,
-          frequencyRank: word.frequencyRank,
-        ).catchError((_) {}));
+          // P3.3.17: Cache word locally for offline review queue — fire-and-forget.
+          _wordCacheService.insertWord(
+            wordId: word.wordId,
+            bookId: word.bookId,
+            wordText: word.wordText,
+            meaning: word.meaning,
+            phonetic: word.phonetic,
+            translation: word.translation,
+            frequencyRank: word.frequencyRank,
+          ).catchError((_) {});
+        }
         return;
       }
 
       // 3. No new unseen words — show earliest requeued word even if not ready yet.
       if (_requeuedWords.isNotEmpty) {
         final entry = _requeuedWords.removeAt(0);
-        final detail = await _studyService.attachEnrichment(entry.word);
-        if (!mounted || seq != _loadSeq) return;
-        setState(() { _currentDetail = detail; _isLoading = false; _isSubmitting = false; });
-        _loadPreviewForWord(detail.wordId);
-        _prefetchUpcoming();
+        if (mounted) {
+          setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
+          _loadPreviewForWord(entry.word.wordId);
+          _loadEnrichmentForWord(entry.word);
+          _prefetchUpcoming();
+        }
         return;
       }
 
       // 4. Truly done for this session.
-      if (mounted) setState(() { _currentDetail = null; _isLoading = false; _isSubmitting = false; });
+      if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
     } catch (e) {
-      if (!mounted || seq != _loadSeq) return;
-      setState(() { _error = e.toString(); _isLoading = false; });
+      if (mounted) setState(() { _error = e.toString(); _isLoading = false; });
     }
   }
 
@@ -315,23 +322,41 @@ class _StudyPageState extends State<StudyPage> {
     }
   }
 
-  /// Prefetch pronunciation audio + enrichment for the next ~5 upcoming
-  /// words. Pronunciation download and enrichment SQL pre-warm both run
-  /// off the same `peekNextWordTexts` result so we only ask the DB once.
-  /// All errors are silently swallowed at every layer (peek, prefetch,
-  /// warmUp) — best-effort.
+  /// Need #11 — Load optional enrichment (forms / synonyms+antonyms /
+  /// phrases) for [word]. Always overwrites in-flight load so a fast
+  /// rate sequence can't show stale data; if the user moves on before
+  /// the query returns, we drop the result. Failures clear to empty —
+  /// the UI hides the section, never shows an error.
+  Future<void> _loadEnrichmentForWord(Word word) async {
+    _enrichmentLoadingForWordId = word.wordId;
+    if (mounted) setState(() => _enrichment = null);
+    try {
+      final result = await _enrichmentService.getFor(word.wordText);
+      if (!mounted) return;
+      // Drop if the user already moved on.
+      if (_enrichmentLoadingForWordId != word.wordId) return;
+      setState(() => _enrichment = result);
+    } catch (_) {
+      if (!mounted) return;
+      if (_enrichmentLoadingForWordId != word.wordId) return;
+      setState(() => _enrichment = WordEnrichment.empty);
+    }
+  }
+
+  /// Prefetch pronunciation audio for the next ~5 upcoming words.
+  ///
+  /// Queries the DB for unstudied words after the current one, then hands
+  /// their word_text values to [PronunciationService.prefetch] which
+  /// downloads WAV files in the background. Already-cached words are skipped.
   void _prefetchUpcoming() {
+    // Build exclude set: mastered words are handled by the service;
+    // we only need to add session-seen IDs + current word.
     final exclude = Set<String>.from(_sessionSeenIds);
-    if (_currentDetail != null) exclude.add(_currentDetail!.word.wordId);
-    unawaited(
-      _studyService
-          .peekNextWordTexts(5, extraExclude: exclude)
-          .then((wordTexts) {
-            _pronunciationService.prefetch(wordTexts);
-            unawaited(_studyService.warmUpWordTexts(wordTexts));
-          })
-          .catchError((_) {}),
-    );
+    if (_currentWord != null) exclude.add(_currentWord!.wordId);
+    _studyService
+        .peekNextWordTexts(5, extraExclude: exclude)
+        .then((wordTexts) => _pronunciationService.prefetch(wordTexts))
+        .catchError((_) {}); // best-effort — silent on failure
   }
 
   // P3.3.1: 4-button rating handler.
@@ -341,17 +366,16 @@ class _StudyPageState extends State<StudyPage> {
   //   again / hard → local-only write + requeue (first time) or advance (second time).
   //   good / easy  → mark mastered, advance to next new word.
   Future<void> _onRate(ReviewRating rating) async {
-    final currentWord = _currentDetail?.word;
-    if (_isSubmitting || currentWord == null) return;
+    if (_isSubmitting || _currentWord == null) return;
     // Clear preview during submission — buttons are disabled anyway.
     if (mounted) setState(() { _isSubmitting = true; _error = null; _previewDurations = null; });
 
     try {
       // Step 1: Ensure FSRS card exists (idempotent — no-op if already initialized)
-      await _fsrsService.initCardForWord(currentWord.wordId);
+      await _fsrsService.initCardForWord(_currentWord!.wordId);
 
       // Step 2: Apply FSRS rating — atomic local write (review_logs INSERT + card_states UPDATE)
-      await _fsrsService.rateCard(currentWord.wordId, rating);
+      await _fsrsService.rateCard(_currentWord!.wordId, rating);
 
       // Step 3: Binary mapping for StudyService / cloud sync
       // again/hard → 'forgot' | good/easy → 'know'
@@ -361,8 +385,8 @@ class _StudyPageState extends State<StudyPage> {
 
       // Step 4: StudyService — local-first write + async cloud sync
       await _studyService.submitStudyAttempt(
-        wordId: currentWord.wordId,
-        bookId: currentWord.bookId,
+        wordId: _currentWord!.wordId,
+        bookId: _currentWord!.bookId,
         studyType: 'new',
         actionResult: binaryResult,
         sessionId: _sessionId,
@@ -383,8 +407,8 @@ class _StudyPageState extends State<StudyPage> {
       if (binaryResult == 'forgot') {
         // again (不认识) = 3 cards; hard (模糊) = 2 cards.
         final delay = rating == ReviewRating.again ? 3 : 2;
-        _sessionSeenIds.add(currentWord.wordId); // exclude from new-word picks
-        _requeuedWords.add(_RequeueEntry(word: currentWord, cardsNeededBefore: delay));
+        _sessionSeenIds.add(_currentWord!.wordId); // exclude from new-word picks
+        _requeuedWords.add(_RequeueEntry(word: _currentWord!, cardsNeededBefore: delay));
       }
 
       // Step 6: Track mastered words for session progress.
@@ -409,11 +433,11 @@ class _StudyPageState extends State<StudyPage> {
     return Scaffold(
       backgroundColor: StudyTokens.bg,
       body: SafeArea(
-        child: _isLoading && _currentDetail == null
+        child: _isLoading && _currentWord == null
             ? const Center(child: CircularProgressIndicator(color: StudyTokens.purple))
             : _error != null
                 ? _buildErrorState()
-                : _currentDetail == null
+                : _currentWord == null
                     ? _buildDoneState()
                     : _buildStudyContent(),
       ),
@@ -421,20 +445,19 @@ class _StudyPageState extends State<StudyPage> {
   }
 
   Widget _buildStudyContent() {
-    // Need #14 v2 — three-layer composition:
-    //   1. Fixed top bar (back + progress + settings)
-    //   2. Expanded card body — fixed WordHeaderSection on top + scrollable
-    //      content modules below (only the modules scroll, never the header)
-    //   3. Fixed bottom: rating buttons + bottom action pills
+    // Cream-Café composition (Memo1, May 2026):
+    //   1. Fixed top bar — back + fish-counter pill + star (placeholders)
+    //   2. Slim progress bar
+    //   3. Scrollable column — WordTitleCard + per-section cards (each its
+    //      own card with cream gap between, no longer a single mega-card)
+    //   4. Fixed bottom — cat companion strip + 4 rating buttons + bottom
+    //      action pills
     return Column(
       children: [
         _buildTopBar(),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
-            child: _buildWordCard(),
-          ),
-        ),
+        _buildProgressBar(),
+        Expanded(child: _buildScrollColumn()),
+        const CatCompanionStrip(),
         ReviewButtonsSection(
           enabled: !_isSubmitting,
           previewDurations: _previewDurations,
@@ -449,100 +472,54 @@ class _StudyPageState extends State<StudyPage> {
   // ── Top bar ───────────────────────────────────────────────────────────────
 
   Widget _buildTopBar() {
-    final progress = _dailyGoal > 0
-        ? (_todayCompleted / _dailyGoal).clamp(0.0, 1.0)
-        : 0.0;
-
     return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 10, 22, 14),
+      padding: const EdgeInsets.fromLTRB(18, 10, 18, 6),
       child: Row(
         children: [
-          // Back button
           GestureDetector(
             onTap: () => Navigator.pop(context),
             child: const Icon(
-              Icons.arrow_back_ios_new_rounded,
-              size: 18,
-              color: StudyTokens.barBg,
+              Icons.chevron_left_rounded,
+              size: 24,
+              color: StudyTokens.ink,
             ),
           ),
-          const SizedBox(width: 12),
-          // Progress section
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const Spacer(),
+          // Fish counter pill — placeholder. Shows today's progress as the
+          // proxy number until the cat-fish reward system wires up.
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(
+              color: StudyTokens.cream,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
+                const Text('🐟', style: TextStyle(fontSize: 12)),
+                const SizedBox(width: 5),
                 Text(
-                  '今日新词 · $_todayCompleted / $_dailyGoal',
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w400,
-                    color: StudyTokens.textGray,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(2),
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 3,
-                    backgroundColor: StudyTokens.progressBg,
-                    valueColor: const AlwaysStoppedAnimation<Color>(StudyTokens.purple),
+                  'Momo · $_todayCompleted / $_dailyGoal',
+                  style: StudyTokens.round(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: StudyTokens.main,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 12),
-          // Settings icon (stub — navigates nowhere yet)
-          const Icon(Icons.settings_outlined, size: 18, color: StudyTokens.barBg),
-        ],
-      ),
-    );
-  }
-
-  // ── Word card ─────────────────────────────────────────────────────────────
-
-  /// Need #14 v2 — Slimmed word card. Composes Section widgets defined
-  /// in `widgets/`. The outer Container preserves the single-card visual
-  /// (white bg + rounded corners + soft shadow); inside, [WordHeaderSection]
-  /// is fixed-height and sits ABOVE the SingleChildScrollView so it
-  /// never scrolls. Only the content modules below it scroll.
-  Widget _buildWordCard() {
-    final detail = _currentDetail!;
-    final word = detail.word;
-    final lines = translationLines(word.translation);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-      decoration: BoxDecoration(
-        color: StudyTokens.cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: StudyTokens.borderColor, width: 0.5),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0A6B4FA8),
-            blurRadius: 4,
-            offset: Offset(0, 1),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // PRD #14 §4 — fixed page header, never scrolls.
-          WordHeaderSection(
-            word: word,
-            isPlayingAudio: _isPlayingAudio,
-            todayCompleted: _todayCompleted,
-            dailyGoal: _dailyGoal,
-            onSpeakerTap: _playPronunciation,
-          ),
-          // PRD #14 §5 — only the modules below the header scroll.
-          Expanded(
-            child: SingleChildScrollView(
-              child: _buildScrollableContent(detail, lines),
+          const Spacer(),
+          // Star button — placeholder, toggles local state only.
+          GestureDetector(
+            onTap: () {
+              setState(() => _isStarred = !_isStarred);
+              _showComingSoon('收藏');
+            },
+            child: Icon(
+              _isStarred ? Icons.star_rounded : Icons.star_outline_rounded,
+              size: 22,
+              color: StudyTokens.accent,
             ),
           ),
         ],
@@ -550,12 +527,48 @@ class _StudyPageState extends State<StudyPage> {
     );
   }
 
-  /// Builds the ordered, gap-injected list of visible content modules.
-  /// Empty modules are skipped entirely (no title, no spacer) — Need #11 / #12.
-  Widget _buildScrollableContent(LearningWordDetail detail, List<String> lines) {
-    final word = detail.word;
-    final e = detail.enrichment;
-    final modules = <Widget>[];
+  Widget _buildProgressBar() {
+    final progress = _dailyGoal > 0
+        ? (_todayCompleted / _dailyGoal).clamp(0.0, 1.0)
+        : 0.0;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(3),
+        child: LinearProgressIndicator(
+          value: progress,
+          minHeight: 5,
+          backgroundColor: StudyTokens.cream,
+          valueColor: const AlwaysStoppedAnimation<Color>(StudyTokens.main),
+        ),
+      ),
+    );
+  }
+
+  // ── Scrollable column (Cream-Café revamp) ───────────────────────────────
+  //
+  // The legacy "one big white card" composition has been replaced with a
+  // stack of independent cards (WordTitleCard + per-section cards) sitting
+  // on the page's cream background, with 12px gaps between them. Memo1
+  // calls this the "café receipt stack" feel — each card looks like a
+  // separate slip of paper rather than one giant pane.
+  //
+  // The whole column scrolls together (the header no longer needs to be
+  // pinned because it's much shorter and the body is shorter too — the
+  // PRD #14 fixed-header constraint was tied to the single-card layout).
+  Widget _buildScrollColumn() {
+    final word = _currentWord!;
+    final lines = translationLines(word.translation);
+
+    final modules = <Widget>[
+      WordHeaderSection(
+        word: word,
+        isPlayingAudio: _isPlayingAudio,
+        todayCompleted: _todayCompleted,
+        dailyGoal: _dailyGoal,
+        onSpeakerTap: _playPronunciation,
+      ),
+    ];
 
     if (lines.isNotEmpty) {
       modules.add(MeaningSection(lines: lines));
@@ -563,29 +576,32 @@ class _StudyPageState extends State<StudyPage> {
     if (word.examples != null && word.examples!.isNotEmpty) {
       modules.add(ExampleSentenceSection(examples: word.examples!));
     }
-    if (e.hasForms) modules.add(WordFormsSection(forms: e.forms));
-    if (e.hasRelations) {
-      modules.add(WordRelationsSection(
-        synonyms: e.synonyms,
-        antonyms: e.antonyms,
-      ));
-    }
-    if (e.hasPhrases) modules.add(WordPhrasesSection(phrases: e.phrases));
-    if (e.hasMorphemes) {
-      modules.add(WordMorphemesSection(morphemes: e.morphemes));
+    final e = _enrichment;
+    if (e != null) {
+      if (e.hasRelations) {
+        modules.add(WordRelationsSection(
+          synonyms: e.synonyms,
+          antonyms: e.antonyms,
+        ));
+      }
+      if (e.hasPhrases) modules.add(WordPhrasesSection(phrases: e.phrases));
+      if (e.hasForms) modules.add(WordFormsSection(forms: e.forms));
+      if (e.hasMorphemes) {
+        modules.add(WordMorphemesSection(morphemes: e.morphemes));
+      }
     }
 
-    if (modules.isEmpty) return const SizedBox.shrink();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 14), // gap between Header and first module
-        for (var i = 0; i < modules.length; i++) ...[
-          if (i > 0) const SizedBox(height: 12),
-          modules[i],
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < modules.length; i++) ...[
+            if (i > 0) const SizedBox(height: 12),
+            modules[i],
+          ],
         ],
-      ],
+      ),
     );
   }
 
@@ -593,7 +609,7 @@ class _StudyPageState extends State<StudyPage> {
   /// purely presentational. Mirrors the previous inline GestureDetector
   /// onTap body (catch + SnackBar on failure).
   Future<void> _playPronunciation() async {
-    final word = _currentDetail?.word;
+    final word = _currentWord;
     if (word == null) return;
     try {
       await _pronunciationService.play(word.wordText);
@@ -624,11 +640,6 @@ class _StudyPageState extends State<StudyPage> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           _PillBtn(
-            label: '♡ 收藏',
-            onTap: () => _showComingSoon('收藏'),
-          ),
-          const SizedBox(width: 6),
-          _PillBtn(
             label: '⚑ 困难词',
             onTap: () => _showComingSoon('困难词'),
           ),
@@ -654,7 +665,7 @@ class _StudyPageState extends State<StudyPage> {
   }
 
   void _showMoreMeanings() {
-    final word = _currentDetail?.word;
+    final word = _currentWord;
     final translation = word?.translation;
     if (translation == null || translation.isEmpty) {
       _showComingSoon('更多释义');
@@ -820,7 +831,7 @@ class _StudyPageState extends State<StudyPage> {
 // (4-rating row + _CatMoodBadge + _WordTypeBadge + _StudyBtn moved to
 //  widgets/review_buttons_section.dart and widgets/word_header_section.dart.)
 
-/// Pill-shaped tappable button for bottom actions.
+/// Cream-Café pill button for the bottom secondary-action row.
 class _PillBtn extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
@@ -832,18 +843,18 @@ class _PillBtn extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: const Color(0xFFFDFBF7),
+          color: StudyTokens.cream,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: const Color(0xFFEFEBE4),
-            width: 0.5,
-          ),
         ),
         child: Text(
           label,
-          style: const TextStyle(fontSize: 10, color: Color(0xFF8B8178)),
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+            color: StudyTokens.main,
+          ),
         ),
       ),
     );
