@@ -25,7 +25,7 @@ class WordEnrichmentService {
   static const int formsCap = 8;
   static const int synonymsCap = 8;
   static const int antonymsCap = 8;
-  static const int phrasesCap = 6;
+  static const int phrasesCap = 2;
   /// Need #12: PRD 6 — "默认最多展示 3–5 条". Pick the upper bound.
   static const int morphemesCap = 5;
 
