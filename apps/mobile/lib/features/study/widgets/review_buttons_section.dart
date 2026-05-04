@@ -3,11 +3,18 @@ import 'package:flutter/material.dart';
 import '../../../core/memory/review_rating.dart';
 import 'study_tokens.dart';
 
-/// 4-button rating row + preview disclaimer line.
+/// 4-button rating row + preview disclaimer line — Cream-Café redesign.
 ///
-/// Rating mapping (FROZEN): 熟悉 → easy / 认识 → good / 模糊 → hard /
-/// 不认识 → again. Sequence and labels are governance-locked
-/// (P3.3.1) and must NOT change here.
+/// Rating mapping (FROZEN, P3.3.1): 熟悉 → easy / 认识 → good / 模糊 → hard /
+/// 不认识 → again. Sequence and labels are governance-locked and must
+/// NOT change here.
+///
+/// Visual: 4 equal-width pastel buttons, each carrying the Chinese
+/// label (PingFang 14/700) above an English mono sub-label (9/400, dim
+/// 0.7). Order on screen is the design's left-to-right severity:
+/// 不认识 → 模糊 → 认识 → 熟悉. (The legacy code put 熟悉 first; we
+/// reverse the visual order to match Memo1 while keeping the mapping
+/// intact.)
 ///
 /// preview_durations_reentry_contract_v1 (FROZEN, P3.3.4):
 ///   `previewDurations` is a local FSRS hint, NOT cloud serving truth.
@@ -28,40 +35,35 @@ class ReviewButtonsSection extends StatelessWidget {
 
   static const List<_StudyBtn> _configs = [
     _StudyBtn(
-      label: '熟悉',
-      rating: ReviewRating.easy,
-      bgColor: StudyTokens.purple,
-      borderColor: StudyTokens.purple,
-      textColor: Colors.white,
-      hasTick: true,
-    ),
-    _StudyBtn(
-      label: '认识',
-      rating: ReviewRating.good,
-      bgColor: StudyTokens.softPurpleBg,
-      borderColor: StudyTokens.purpleBorder,
-      textColor: StudyTokens.purple,
+      label: '不认识',
+      sub: 'AGAIN',
+      rating: ReviewRating.again,
+      palette: StudyTokens.ratingAgain,
     ),
     _StudyBtn(
       label: '模糊',
+      sub: 'HARD',
       rating: ReviewRating.hard,
-      bgColor: StudyTokens.orangeBg,
-      borderColor: StudyTokens.orangeBorder,
-      textColor: StudyTokens.orangeText,
+      palette: StudyTokens.ratingHard,
     ),
     _StudyBtn(
-      label: '不认识',
-      rating: ReviewRating.again,
-      bgColor: StudyTokens.neutralBg,
-      borderColor: StudyTokens.neutralBorder,
-      textColor: StudyTokens.neutralText,
+      label: '认识',
+      sub: 'GOOD',
+      rating: ReviewRating.good,
+      palette: StudyTokens.ratingGood,
+    ),
+    _StudyBtn(
+      label: '熟悉',
+      sub: 'EASY',
+      rating: ReviewRating.easy,
+      palette: StudyTokens.ratingEasy,
     ),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 0),
       child: Column(
         children: [
           Row(
@@ -80,23 +82,24 @@ class ReviewButtonsSection extends StatelessWidget {
               );
             }).toList(),
           ),
-          // Need #16 — always reserve disclaimer space so the rating row
-          // doesn't shift between cards while previewDurations toggles
-          // null↔value (cleared synchronously on tap, repopulated async
-          // by FsrsService.previewSchedule). Visibility(maintainSize)
-          // keeps the layout stable; the P3.3.4 text contract is
-          // unchanged — only its visibility is gated.
+          // Need #16 — keep the disclaimer slot reserved so the rating
+          // row doesn't shift between cards while previewDurations
+          // toggles null↔value. Visibility(maintainSize) keeps the
+          // layout stable; the P3.3.4 text contract is unchanged.
           Visibility(
             visible: previewDurations != null,
             maintainSize: true,
             maintainAnimation: true,
             maintainState: true,
-            child: const Padding(
-              padding: EdgeInsets.only(top: 4),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
               child: Text(
                 '预计间隔（仅供参考）',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10, color: Color(0xFFAAAAAA)),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: StudyTokens.inkSoft.withValues(alpha: 0.7),
+                ),
               ),
             ),
           ),
@@ -106,22 +109,17 @@ class ReviewButtonsSection extends StatelessWidget {
   }
 }
 
-/// Button config for one slot in the 4-button rating row.
 class _StudyBtn {
   final String label;
+  final String sub;
   final ReviewRating rating;
-  final Color bgColor;
-  final Color borderColor;
-  final Color textColor;
-  final bool hasTick;
+  final RatingPalette palette;
 
   const _StudyBtn({
     required this.label,
+    required this.sub,
     required this.rating,
-    required this.bgColor,
-    required this.borderColor,
-    required this.textColor,
-    this.hasTick = false,
+    required this.palette,
   });
 }
 
@@ -138,35 +136,38 @@ class _RatingButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Need #16 — no opacity animation while _isSubmitting toggles.
-    // The submit→load-next flow is local SQLite (typ. 30–80ms) which
-    // is faster than the 150ms fade, so the buttons would visibly dim
-    // and snap back on every tap. Tap suppression via onTap=null is
-    // sufficient to block double-taps; the dim added no information.
+    // Need #16 — no opacity animation while _isSubmitting toggles. Tap
+    // suppression via onTap=null is sufficient to block double-taps.
     return GestureDetector(
       onTap: enabled ? onTap : null,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 13),
+        padding: const EdgeInsets.fromLTRB(0, 10, 0, 8),
         decoration: BoxDecoration(
-          color: config.bgColor,
-          borderRadius: BorderRadius.circular(13),
-          border: Border.all(color: config.borderColor, width: 0.8),
+          color: config.palette.bg,
+          borderRadius: BorderRadius.circular(StudyTokens.radiusButton),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               config.label,
               style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: config.textColor,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: config.palette.fg,
+                height: 1.1,
               ),
             ),
-            if (config.hasTick) ...[
-              const SizedBox(width: 3),
-              Icon(Icons.check_rounded, size: 12, color: config.textColor),
-            ],
+            const SizedBox(height: 2),
+            Text(
+              config.sub,
+              style: StudyTokens.mono(
+                fontSize: 9,
+                fontWeight: FontWeight.w400,
+                color: config.palette.fg.withValues(alpha: 0.7),
+                letterSpacing: 0.6,
+              ),
+            ),
           ],
         ),
       ),
