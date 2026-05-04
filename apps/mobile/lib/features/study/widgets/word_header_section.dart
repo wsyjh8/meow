@@ -8,11 +8,13 @@ import 'study_tokens.dart';
 ///
 /// Cream-Café redesign (Memo1, May 2026): bigger surface, serif word
 /// title, kraft-coloured "NO. xxxx" stamp rotated −8° in the top-right
-/// corner, IPA + speaker + POS pill on the meta row, primary Chinese
-/// meaning beneath. Stays fixed (does not scroll) while the modules
-/// below scroll independently — see [study_page.dart].
+/// corner, IPA + speaker + POS pill on the meta row, full multi-line
+/// Chinese meaning beneath. The hero card now owns the meaning content
+/// directly (the standalone 释义 section was removed) — `meaningLines`
+/// comes from `translationLines(word.translation)` upstream.
 class WordHeaderSection extends StatelessWidget {
   final Word word;
+  final List<String> meaningLines;
   final bool isPlayingAudio;
   final int todayCompleted;
   final int dailyGoal;
@@ -21,6 +23,7 @@ class WordHeaderSection extends StatelessWidget {
   const WordHeaderSection({
     super.key,
     required this.word,
+    required this.meaningLines,
     required this.isPlayingAudio,
     required this.todayCompleted,
     required this.dailyGoal,
@@ -166,19 +169,23 @@ class WordHeaderSection extends StatelessWidget {
                     ),
                 ],
               ),
-              const SizedBox(height: 12),
-              // Primary Chinese meaning (one-line summary)
-              Text(
-                word.meaning,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w500,
-                  color: StudyTokens.ink,
-                  height: 1.45,
-                ),
-              ),
+              if (meaningLines.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                // Full multi-line Chinese meaning (formerly its own section)
+                for (var i = 0; i < meaningLines.length; i++)
+                  Padding(
+                    padding: EdgeInsets.only(top: i == 0 ? 0 : 6),
+                    child: Text(
+                      meaningLines[i],
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w400,
+                        color: StudyTokens.ink,
+                        height: 1.55,
+                      ),
+                    ),
+                  ),
+              ],
             ],
           ),
         ],

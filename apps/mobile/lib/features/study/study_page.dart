@@ -19,7 +19,6 @@ import '../../core/storage/local_database.dart';
 import '../../core/storage/local_settings_service.dart';
 import 'widgets/cat_companion_strip.dart';
 import 'widgets/example_sentence_section.dart';
-import 'widgets/meaning_section.dart';
 import 'widgets/review_buttons_section.dart';
 import 'widgets/study_tokens.dart';
 import 'widgets/word_forms_section.dart';
@@ -563,6 +562,7 @@ class _StudyPageState extends State<StudyPage> {
     final modules = <Widget>[
       WordHeaderSection(
         word: word,
+        meaningLines: lines,
         isPlayingAudio: _isPlayingAudio,
         todayCompleted: _todayCompleted,
         dailyGoal: _dailyGoal,
@@ -570,9 +570,6 @@ class _StudyPageState extends State<StudyPage> {
       ),
     ];
 
-    if (lines.isNotEmpty) {
-      modules.add(MeaningSection(lines: lines));
-    }
     if (word.examples != null && word.examples!.isNotEmpty) {
       modules.add(ExampleSentenceSection(examples: word.examples!));
     }
