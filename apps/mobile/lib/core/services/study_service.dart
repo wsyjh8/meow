@@ -4,9 +4,6 @@ import '../api/api_client.dart';
 import '../storage/drift/app_database.dart';
 import '../storage/local_database.dart';
 import '../storage/local_settings_service.dart';
-import 'learning_word_detail.dart';
-import 'word_detail_repository.dart';
-import 'word_enrichment_service.dart';
 
 /// P3.1 — Local-first study service.
 ///
@@ -25,34 +22,16 @@ class StudyService {
   final AppDatabase _driftDb;
   // Optional injected settings (for testability). If null, reads SharedPreferences.
   final LocalSettingsService? _settings;
-  final WordDetailRepository _detailRepo;
 
   StudyService({
     required ApiClient apiClient,
     required LocalDatabase db,
     AppDatabase? driftDb,
     LocalSettingsService? settings,
-    WordDetailRepository? detailRepo,
   })  : _apiClient = apiClient,
         _db = db,
         _driftDb = driftDb ?? AppDatabase(),
-        _settings = settings,
-        _detailRepo = detailRepo ??
-            WordDetailRepository(
-              WordEnrichmentService(driftDb: driftDb ?? AppDatabase()),
-            );
-
-  /// Resolve the [WordEnrichment] for [word] (or fetch on cache miss)
-  /// and return a [LearningWordDetail] — single-call replacement for
-  /// the historical "load Word, then load enrichment separately" flow.
-  Future<LearningWordDetail> attachEnrichment(Word word) =>
-      _detailRepo.attachEnrichment(word);
-
-  /// Best-effort: warm the enrichment cache for upcoming words. Caller
-  /// is expected to obtain [wordTexts] via [peekNextWordTexts]. Failures
-  /// are swallowed inside the repository — cache stays clean.
-  Future<void> warmUpWordTexts(List<String> wordTexts) =>
-      _detailRepo.warmUpWordTexts(wordTexts);
+        _settings = settings;
 
   /// Default wordbook when settings unavailable. v0.3.0 P1: still 'book-001'
   /// for backwards-compat (existing dev installs), but it's now just a

@@ -479,10 +479,10 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
     }
   }
 
-  /// Prefetch pronunciation audio + example audio + enrichment SQL for
-  /// the next ~5 upcoming words. All paths fire off the same
-  /// `peekNextWordTexts` result so we only ask the DB once. All errors
-  /// silently swallowed at every layer (peek, prefetch, warmUp) — best-effort.
+  /// Prefetch pronunciation audio + example audio for the next ~5 upcoming
+  /// words. All paths fire off the same `peekNextWordTexts` result so we
+  /// only ask the DB once. All errors silently swallowed at every layer
+  /// (peek, prefetch) — best-effort.
   ///
   /// v0.3.0 P2.1/P2.2 prefetches:
   ///   1. Word audio via WordAudioService (new MP3 path; canonical wordId
@@ -491,11 +491,15 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
   ///   2. Word audio via PronunciationService (legacy WAV; wordText as-is)
   ///      —— transitional fallback while Codex finishes new word audio
   ///      pipeline; remove once /api/v1/words/:id/audio covers all words.
-  ///   3. Enrichment SQL warm-up (so 其他形式 / 近反义词 / 常见词组 /
-  ///      词根词缀 don't visibly load when the user advances).
-  ///   4. Example audio for the *current* word's examples (DB §7.4.2 进
+  ///   3. Example audio for the *current* word's examples (DB §7.4.2 进
   ///      词书时预下载策略 — render-time variant). The play button next
   ///      to each example finds the mp3 already in audio_file_cache.
+  ///
+  /// (Enrichment SQL warm-up was removed alongside the rollback of the
+  /// LearningWordDetail / WordDetailRepository abstraction. If the visible
+  /// "其他形式 / 近反义词 / 常见词组 / 词根词缀" load latency on rate
+  /// becomes a problem, re-add a per-word _enrichmentService.getFor()
+  /// call here without going through StudyService.)
   void _prefetchUpcoming() {
     final exclude = Set<String>.from(_sessionSeenIds);
     if (_currentWord != null) exclude.add(_currentWord!.wordId);
@@ -509,7 +513,6 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
                 .toList(growable: false);
             if (wordIds.isNotEmpty) _wordAudioService.prefetch(wordIds);
             _pronunciationService.prefetch(wordTexts);
-            unawaited(_studyService.warmUpWordTexts(wordTexts));
           })
           .catchError((_) {}),
     );
