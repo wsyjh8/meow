@@ -1,0 +1,43 @@
+# example_content_hash golden fixtures — v0.3 §B.4.2
+# Auto-checked by apps/api/scripts/audio_pipeline/verify_fixtures.py (Python)
+# Algorithm:
+#   sha256_24(canonical_json([
+#     stable_id, word_id, sense_label_or_empty, en, cn,
+#     difficulty_or_empty, str(ordinal), status
+#   ]))
+#
+# NULL handling: sense_label / difficulty empty string when NULL.
+# Cross-language port (TypeScript / Dart) deferred to PR-B; mobile App
+# never recomputes (DB §3.5), so Python-only is sufficient for Day 2.
+
+cases:
+  - name: simple_active
+    stable_id: "57dba00234bb888a9dfd86a8"
+    word_id: "abandon"
+    sense_label: "v. 放弃"
+    en: "Scientists warned that we must not [abandon] our efforts."
+    cn: "科学家警告，我们不能放弃努力。"
+    difficulty: "high_school"
+    ordinal: 0
+    status: "active"
+    expected_content_hash: "9e4598005fbd7677ce7c4723"
+  - name: null_optional_fields
+    stable_id: "abc1234567890abc12345678"
+    word_id: "test"
+    sense_label: null
+    en: "Test sentence."
+    cn: "测试。"
+    difficulty: null
+    ordinal: 5
+    status: "active"
+    expected_content_hash: "e698f92e5e25ffdb62936c44"
+  - name: cn_change_flips_hash
+    stable_id: "57dba00234bb888a9dfd86a8"
+    word_id: "abandon"
+    sense_label: "v. 放弃"
+    en: "Scientists warned that we must not [abandon] our efforts."
+    cn: "不一样的中文翻译。"
+    difficulty: "high_school"
+    ordinal: 0
+    status: "active"
+    expected_content_hash: "a6eeee07d246c24ff8e77042"

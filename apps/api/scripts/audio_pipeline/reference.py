@@ -166,3 +166,65 @@ def compute_source_text_hash(target_kind: str, input_for_example: str) -> str:
     if target_kind == "example":
         return sha256_16(normalize_text(input_for_example).encode("utf-8"))
     return sha256_16(input_for_example.encode("utf-8"))
+
+
+# =============================================================================
+# Example row content_hash (per v0.3 §B.4.2 — added in PR-A Day 2)
+# =============================================================================
+
+
+def compute_example_content_hash(
+    *,
+    stable_id: str,
+    word_id: str,
+    sense_label: str | None,
+    en: str,
+    cn: str,
+    difficulty: str | None,
+    ordinal: int,
+    status: str,
+) -> str:
+    """
+    Row-level fingerprint for client diff (v0.3 §B.4.2).
+
+    Relationship to stable_id:
+      - stable_id only binds the English sentence (normalize_text(en))
+      - content_hash covers ALL package-visible fields; any change flips it
+      - Edit cn translation: stable_id stays, content_hash changes →
+        client row-diff triggers UPDATE locally
+      - Edit en sentence: new stable_id → new examples row → old row deprecated
+
+    Ordinal semantics (PR-A Day 2 review answer):
+      ordinal is a row-level FIXED field, set at migration 004 import time
+      based on each source-book's 0..4 numbering. The same word appearing
+      in multiple source books gets multiple example rows (each with a
+      distinct stable_id), each numbered 0..4 within its own source set.
+      ordinal does NOT vary across packages — safe to include in row-level
+      content_hash.
+
+    NULL handling:
+      sense_label / difficulty default to "" (empty string) when NULL —
+      canonical_json forbids None entries (cross-language ambiguity).
+
+    Algorithm:
+      sha256_24(canonical_json([
+        stable_id, word_id, sense_label or "", en, cn,
+        difficulty or "", str(ordinal), status
+      ]))
+
+    Returns: 24-char lowercase hex.
+    """
+    return sha256_24(
+        canonical_json_bytes(
+            [
+                stable_id,
+                word_id,
+                sense_label or "",
+                en,
+                cn,
+                difficulty or "",
+                str(ordinal),  # int → str: canonical_json strings only
+                status,
+            ]
+        )
+    )

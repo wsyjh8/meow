@@ -22,6 +22,7 @@ sys.path.insert(0, str(HERE))
 from reference import (  # noqa: E402
     canonical_json_bytes,
     compute_audio_id,
+    compute_example_content_hash,
     compute_example_stable_id,
     normalize_text,
     normalize_word,
@@ -204,6 +205,42 @@ def verify_canonical_json() -> int:
     return fail
 
 
+def verify_example_content_hash() -> int:
+    """v0.3 §B.4.2 (PR-A Day 2): row-level content_hash for examples."""
+    blocks = _read_blocks(FIXTURES_DIR / "example_content_hash.yaml")
+    fail = 0
+    for b in blocks:
+        # NULL is encoded literally as "null" in YAML, _unquote_yaml passes
+        # the bare token through. Convert to actual None.
+        sense_label = b.get("sense_label")
+        if sense_label == "null":
+            sense_label = None
+        difficulty = b.get("difficulty")
+        if difficulty == "null":
+            difficulty = None
+
+        actual = compute_example_content_hash(
+            stable_id=b["stable_id"],
+            word_id=b["word_id"],
+            sense_label=sense_label,
+            en=b["en"],
+            cn=b["cn"],
+            difficulty=difficulty,
+            ordinal=int(b["ordinal"]),
+            status=b["status"],
+        )
+        if actual != b["expected_content_hash"]:
+            print(
+                f"  FAIL example_content_hash [{b['name']}]: "
+                f"got {actual}, want {b['expected_content_hash']}"
+            )
+            fail += 1
+    print(
+        f"  example_content_hash: {len(blocks) - fail}/{len(blocks)} pass"
+    )
+    return fail
+
+
 def main() -> None:
     print(f"Verifying fixtures in {FIXTURES_DIR}")
     total_fail = 0
@@ -212,6 +249,7 @@ def main() -> None:
     total_fail += verify_normalize_word()
     total_fail += verify_stable_id()
     total_fail += verify_audio_id()
+    total_fail += verify_example_content_hash()
     if total_fail > 0:
         print(f"\n{total_fail} test(s) FAILED")
         sys.exit(1)
