@@ -4,6 +4,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../app/app.dart' show studyPageRouteObserver;
 import '../../core/api/api_client.dart';
 import '../../core/audio/pronunciation_service.dart';
 import '../../core/util/pos_label.dart';
@@ -43,7 +44,7 @@ class StudyPage extends StatefulWidget {
   State<StudyPage> createState() => _StudyPageState();
 }
 
-class _StudyPageState extends State<StudyPage> {
+class _StudyPageState extends State<StudyPage> with RouteAware {
   // ── Services ──────────────────────────────────────────────────────────────
   late final StudyService _studyService;
   late final FsrsService _fsrsService;
@@ -68,7 +69,11 @@ class _StudyPageState extends State<StudyPage> {
   // ── Word state ────────────────────────────────────────────────────────────
   bool _isPlayingAudio = false;
   Word? _currentWord;
-  bool _isLoading = false;
+  // Start as true so the first frame (before initState's hydrate chain
+  // resolves) shows the loader rather than briefly flashing the done state
+  // — _currentWord is also null at that moment and the build branches
+  // would otherwise hit _buildDoneState().
+  bool _isLoading = true;
   bool _isSubmitting = false;
   String? _error;
 
@@ -78,24 +83,27 @@ class _StudyPageState extends State<StudyPage> {
   /// Null when: word not yet loaded, during submission, or FSRS card absent/error.
   Map<ReviewRating, Duration>? _previewDurations;
 
-  // ── Session requeue state (session_requeue_v1) ──────────────────────────
-  // _sessionSeenIds: all words shown this session (mastered + requeued).
+  // ── Session consolidation state (session_consolidation_v1) ─────────────
+  // _sessionSeenIds: all words shown this session (mastered + in consolidation).
   //   Used as extraExclude so getNextWord() never returns a word already
-  //   handled (or currently in the requeue) as the "next new" word.
-  // _requeuedWords: words pending re-show, ordered by insertion time.
-  //   Each entry carries a counter; the word is shown again once enough
-  //   other cards have been displayed.
-  //
-  // Bug 2 follow-up: there used to be a `_requeuedOnceIds` set that
-  // capped a card to a single requeue cycle — second 不认识 would
-  // bypass the requeue and end the card. This caused the completion
-  // screen to fire after roughly 2N taps even if the user mastered
-  // zero. New behaviour: forgot ALWAYS requeues. The done gate moved
-  // from "_todayServedIds full + queue empty" to "_todayCompleted ≥
-  // _dailyGoal" so the user can only finish the day by mastering N
-  // cards (i.e. N taps of 认识/熟悉), not by tapping 不认识 enough times.
+  //   handled as the "next new" word.
+  // _shownIndex: monotonically increasing counter, +1 each time a word card
+  //   is actually displayed (NOT bumped on done / error states).
+  // _consolidation: wordId -> _ConsolidationState. A word enters here on its
+  //   FIRST forgot rating; subsequent appearances are pure local consolidation
+  //   (no FSRS rateCard, no cloud submitStudyAttempt, no entry into
+  //   formal attempt history). Rationale: avoid repeated wrong cards
+  //   polluting FSRS due/stability and cloud attempt history. The very first
+  //   real recall result is the only one that hits the official channels.
+  // _lastConsolidationShownIndex: the _shownIndex when a consolidation card
+  //   was last displayed. Used to enforce the global "≥4 normal cards
+  //   between any two consolidation insertions" throttle (rule 7) while
+  //   normalRemaining > 0. Init to a sentinel below 0 so the first
+  //   consolidation insertion is unrestricted.
   final Set<String> _sessionSeenIds = {};
-  final List<_RequeueEntry> _requeuedWords = [];
+  int _shownIndex = 0;
+  final Map<String, _ConsolidationState> _consolidation = {};
+  int _lastConsolidationShownIndex = -1000;
 
   // ── Today progress ─────────────────────────────────────────────────────────
   /// Number of new words mastered today (cumulative across sessions).
@@ -153,8 +161,55 @@ class _StudyPageState extends State<StudyPage> {
     _sessionSyncService.drainPending();
     _studyService.syncPendingAttempts();
     _startSession();
-    _loadDailyGoal();
-    _loadNextWord();
+    // _loadDailyGoal MUST complete before _loadNextWord, otherwise the first
+    // pick runs against unhydrated _todayServedIds (= empty set) and Path B
+    // bypasses the daily-goal cap, allowing one extra serve per StudyPage
+    // entry. Repeating that across sessions pushes _todayCompleted past
+    // _dailyGoal.
+    //
+    // _hydrateStuckForgots ALSO runs before _loadNextWord so today's
+    // forgot-but-never-recovered words are present in _consolidation
+    // and Path A / Path C can show them.
+    () async {
+      await _loadDailyGoal();
+      await _hydrateStuckForgots();
+      await _loadNextWord();
+    }();
+  }
+
+  /// Seed [_consolidation] with today's "stuck forgots" — words that
+  /// have a forgot record today but no know record (cross-session).
+  /// Without this, those words sit in [_todayServedIds] (consuming
+  /// dailyGoal budget) but never reappear because consolidation
+  /// state is in-memory and dies when the previous session ended.
+  ///
+  /// Each entry seeds with cooldownUntilIndex = 0 (immediately ready),
+  /// failCount = 1, and is also added to [_sessionSeenIds] so Path B
+  /// won't try to re-serve them as fresh new words.
+  ///
+  /// need #21 amendment (option B): if today's submitted-FSRS count
+  /// already meets/exceeds the (possibly just-reduced) dailyGoal,
+  /// SKIP hydration entirely. The first-time ratings stay in
+  /// word_records / FSRS tables (no rollback per spec red line) — we
+  /// just don't re-show them today. FSRS handles future scheduling.
+  Future<void> _hydrateStuckForgots() async {
+    if (_todayServedIds.length >= _dailyGoal) return;
+    try {
+      final words = await _studyService.loadStuckForgotWords();
+      if (!mounted || words.isEmpty) return;
+      for (final word in words) {
+        _consolidation[word.wordId] = _ConsolidationState(
+          word: word,
+          cooldownUntilIndex: 0,
+          lastShownIndex: 0,
+          failCount: 1,
+        );
+        _sessionSeenIds.add(word.wordId);
+      }
+    } catch (_) {
+      // Hydration is best-effort — failure leaves _consolidation empty,
+      // which matches pre-fix behavior.
+    }
   }
 
   Future<void> _startSession() async {
@@ -169,7 +224,22 @@ class _StudyPageState extends State<StudyPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Subscribe to route-pop events. When user pushes the settings page
+    // and pops back, didPopNext() fires — that's where dailyGoal is
+    // re-read so a mid-session change in settings is picked up
+    // immediately. RouteObserver.subscribe is idempotent for repeat
+    // calls with the same (subscriber, route) pair.
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      studyPageRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
   void dispose() {
+    studyPageRouteObserver.unsubscribe(this);
     // Need #8 — close the local session row + post finish to cloud.
     // dispose() runs on Navigator.pop, the Android back button, and app
     // backgrounding via the framework, so this covers the three required
@@ -179,6 +249,53 @@ class _StudyPageState extends State<StudyPage> {
     _pronunciationService.dispose();
     _studyService.dispose();
     super.dispose();
+  }
+
+  // ── Daily goal change propagation (need #21) ──────────────────────────────
+  //
+  // When user pushes the settings page and changes dailyGoal then pops
+  // back, didPopNext fires. We re-read the persisted value and, if it
+  // differs from what we have, kick a single _loadNextWord() so the
+  // existing normalRemaining gate at the top of that function picks the
+  // right path (continue pulling / consolidate / done).
+  //
+  // This is the only place the new dailyGoal can flow into a live
+  // StudyPage — outside of fresh initState. We deliberately do NOT
+  // truncate any queue manually:
+  //   - Already-rated words are persisted in word_records / FSRS tables;
+  //     never touched here per spec.
+  //   - The "pre-fetched but unrated" set in this architecture is at
+  //     most 1 (the currently-shown card before user taps a rating).
+  //     If the new dailyGoal makes that slot illegal, _loadNextWord
+  //     replaces _currentWord with the next legitimate candidate (or
+  //     done state). The discarded card never wrote to FSRS / cloud,
+  //     so it's free to reappear later as a fresh new word.
+
+  @override
+  void didPopNext() {
+    super.didPopNext();
+    _refreshDailyGoalFromPrefs();
+  }
+
+  Future<void> _refreshDailyGoalFromPrefs() async {
+    int newGoal;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      newGoal = LocalSettingsService(prefs).dailyGoal;
+    } catch (_) {
+      return;
+    }
+    if (!mounted || newGoal == _dailyGoal) return;
+    setState(() => _dailyGoal = newGoal);
+    // need #21 amendment (option B): when the new cap is already
+    // breached by today's submitted-FSRS count, also drop the
+    // consolidation queue so today's stuck forgots stop re-appearing.
+    // Records / FSRS state are NOT touched — only the in-session
+    // re-show loop is silenced. FSRS handles future scheduling.
+    if (_todayServedIds.length >= _dailyGoal) {
+      _consolidation.clear();
+    }
+    await _loadNextWord();
   }
 
   // ── Settings ──────────────────────────────────────────────────────────────
@@ -212,91 +329,110 @@ class _StudyPageState extends State<StudyPage> {
   Future<void> _loadNextWord() async {
     setState(() { _isLoading = true; _error = null; });
 
-    // ── "Today is done" gate (Bug 2 follow-up: mastered, not served) ──
-    // Mastered count reaching the daily goal = today is complete.
-    // Whether the requeue still holds cards or not is irrelevant —
-    // the user has internalised _dailyGoal new words today.
-    if (_todayCompleted >= _dailyGoal) {
-      if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
-      return;
-    }
-
-    // ── "Don't pull more new words" cap (Bug 4 — kept) ──
-    // Even though completion is now driven by mastered count, we still
-    // refuse to enqueue NEW words past _dailyGoal unique seen-today.
-    // This bounds the queue size so a forever-不认识 user can't
-    // accidentally inflate the served pool. Requeue cycle keeps
-    // running; user must master existing cards to drain it.
+    // session_consolidation_v1 — pick order:
+    //   A. consolidation queue ready item (cooldownUntilIndex <= _shownIndex)
+    //      — only when normalRemaining > 0 AND the global "≥4 normal cards
+    //      between consolidation insertions" throttle is satisfied.
+    //   B. fresh new word from getNextWord — gated by _todayServedIds.length
+    //      < _dailyGoal (bug006 口径: dailyGoal only restricts pulling new
+    //      words; mastered count is no longer an early-return gate).
+    //   C. fallback: queue is genuinely out of fresh content but
+    //      consolidation has entries — show the longest-untouched one,
+    //      ignore cooldown and throttle. "Anti-loop" only applies when
+    //      there is fresh content to protect; once the queue is down to
+    //      consolidation, cycling the remaining wrong words is desired.
+    //   D. truly done (no consolidation, no new words available).
     //
-    // Edge case (probably unreachable now that forgot always requeues):
-    // served cap hit AND queue empty AND mastered < goal. We still
-    // declare today done so the page doesn't get stuck on a blank card.
-    if (_todayServedIds.length >= _dailyGoal && _requeuedWords.isEmpty) {
-      if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
-      return;
-    }
+    // _shownIndex is incremented ONLY when a word card is actually
+    // displayed (paths A, B, C). Path D does not bump it.
+    final normalRemaining = (_dailyGoal - _todayServedIds.length).clamp(0, 1 << 30);
+    final throttleSatisfied =
+        _shownIndex - _lastConsolidationShownIndex >= 4;
 
-    // Tick requeue counters — each call to _loadNextWord represents one card
-    // transition, so every pending requeue entry moves one step closer.
-    for (final entry in _requeuedWords) {
-      entry.cardsSinceRequeue++;
-    }
-
-    // 1. Show earliest ready requeued word (delay has been served).
-    final readyIdx = _requeuedWords.indexWhere((e) => e.isReady);
-    if (readyIdx >= 0) {
-      final entry = _requeuedWords.removeAt(readyIdx);
-      if (mounted) {
-        setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
-        _loadPreviewForWord(entry.word.wordId);
-        _loadEnrichmentForWord(entry.word);
-        _prefetchUpcoming();
+    // ── Path A: ready consolidation item (gated by normalRemaining > 0
+    // AND ≥4 normal cards since last consolidation insertion) ────────
+    // Pick eligible (cooldownUntilIndex <= _shownIndex), preferring the
+    // entry whose lastShownIndex is smallest (i.e. shown longest ago).
+    if (normalRemaining > 0 && throttleSatisfied) {
+      _ConsolidationState? readyEntry;
+      for (final entry in _consolidation.values) {
+        if (entry.cooldownUntilIndex <= _shownIndex) {
+          if (readyEntry == null ||
+              entry.lastShownIndex < readyEntry.lastShownIndex) {
+            readyEntry = entry;
+          }
+        }
       }
-      return;
-    }
-
-    // 2. Get next unseen word, excluding all session-seen words.
-    try {
-      final word = await _studyService.getNextWord(extraExclude: _sessionSeenIds);
-      if (word != null) {
-        _sessionSeenIds.add(word.wordId);
-        // Bug 4 — count this card against today's served-set so the
-        // gate above will trigger when goal is reached, even if the
-        // user only rates 不认识/模糊 (which never bumps _todayCompleted).
-        _todayServedIds.add(word.wordId);
+      if (readyEntry != null) {
+        _shownIndex++;
+        readyEntry.lastShownIndex = _shownIndex;
+        _lastConsolidationShownIndex = _shownIndex;
+        final word = readyEntry.word;
         if (mounted) {
           setState(() { _currentWord = word; _isLoading = false; _isSubmitting = false; });
           _loadPreviewForWord(word.wordId);
           _loadEnrichmentForWord(word);
           _prefetchUpcoming();
-
-          // P3.3.17: Cache word locally for offline review queue — fire-and-forget.
-          _wordCacheService.insertWord(
-            wordId: word.wordId,
-            bookId: word.bookId,
-            wordText: word.wordText,
-            meaning: word.meaning,
-            phonetic: word.phonetic,
-            translation: word.translation,
-            frequencyRank: word.frequencyRank,
-          ).catchError((_) {});
         }
         return;
       }
+    }
 
-      // 3. No new unseen words — show earliest requeued word even if not ready yet.
-      if (_requeuedWords.isNotEmpty) {
-        final entry = _requeuedWords.removeAt(0);
+    // ── Path B: fresh new word (gated by daily-goal served cap) ───────
+    try {
+      if (normalRemaining > 0) {
+        final word = await _studyService.getNextWord(extraExclude: _sessionSeenIds);
+        if (word != null) {
+          _sessionSeenIds.add(word.wordId);
+          _todayServedIds.add(word.wordId);
+          _shownIndex++;
+          if (mounted) {
+            setState(() { _currentWord = word; _isLoading = false; _isSubmitting = false; });
+            _loadPreviewForWord(word.wordId);
+            _loadEnrichmentForWord(word);
+            _prefetchUpcoming();
+
+            // P3.3.17: Cache word locally for offline review queue — fire-and-forget.
+            _wordCacheService.insertWord(
+              wordId: word.wordId,
+              bookId: word.bookId,
+              wordText: word.wordText,
+              meaning: word.meaning,
+              phonetic: word.phonetic,
+              translation: word.translation,
+              frequencyRank: word.frequencyRank,
+            ).catchError((_) {});
+          }
+          return;
+        }
+      }
+
+      // ── Path C: fallback to consolidation, ignoring cooldown ──────
+      // Reached only when no fresh new word is available. With nothing
+      // else to interleave, the spacing rule serves no purpose — just
+      // show the longest-untouched consolidation entry.
+      if (_consolidation.isNotEmpty) {
+        _ConsolidationState? fallback;
+        for (final entry in _consolidation.values) {
+          if (fallback == null ||
+              entry.lastShownIndex < fallback.lastShownIndex) {
+            fallback = entry;
+          }
+        }
+        _shownIndex++;
+        fallback!.lastShownIndex = _shownIndex;
+        _lastConsolidationShownIndex = _shownIndex;
+        final word = fallback.word;
         if (mounted) {
-          setState(() { _currentWord = entry.word; _isLoading = false; _isSubmitting = false; });
-          _loadPreviewForWord(entry.word.wordId);
-          _loadEnrichmentForWord(entry.word);
+          setState(() { _currentWord = word; _isLoading = false; _isSubmitting = false; });
+          _loadPreviewForWord(word.wordId);
+          _loadEnrichmentForWord(word);
           _prefetchUpcoming();
         }
         return;
       }
 
-      // 4. Truly done for this session.
+      // ── Path D: truly done for this session ───────────────────────
       if (mounted) setState(() { _currentWord = null; _isLoading = false; _isSubmitting = false; });
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _isLoading = false; });
@@ -358,64 +494,91 @@ class _StudyPageState extends State<StudyPage> {
         .catchError((_) {}); // best-effort — silent on failure
   }
 
-  // P3.3.1: 4-button rating handler.
-  // Three-layer mapping: ReviewRating (semantic) → FSRS grade (local) + binary string (cloud).
+  // session_consolidation_v1: 4-button rating handler.
   //
-  // session_requeue_v1:
-  //   again / hard → local-only write + requeue (first time) or advance (second time).
-  //   good / easy  → mark mastered, advance to next new word.
+  // Two distinct paths based on whether this is the FIRST appearance of the
+  // word or a same-session consolidation re-show:
+  //
+  //   FIRST appearance (word NOT in _consolidation):
+  //     - Official FSRS rating (rateCard) + official cloud attempt.
+  //     - On forgot → seed _consolidation with cooldownUntilIndex driven by
+  //       _computeCooldownGap (dynamic spacing scaled to remaining new-word
+  //       budget; see helpers at the bottom of this state class).
+  //     - On know → bump _todayCompleted (mastered progress).
+  //
+  //   CONSOLIDATION appearance (word IS in _consolidation):
+  //     - NO FSRS rateCard, NO cloud submitStudyAttempt — pure local state.
+  //     - know: consecutiveCorrect++; ≥2 → exit consolidation; on exit,
+  //       write a LOCAL-only know record to word_records (so cross-session
+  //       rehydration won't re-seed it) and bump _todayCompleted.
+  //     - forgot: failCount++; consecutiveCorrect reset; dynamic cooldown.
+  //
+  // Rationale: avoid repeated wrong cards polluting FSRS due/stability and
+  // cloud attempt history. The first real recall is the only one that hits
+  // the official channels.
   Future<void> _onRate(ReviewRating rating) async {
     if (_isSubmitting || _currentWord == null) return;
-    // Clear preview during submission — buttons are disabled anyway.
     if (mounted) setState(() { _isSubmitting = true; _error = null; _previewDurations = null; });
 
+    final wordId = _currentWord!.wordId;
+    final isConsolidation = _consolidation.containsKey(wordId);
+    final isForgot = rating == ReviewRating.again || rating == ReviewRating.hard;
+
     try {
-      // Step 1: Ensure FSRS card exists (idempotent — no-op if already initialized)
-      await _fsrsService.initCardForWord(_currentWord!.wordId);
+      if (!isConsolidation) {
+        // ── FIRST appearance ──────────────────────────────────────────
+        await _fsrsService.initCardForWord(wordId);
+        await _fsrsService.rateCard(wordId, rating);
 
-      // Step 2: Apply FSRS rating — atomic local write (review_logs INSERT + card_states UPDATE)
-      await _fsrsService.rateCard(_currentWord!.wordId, rating);
+        final binaryResult = isForgot ? 'forgot' : 'know';
+        await _studyService.submitStudyAttempt(
+          wordId: wordId,
+          bookId: _currentWord!.bookId,
+          studyType: 'new',
+          actionResult: binaryResult,
+          sessionId: _sessionId,
+        );
 
-      // Step 3: Binary mapping for StudyService / cloud sync
-      // again/hard → 'forgot' | good/easy → 'know'
-      final binaryResult = (rating == ReviewRating.good || rating == ReviewRating.easy)
-          ? 'know'
-          : 'forgot';
-
-      // Step 4: StudyService — local-first write + async cloud sync
-      await _studyService.submitStudyAttempt(
-        wordId: _currentWord!.wordId,
-        bookId: _currentWord!.bookId,
-        studyType: 'new',
-        actionResult: binaryResult,
-        sessionId: _sessionId,
-      );
-
-      // Step 5 (session_requeue_v1, Bug 2 follow-up):
-      // On 'forgot' (不认识 / 模糊), ALWAYS requeue the card with the
-      // configured short delay — even if we've already requeued it
-      // before. This is intentional: today is "complete" only when
-      // _todayCompleted (mastered) reaches _dailyGoal, so a card the
-      // user can't recall must keep coming back until they finally
-      // tap 认识/熟悉.
-      //
-      // The previous implementation capped each card to a single
-      // requeue cycle via `_requeuedOnceIds`; that caused completion
-      // to fire after roughly 2 × _dailyGoal taps even with mastered
-      // = 0. Removed.
-      if (binaryResult == 'forgot') {
-        // again (不认识) = 3 cards; hard (模糊) = 2 cards.
-        final delay = rating == ReviewRating.again ? 3 : 2;
-        _sessionSeenIds.add(_currentWord!.wordId); // exclude from new-word picks
-        _requeuedWords.add(_RequeueEntry(word: _currentWord!, cardsNeededBefore: delay));
+        if (isForgot) {
+          _sessionSeenIds.add(wordId);
+          _consolidation[wordId] = _ConsolidationState(
+            word: _currentWord!,
+            cooldownUntilIndex: _shownIndex + _computeCooldownGap(wordId, 1),
+            lastShownIndex: _shownIndex,
+            failCount: 1,
+          );
+        } else {
+          if (mounted) setState(() => _todayCompleted++);
+        }
+      } else {
+        // ── CONSOLIDATION appearance — local state only ───────────────
+        final state = _consolidation[wordId]!;
+        if (isForgot) {
+          state.consecutiveCorrect = 0;
+          state.failCount++;
+          state.cooldownUntilIndex =
+              _shownIndex + _computeCooldownGap(wordId, state.failCount);
+        } else {
+          state.consecutiveCorrect++;
+          if (state.consecutiveCorrect >= 2) {
+            // Consolidation graduation — persist a LOCAL-ONLY know record
+            // so future sessions today don't re-seed this word into
+            // _consolidation, and bump mastered progress. Cloud / FSRS
+            // are intentionally untouched per session_consolidation_v1.
+            await _studyService.recordLocalConsolidationRecovery(
+              wordId: wordId,
+              bookId: _currentWord!.bookId,
+              sessionId: _sessionId,
+            );
+            _consolidation.remove(wordId);
+            if (mounted) setState(() => _todayCompleted++);
+          } else {
+            state.cooldownUntilIndex =
+                _shownIndex + _computeCooldownGap(wordId, state.failCount);
+          }
+        }
       }
 
-      // Step 6: Track mastered words for session progress.
-      if (binaryResult == 'know') {
-        if (mounted) setState(() => _todayCompleted++);
-      }
-
-      // Step 7: Load next word (checks requeue list first, then new words)
       await _loadNextWord();
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _isSubmitting = false; });
@@ -423,6 +586,63 @@ class _StudyPageState extends State<StudyPage> {
     }
 
     if (mounted) setState(() { _isSubmitting = false; });
+  }
+
+  // ── Dynamic spacing (session_consolidation_v1 spec) ───────────────────────
+  //
+  // gap = baseGap + failBoost + jitter, where the tier of (baseGap, jitterMax)
+  // is decided by normalRemaining = dailyGoal - todayServedIds.length:
+  //
+  //   normalRemaining        baseGap            jitterMax
+  //   ≥ 15                   8                  4
+  //   8–14                   6                  3
+  //   4–7                    4                  2
+  //   1–3                    normalRemaining+1  1
+  //   0                      0                  0   (集中巩固 phase)
+  //
+  // failBoost = clamp(failCount - 1, 0, 2) * 3, so:
+  //   1st forgot → 0, 2nd → 3, 3rd+ → 6 (capped).
+  //
+  // jitter is stable per (wordId, failCount) so test runs are deterministic
+  // and the same word doesn't drift between consecutive _loadNextWord calls.
+  int _computeCooldownGap(String wordId, int failCount) {
+    final normalRemaining =
+        (_dailyGoal - _todayServedIds.length).clamp(0, 1 << 30);
+    final int baseGap;
+    final int jitterMax;
+    if (normalRemaining >= 15) {
+      baseGap = 8;
+      jitterMax = 4;
+    } else if (normalRemaining >= 8) {
+      baseGap = 6;
+      jitterMax = 3;
+    } else if (normalRemaining >= 4) {
+      baseGap = 4;
+      jitterMax = 2;
+    } else if (normalRemaining >= 1) {
+      baseGap = normalRemaining + 1;
+      jitterMax = 1;
+    } else {
+      // 集中巩固 phase: cooldown effectively disabled. Path C handles
+      // round-robin display once normal queue is exhausted.
+      baseGap = 0;
+      jitterMax = 0;
+    }
+    final failBoost = (failCount - 1).clamp(0, 2) * 3;
+    final jitter = _stableJitter('$wordId|$failCount', jitterMax);
+    return baseGap + failBoost + jitter;
+  }
+
+  /// Deterministic jitter in [0, max] derived from [key]. Returns 0 if
+  /// [max] ≤ 0. Uses a simple polynomial rolling hash so the result is
+  /// stable across runs and platforms (no dependency on Object.hashCode).
+  int _stableJitter(String key, int max) {
+    if (max <= 0) return 0;
+    int h = 0;
+    for (var i = 0; i < key.length; i++) {
+      h = (h * 31 + key.codeUnitAt(i)) & 0x7fffffff;
+    }
+    return h % (max + 1);
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -822,6 +1042,7 @@ class _StudyPageState extends State<StudyPage> {
       ),
     );
   }
+
 }
 
 // ── Private helper widgets ────────────────────────────────────────────────────
@@ -858,18 +1079,34 @@ class _PillBtn extends StatelessWidget {
   }
 }
 
-// ── Session requeue entry (session_requeue_v1) ─────────────────────────────
+// ── Session consolidation entry (session_consolidation_v1) ─────────────────
 
-/// Holds a word pending re-show after a short intra-session delay.
+/// Per-word state for the same-session consolidation queue.
 ///
-/// [cardsNeededBefore]: number of OTHER cards the user must see before
-/// this word reappears. Decremented by _loadNextWord() on each transition.
-class _RequeueEntry {
+/// A word lands here when it is rated `forgot` for the FIRST time this
+/// session. While in consolidation, all subsequent ratings are processed
+/// locally only — they do NOT touch FSRS or the cloud attempt history.
+///
+/// - [cooldownUntilIndex]: the page-level `_shownIndex` must be ≥ this
+///   value before the word may appear again. Initial value of
+///   `_shownIndex + 4` guarantees at least 3 other cards intervene.
+/// - [lastShownIndex]: the `_shownIndex` value at the most recent display.
+///   Used to choose the longest-untouched ready entry when several are eligible.
+/// - [consecutiveCorrect]: number of consecutive `know` ratings in
+///   consolidation. ≥ 2 evicts the entry (consolidation complete).
+/// - [failCount]: cumulative `forgot` ratings (including the first). Each
+///   subsequent forgot extends the cooldown to `_shownIndex + 3 + failCount`.
+class _ConsolidationState {
   final Word word;
-  final int cardsNeededBefore;
-  int cardsSinceRequeue = 0;
+  int cooldownUntilIndex;
+  int lastShownIndex;
+  int consecutiveCorrect = 0;
+  int failCount;
 
-  _RequeueEntry({required this.word, required this.cardsNeededBefore});
-
-  bool get isReady => cardsSinceRequeue >= cardsNeededBefore;
+  _ConsolidationState({
+    required this.word,
+    required this.cooldownUntilIndex,
+    required this.lastShownIndex,
+    this.failCount = 0,
+  });
 }

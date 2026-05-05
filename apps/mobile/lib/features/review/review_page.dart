@@ -1,3 +1,4 @@
+// DEPRECATED: review functionality lives in StudyPage; this file is no longer routed.
 import 'package:flutter/material.dart';
 import '../../core/api/api_client.dart';
 import '../../core/guards/p3_feature_guard.dart';

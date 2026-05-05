@@ -180,6 +180,87 @@ class StudyService {
             .toList(),
       );
 
+  /// Resolve full [Word] objects (with examples attached) for today's
+  /// "stuck forgot" word_ids — words the user forgot earlier today but
+  /// never recovered (no `know` record in word_records). Used by
+  /// StudyPage to rehydrate the consolidation queue at session start
+  /// so these words can re-appear via Path A / Path C without
+  /// counting against the daily-goal cap.
+  ///
+  /// Routes per word:
+  ///   1. cached_words (CET-4) lookup
+  ///   2. word_entries (ZK/GK) fallback
+  ///   3. silently skip words present in neither (orphan rows from a
+  ///      since-removed wordbook or stale data — treat as no-op).
+  Future<List<Word>> loadStuckForgotWords() async {
+    final ids = await _db.getTodayStuckForgotIds();
+    if (ids.isEmpty) return [];
+    final result = <Word>[];
+    for (final id in ids) {
+      Word? word;
+      final cached = await _driftDb.getCachedWordById(id);
+      if (cached != null) {
+        word = Word(
+          wordId: cached.wordId,
+          wordText: cached.wordText,
+          meaning: cached.meaning,
+          phonetic: cached.phonetic,
+          translation: cached.translation,
+          bookId: cached.bookId,
+        );
+      } else {
+        final entry = await _driftDb.getWordEntryById(id);
+        if (entry != null) {
+          word = Word(
+            wordId: entry.wordId,
+            wordText: entry.wordText,
+            meaning: entry.meaning,
+            phonetic: entry.phonetic,
+            translation: entry.translation,
+            definition: entry.definition,
+            frequencyRank: entry.frequencyRank,
+            wordForms: entry.wordForms,
+            bookId: 'review',
+          );
+        }
+      }
+      if (word == null) continue;
+      Word resolved = word;
+      try {
+        var exRows = await _driftDb
+            .getExamplesForWordText(resolved.wordText, limit: 3);
+        if (exRows.isEmpty) {
+          exRows =
+              await _driftDb.getExamplesForWord(resolved.wordId, limit: 3);
+        }
+        if (exRows.isNotEmpty) resolved = _withExamples(resolved, exRows);
+      } catch (_) {}
+      result.add(resolved);
+    }
+    return result;
+  }
+
+  /// Write a local-only `know` record without triggering cloud sync.
+  /// Used by StudyPage when a word exits the consolidation queue
+  /// (consecutive 2 know's) so future sessions know the word was
+  /// recovered today and don't re-seed it back into consolidation.
+  /// Deliberately bypasses [_syncToApiInBackground] — consolidation
+  /// recoveries are local-only by design (no cloud attempt history,
+  /// no FSRS update, see session_consolidation_v1 spec).
+  Future<void> recordLocalConsolidationRecovery({
+    required String wordId,
+    required String bookId,
+    String? sessionId,
+  }) async {
+    await _db.insertWordRecord(
+      wordId: wordId,
+      bookId: bookId,
+      studyType: 'new',
+      actionResult: 'know',
+      sessionId: sessionId,
+    );
+  }
+
   /// Peek at the word_text values of the next [count] unstudied words.
   ///
   /// Used by the study page to prefetch pronunciation audio ahead of time.
