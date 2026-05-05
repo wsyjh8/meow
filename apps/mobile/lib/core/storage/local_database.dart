@@ -199,6 +199,30 @@ class LocalDatabase {
     return rows.map((r) => r['word_id'] as String).toSet();
   }
 
+  /// Today's "stuck forgots" — word_ids that have at least one `forgot`
+  /// record today (study_type='new') AND have NO 'know' record at any
+  /// point in time. Used by StudyPage to rehydrate the consolidation
+  /// queue at session start, so words the user forgot in earlier
+  /// sessions today don't get permanently stranded by the daily-goal cap.
+  Future<Set<String>> getTodayStuckForgotIds() async {
+    final now = DateTime.now();
+    final localMidnight = DateTime(now.year, now.month, now.day);
+    final nextLocalMidnight = localMidnight.add(const Duration(days: 1));
+    final startUtcIso = localMidnight.toUtc().toIso8601String();
+    final endUtcIso = nextLocalMidnight.toUtc().toIso8601String();
+    final rows = await _db!.rawQuery(
+      "SELECT DISTINCT word_id FROM word_records "
+      "WHERE study_type = 'new' AND action_result = 'forgot' "
+      "AND created_at >= ? AND created_at < ? "
+      "AND word_id NOT IN ("
+      "  SELECT word_id FROM word_records "
+      "  WHERE study_type = 'new' AND action_result = 'know'"
+      ")",
+      [startUtcIso, endUtcIso],
+    );
+    return rows.map((r) => r['word_id'] as String).toSet();
+  }
+
   /// Count new words successfully studied today.
   /// Used as offline fallback for [TodayState.todayNewCompleted].
   ///

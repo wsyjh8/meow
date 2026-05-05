@@ -4,25 +4,17 @@ import '../../../core/api/api_client.dart' show Word;
 import '../../../core/util/pos_label.dart';
 import 'study_tokens.dart';
 
-/// Fixed-height card-top region.
+/// WordTitleCard — the hero card at the top of the study page.
 ///
-/// Holds the word's identity-defining information: status badges, the
-/// English word + phonetic + speaker button, the POS pill, and the
-/// primary Chinese meaning ("意外事件"). PRD #14 requires this region
-/// to **never scroll** and to **never grow** — so:
-///
-/// * Outermost wrapper is `SizedBox(height: 156)` (strict fixed height).
-/// * Word / phonetic / POS pill use `maxLines: 1` + ellipsis.
-/// * Primary meaning uses `maxLines: 2` + ellipsis (some CET-4 entries
-///   pack ~30 Chinese chars).
-///
-/// Tokens like the orange speaker button and POS pill geometry are
-/// preserved verbatim from the previous inline implementation; only
-/// the wrapper structure (SizedBox + ellipsis) is new.
+/// Cream-Café redesign (Memo1, May 2026): bigger surface, serif word
+/// title, kraft-coloured "NO. xxxx" stamp rotated −8° in the top-right
+/// corner, IPA + speaker + POS pill on the meta row, full multi-line
+/// Chinese meaning beneath. The hero card now owns the meaning content
+/// directly (the standalone 释义 section was removed) — `meaningLines`
+/// comes from `translationLines(word.translation)` upstream.
 class WordHeaderSection extends StatelessWidget {
-  static const double fixedHeight = 156;
-
   final Word word;
+  final List<String> meaningLines;
   final bool isPlayingAudio;
   final int todayCompleted;
   final int dailyGoal;
@@ -31,6 +23,7 @@ class WordHeaderSection extends StatelessWidget {
   const WordHeaderSection({
     super.key,
     required this.word,
+    required this.meaningLines,
     required this.isPlayingAudio,
     required this.todayCompleted,
     required this.dailyGoal,
@@ -40,183 +33,177 @@ class WordHeaderSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pos = posLabel(word.translation);
+    // Stamp number — derive a stable 4-digit code from the word_id so
+    // each card looks like a numbered "café receipt". Falls back to today's
+    // progress if word_id can't be hashed (shouldn't happen).
+    final stampNo = _stampFor(word.wordId, todayCompleted);
 
-    return SizedBox(
-      height: fixedHeight,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      decoration: BoxDecoration(
+        color: StudyTokens.cardBg,
+        borderRadius: BorderRadius.circular(StudyTokens.radiusHero),
+        border: Border.all(color: StudyTokens.line, width: 1),
+        boxShadow: StudyTokens.shadowCard,
+      ),
+      child: Stack(
         children: [
-          // ── Badge row ───────────────────────────────────────────────
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _CatMoodBadge(completed: todayCompleted, goal: dailyGoal),
-              const _WordTypeBadge(label: '新词'),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          // ── Word + phonetic + speaker ──────────────────────────────
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
+          // ── Stamp (top-right, rotated) ─────────────────────────────
+          Positioned(
+            top: -2,
+            right: -4,
+            child: Transform.rotate(
+              angle: -0.14, // ≈ -8°
+              child: Container(
+                width: 46,
+                height: 46,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: StudyTokens.main,
+                    width: 1.2,
+                    style: BorderStyle.solid,
+                  ),
+                ),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      word.wordText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w600,
-                        color: StudyTokens.textDark,
-                        letterSpacing: 0.3,
-                        height: 1.15,
+                      'NO.',
+                      style: StudyTokens.mono(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w700,
+                        color: StudyTokens.main,
+                        letterSpacing: 0.5,
                       ),
                     ),
-                    if (word.phonetic != null && word.phonetic!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(
-                          word.phonetic!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w400,
-                            color: StudyTokens.textGray,
-                            height: 1.25,
-                          ),
-                        ),
+                    Text(
+                      stampNo,
+                      style: StudyTokens.mono(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: StudyTokens.main,
+                        height: 1.0,
                       ),
+                    ),
                   ],
                 ),
               ),
-              _SpeakerButton(
-                isPlaying: isPlayingAudio,
-                onTap: onSpeakerTap,
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-
-          // ── POS pill + primary meaning ─────────────────────────────
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              if (pos.isNotEmpty) ...[
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: StudyTokens.softPurpleBg,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    pos,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: StudyTokens.purple,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: Text(
-                  word.meaning,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: StudyTokens.textDark,
-                    height: 1.3,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Badges (private to this file) ──────────────────────────────────────
-
-/// Mood-state pill on the left. Tracks today_new_completed / daily_goal
-/// and shifts emoji + copy at fixed thresholds. Visual only — no
-/// business effect.
-class _CatMoodBadge extends StatelessWidget {
-  final int completed;
-  final int goal;
-  const _CatMoodBadge({required this.completed, required this.goal});
-
-  @override
-  Widget build(BuildContext context) {
-    final ratio = goal > 0 ? completed / goal : 0.0;
-    final (emoji, mood) = ratio >= 0.7
-        ? ('😸', '状态很棒')
-        : ratio >= 0.3
-            ? ('😺', '不错加油')
-            : ('🐱', '今日状态稳定');
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(6, 3, 10, 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFAECE7),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(emoji, style: const TextStyle(fontSize: 12)),
-          const SizedBox(width: 4),
-          Text(
-            mood,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFFA68872),
             ),
           ),
+
+          // ── Main column ────────────────────────────────────────────
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Tiny label "☕ TODAY'S WORD"
+              Text(
+                "☕ TODAY'S WORD",
+                style: StudyTokens.mono(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                  color: StudyTokens.inkSoft,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Big serif word
+              Padding(
+                padding: const EdgeInsets.only(right: 56), // leave room for stamp
+                child: Text(
+                  word.wordText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: StudyTokens.serif(
+                    fontSize: 38,
+                    fontWeight: FontWeight.w500,
+                    color: StudyTokens.ink,
+                    height: 1.05,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // IPA + speaker + POS pill
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  if (word.phonetic != null && word.phonetic!.isNotEmpty)
+                    Flexible(
+                      child: Text(
+                        // Wrap with / / so it reads as IPA. Skip if the
+                        // source string already carries the slashes.
+                        word.phonetic!.startsWith('/')
+                            ? word.phonetic!
+                            : '/${word.phonetic!}/',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: StudyTokens.mono(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w400,
+                          color: StudyTokens.inkSoft,
+                        ),
+                      ),
+                    ),
+                  const SizedBox(width: 8),
+                  _SpeakerButton(
+                    isPlaying: isPlayingAudio,
+                    onTap: onSpeakerTap,
+                  ),
+                  const SizedBox(width: 8),
+                  if (pos.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: StudyTokens.cream,
+                        borderRadius:
+                            BorderRadius.circular(StudyTokens.radiusTag),
+                      ),
+                      child: Text(
+                        pos,
+                        style: StudyTokens.mono(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                          color: StudyTokens.main,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              if (meaningLines.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                // Full multi-line Chinese meaning (formerly its own section)
+                for (var i = 0; i < meaningLines.length; i++)
+                  Padding(
+                    padding: EdgeInsets.only(top: i == 0 ? 0 : 6),
+                    child: Text(
+                      meaningLines[i],
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w400,
+                        color: StudyTokens.ink,
+                        height: 1.55,
+                      ),
+                    ),
+                  ),
+              ],
+            ],
+          ),
         ],
       ),
     );
   }
-}
 
-class _WordTypeBadge extends StatelessWidget {
-  final String label;
-  const _WordTypeBadge({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-      decoration: BoxDecoration(
-        color: StudyTokens.greenBg,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          fontSize: 10.5,
-          fontWeight: FontWeight.w500,
-          color: StudyTokens.greenText,
-        ),
-      ),
-    );
+  // Derive a 4-digit "receipt number" from the word_id. Stable per word so
+  // it doesn't flicker on rebuild. Falls back to today's progress if hash
+  // somehow returns 0.
+  String _stampFor(String wordId, int fallback) {
+    final h = wordId.hashCode.abs() % 10000;
+    final code = h == 0 ? (fallback % 10000) : h;
+    return code.toString().padLeft(4, '0');
   }
 }
 
@@ -230,36 +217,26 @@ class _SpeakerButton extends StatelessWidget {
     return GestureDetector(
       onTap: isPlaying ? null : () => onTap(),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 11),
-        decoration: BoxDecoration(
-          color: StudyTokens.orangeBg,
-          borderRadius: BorderRadius.circular(11),
+        width: 28,
+        height: 28,
+        alignment: Alignment.center,
+        decoration: const BoxDecoration(
+          color: StudyTokens.cream,
+          shape: BoxShape.circle,
         ),
         child: isPlaying
             ? const SizedBox(
-                width: 38,
-                height: 14,
-                child: Center(
-                  child: SizedBox(
-                    width: 10,
-                    height: 10,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.5,
-                      color: StudyTokens.orangeText,
-                    ),
-                  ),
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: StudyTokens.main,
                 ),
               )
-            : const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.volume_up_outlined,
-                      size: 14, color: StudyTokens.orangeText),
-                  SizedBox(width: 4),
-                  Text('发音',
-                      style: TextStyle(
-                          fontSize: 10, color: StudyTokens.orangeText)),
-                ],
+            : const Icon(
+                Icons.volume_up_rounded,
+                size: 15,
+                color: StudyTokens.main,
               ),
       ),
     );

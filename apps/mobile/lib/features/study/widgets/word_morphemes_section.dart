@@ -4,12 +4,12 @@ import '../../../core/services/word_enrichment_service.dart';
 import 'section_frame.dart';
 import 'study_tokens.dart';
 
-/// 词根词缀参考 (Need #12) — Heuristic morpheme breakdown.
+/// 词根词缀参考 (Need #12) — heuristic morpheme breakdown.
 ///
-/// Title intentionally hedges with "参考" (= "reference") because the
-/// underlying matches are heuristic prefix/suffix boundary detection,
-/// not strict etymological proof. Avoid wording like "由 X 组成" so we
-/// don't promote a guess into an assertion.
+/// Title hedges with "参考" because matches are heuristic prefix/suffix
+/// detection, not strict etymological proof. Cream-Café renders each
+/// row inside the section card with a small mono "PRE/SUF/ROOT" label
+/// pill, the morpheme in serif, then the gloss.
 class WordMorphemesSection extends StatelessWidget {
   final List<MorphemeMatch> morphemes;
 
@@ -26,11 +26,12 @@ class WordMorphemesSection extends StatelessWidget {
     if (morphemes.isEmpty) return const SizedBox.shrink();
     return SectionFrame(
       title: '词根词缀参考',
+      emoji: '🌱',
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           for (var i = 0; i < morphemes.length; i++) ...[
-            if (i > 0) const SizedBox(height: 4),
+            if (i > 0) const SizedBox(height: 8),
             _MorphemeRow(match: morphemes[i]),
           ],
         ],
@@ -49,28 +50,53 @@ class _MorphemeRow extends StatelessWidget {
         WordMorphemesSection._typeLabel[match.morphemeType] ?? match.morphemeType;
     final meaningText =
         match.meanings.isEmpty ? '—' : match.meanings.join(', ');
-    return RichText(
-      text: TextSpan(
-        style: const TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w400,
-          color: StudyTokens.textDark,
-          height: 1.35,
-        ),
-        children: [
-          TextSpan(text: match.morpheme),
-          TextSpan(
-            text: '（$typeLabel）',
-            style: const TextStyle(
-              color: StudyTokens.textGray,
-              fontSize: 11,
-              fontWeight: FontWeight.w400,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+          margin: const EdgeInsets.only(top: 2, right: 8),
+          decoration: BoxDecoration(
+            color: StudyTokens.cream,
+            borderRadius: BorderRadius.circular(StudyTokens.radiusTag),
+          ),
+          child: Text(
+            typeLabel,
+            style: StudyTokens.mono(
+              fontSize: 10,
+              fontWeight: FontWeight.w500,
+              color: StudyTokens.main,
             ),
           ),
-          const TextSpan(text: '：'),
-          TextSpan(text: meaningText),
-        ],
-      ),
+        ),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              style: StudyTokens.serif(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w500,
+                color: StudyTokens.ink,
+                height: 1.45,
+              ),
+              children: [
+                TextSpan(text: match.morpheme),
+                const TextSpan(
+                  text: '  ·  ',
+                  style: TextStyle(color: StudyTokens.inkSoft),
+                ),
+                TextSpan(
+                  text: meaningText,
+                  style: const TextStyle(
+                    color: StudyTokens.inkSoft,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

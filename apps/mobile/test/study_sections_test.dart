@@ -80,6 +80,7 @@ void main() {
         tester,
         WordHeaderSection(
           word: _word(),
+          meaningLines: const ['意外事件'],
           isPlayingAudio: false,
           todayCompleted: 1,
           dailyGoal: 20,
@@ -97,6 +98,7 @@ void main() {
         tester,
         WordHeaderSection(
           word: _word(),
+          meaningLines: const ['意外事件'],
           isPlayingAudio: false,
           todayCompleted: 0,
           dailyGoal: 20,
@@ -115,6 +117,7 @@ void main() {
         tester,
         WordHeaderSection(
           word: _word(text: 'cat', phonetic: 'kæt', meaning: '猫'),
+          meaningLines: const ['猫'],
           isPlayingAudio: false,
           todayCompleted: 0,
           dailyGoal: 20,
@@ -133,6 +136,7 @@ void main() {
             phonetic: 'a' * 60,
             meaning: '一个被故意写得非常长的中文释义' * 3,
           ),
+          meaningLines: List.filled(3, '一个被故意写得非常长的中文释义'),
           isPlayingAudio: false,
           todayCompleted: 0,
           dailyGoal: 20,

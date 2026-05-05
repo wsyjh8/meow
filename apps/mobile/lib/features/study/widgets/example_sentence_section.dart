@@ -7,15 +7,15 @@ import 'study_tokens.dart';
 
 /// 例句 — up to 2 example sentences for the current word.
 ///
-/// English line is slightly larger (13px / textDark) than the Chinese
-/// translation (12px / textGray) — "英主中辅" hierarchy from the
-/// typography spec. Brackets used by the source data as highlight
-/// markers (`[abandon]`) are stripped for plain rendering.
+/// Cream-Café spec: English in italic Fraunces (15 / 1.55), Chinese in
+/// 13 / inkSoft. Examples are separated by a 1px dashed cream-line divider
+/// with vertical padding to give the "handwritten journal" feel.
 ///
-/// Audio play button appears only when:
+/// Audio play button appears next to each row only when:
 ///   - [audioService] is non-null (study_page injected it), AND
 ///   - example.stableId is non-null (data source has the v0.3.0 stable_id field)
-/// Otherwise the row renders text only (current state for legacy bundled assets).
+/// Otherwise the row renders text only (e.g. legacy bundled assets without
+/// stable_id, or examples whose audio_assets row hasn't been generated yet).
 class ExampleSentenceSection extends StatelessWidget {
   final List<WordExample> examples;
   final ExampleAudioService? audioService;
@@ -32,12 +32,17 @@ class ExampleSentenceSection extends StatelessWidget {
     final shown = examples.take(2).toList();
     return SectionFrame(
       title: '例句',
+      emoji: '✍️',
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           for (var i = 0; i < shown.length; i++) ...[
-            if (i > 0) const SizedBox(height: 8),
-            _ExampleRow(example: shown[i], audioService: audioService),
+            if (i > 0) const _DashedDivider(),
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: i == 0 ? 0 : 10),
+              child:
+                  _ExampleRow(example: shown[i], audioService: audioService),
+            ),
           ],
         ],
       ),
@@ -94,21 +99,22 @@ class _ExampleRowState extends State<_ExampleRow> {
             children: [
               Text(
                 enPlain,
-                style: const TextStyle(
-                  fontSize: 13,
+                style: StudyTokens.serif(
+                  fontSize: 15,
                   fontWeight: FontWeight.w400,
-                  color: StudyTokens.textDark,
-                  height: 1.4,
+                  color: StudyTokens.ink,
+                  height: 1.5,
+                  fontStyle: FontStyle.italic,
                 ),
               ),
-              const SizedBox(height: 3),
+              const SizedBox(height: 4),
               Text(
                 cnPlain,
                 style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: FontWeight.w400,
-                  color: StudyTokens.textGray,
-                  height: 1.35,
+                  color: StudyTokens.inkSoft,
+                  height: 1.5,
                 ),
               ),
             ],
@@ -121,8 +127,8 @@ class _ExampleRowState extends State<_ExampleRow> {
 
   Widget _buildPlayButton() {
     final iconColor = _failed
-        ? StudyTokens.textGray.withOpacity(0.4)
-        : StudyTokens.textDark;
+        ? StudyTokens.inkSoft.withOpacity(0.4)
+        : StudyTokens.ink;
     return Padding(
       padding: const EdgeInsets.only(left: 8, top: 2),
       child: SizedBox(
@@ -146,4 +152,38 @@ class _ExampleRowState extends State<_ExampleRow> {
       ),
     );
   }
+}
+
+class _DashedDivider extends StatelessWidget {
+  const _DashedDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: CustomPaint(
+        painter: _DashedLinePainter(),
+        size: const Size(double.infinity, 1),
+      ),
+    );
+  }
+}
+
+class _DashedLinePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    const dashWidth = 3.0;
+    const dashGap = 3.0;
+    final paint = Paint()
+      ..color = StudyTokens.line
+      ..strokeWidth = 1;
+    double x = 0;
+    while (x < size.width) {
+      canvas.drawLine(Offset(x, 0), Offset(x + dashWidth, 0), paint);
+      x += dashWidth + dashGap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
