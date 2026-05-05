@@ -4,6 +4,16 @@ import '../core/storage/auto_backup_service.dart';
 import '../spec/pages/spec_shell.dart';
 import '../spec/theme/tokens.dart';
 
+/// Global RouteObserver — used by StudyPage (and any other page that
+/// needs to react to route-pop transitions, e.g. "settings was just
+/// dismissed, recheck dailyGoal"). Wired into MaterialApp's
+/// navigatorObservers below.
+///
+/// Pages opt in via `with RouteAware` and a subscribe/unsubscribe pair
+/// in didChangeDependencies / dispose.
+final RouteObserver<PageRoute<dynamic>> studyPageRouteObserver =
+    RouteObserver<PageRoute<dynamic>>();
+
 /// Root application widget.
 ///
 /// Responsibilities:
@@ -55,6 +65,7 @@ class _MeowAppState extends State<MeowApp> with WidgetsBindingObserver {
         colorSchemeSeed: SpecBrand.purple,
         useMaterial3: true,
       ),
+      navigatorObservers: [studyPageRouteObserver],
       // New SPEC shell as home, old routes still accessible for navigation
       home: const SpecShell(),
       onGenerateRoute: AppRouter.generateRoute,
