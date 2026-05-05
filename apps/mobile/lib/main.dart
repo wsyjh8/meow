@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'app/app.dart';
-import 'core/memory/asset_word_loader.dart';
 import 'core/memory/wordbook_loader.dart';
 import 'core/services/enrichment_bootstrap.dart';
 import 'core/storage/drift/app_database.dart';
@@ -10,13 +9,14 @@ import 'core/storage/local_database.dart';
 
 /// App entry point with local database initialization.
 ///
-/// P3.3.17: On first launch, AssetWordLoader populates cached_words from
-/// the bundled CET-4 word list (assets/words/book-001.json, 3849 words).
-/// Subsequent launches detect count > 0 and return immediately (~1ms).
+/// v0.3.0 P1: WordbookLoader populates word_entries / word_book_assignments /
+/// example_sentences for ALL bundled books (CET-4 / ZK / GK). The legacy
+/// `AssetWordLoader → cached_words` path is gone (drift v10 dropped
+/// `cached_words`); CET-4 now flows through the same canonical content
+/// layer as ZK / GK.
 ///
-/// v3: WordbookLoader additionally populates word_entries / word_book_assignments
-/// / example_sentences for ZK (中考) and GK (高考) wordbooks.
-/// All loaders are idempotent — safe to call every launch.
+/// All loaders are idempotent — safe to call every launch (gated on
+/// `preset_wordbooks.content_version`).
 ///
 /// Need #11 (build-time): EnrichmentBootstrap runs in the BACKGROUND
 /// (fire-and-forget) after the first frame paints. It checks word_forms
@@ -30,13 +30,12 @@ void main() async {
 
   final appDb = AppDatabase();
 
-  // CET-4 word pool (legacy cached_words table).
-  await AssetWordLoader(db: appDb).loadIfNeeded('book-001');
-
-  // ZK (中考) and GK (高考) content layer (word_entries + examples).
+  // v0.3.0 P1: unified content layer for all preset books.
+  // Each loadIfNeeded check skips work when content_version matches.
   final wordbookLoader = WordbookLoader(db: appDb);
-  await wordbookLoader.loadIfNeeded('zk');
-  await wordbookLoader.loadIfNeeded('gk');
+  await wordbookLoader.loadIfNeeded('book-001'); // CET-4
+  await wordbookLoader.loadIfNeeded('zk');       // 中考
+  await wordbookLoader.loadIfNeeded('gk');       // 高考
 
   // Need #11/#12 (Bug 1 follow-up) — bootstrap is now AWAITED, not
   // fire-and-forget. The seed is a tiny, fast SQLite copy (~9 MB →

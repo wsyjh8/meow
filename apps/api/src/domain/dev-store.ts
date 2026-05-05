@@ -414,6 +414,29 @@ export class DevStore {
   private userDailyNewTarget: number = 20;
 
   /**
+   * v0.3.0 P1 dev fixture: which canonical word_ids count as "review-eligible"
+   * for review-group seeding. Replaces the legacy `word.word_id.startsWith('word-r-')`
+   * hack that depended on synthesized prefixed ids.
+   *
+   * In production, review-eligibility is determined by user_word_progress (a
+   * word becomes review-eligible after the user has studied it once). This
+   * static set exists only to make review-feature dev-testing easy without
+   * first walking through the new-word flow.
+   */
+  private static readonly REVIEW_SEED_WORD_IDS = new Set<string>([
+    'background',
+    'bacteria',
+    'balance',
+    'banner',
+    'barrier',
+    'behavior',
+    'benefit',
+    'biology',
+    'boundary',
+    'abandon',
+  ]);
+
+  /**
    * Load word pool from PG or use minimal fallback.
    * Called during initialization. If PG has CET-4 words, use those.
    * Otherwise fall back to a minimal set for dev/test.
@@ -425,8 +448,27 @@ export class DevStore {
       const pool = new Pool({
         connectionString: process.env.DATABASE_URL || 'postgresql://postgres:jason123@localhost:5432/meow_dev',
       });
+      // v0.3.0 P1: words no longer carries book_id directly; we JOIN the
+      // word_book_memberships M:N table to denormalize one (word, book)
+      // tuple per row for the in-memory wordPool.
       const result = await pool.query(
-        'SELECT id as word_id, word_text, meaning, phonetic, book_id, translation, definition, difficulty_level, is_core, tags, frequency_rank, word_forms FROM words WHERE book_id = $1 ORDER BY sort_order ASC',
+        `SELECT
+           w.id AS word_id,
+           w.word_text,
+           w.meaning,
+           w.phonetic,
+           m.book_id,
+           w.translation,
+           w.definition,
+           w.difficulty_level,
+           w.is_core,
+           w.tags,
+           w.frequency_rank,
+           w.word_forms
+         FROM words w
+         JOIN word_book_memberships m ON m.word_id = w.id
+         WHERE m.book_id = $1
+         ORDER BY m.sort_order ASC`,
         [DEV_BOOK_ID],
       );
       await pool.end();
@@ -440,13 +482,13 @@ export class DevStore {
       // PG not available — use fallback
     }
 
-    // Minimal fallback for JSON persistence / test mode
+    // Minimal fallback for JSON persistence / test mode (canonical ids per v0.3.0).
     this.wordPool = [
-      { word_id: 'word-001', word_text: 'abandon', meaning: '放弃', phonetic: '/əˈbændən/', book_id: DEV_BOOK_ID },
-      { word_id: 'word-002', word_text: 'ability', meaning: '能力', phonetic: '/əˈbɪləti/', book_id: DEV_BOOK_ID },
-      { word_id: 'word-003', word_text: 'abnormal', meaning: '异常的', phonetic: '/æbˈnɔːrml/', book_id: DEV_BOOK_ID },
-      { word_id: 'word-004', word_text: 'aboard', meaning: '在船上', phonetic: '/əˈbɔːrd/', book_id: DEV_BOOK_ID },
-      { word_id: 'word-005', word_text: 'abrupt', meaning: '突然的', phonetic: '/əˈbrʌpt/', book_id: DEV_BOOK_ID },
+      { word_id: 'abandon', word_text: 'abandon', meaning: '放弃', phonetic: '/əˈbændən/', book_id: DEV_BOOK_ID },
+      { word_id: 'ability', word_text: 'ability', meaning: '能力', phonetic: '/əˈbɪləti/', book_id: DEV_BOOK_ID },
+      { word_id: 'abnormal', word_text: 'abnormal', meaning: '异常的', phonetic: '/æbˈnɔːrml/', book_id: DEV_BOOK_ID },
+      { word_id: 'aboard', word_text: 'aboard', meaning: '在船上', phonetic: '/əˈbɔːrd/', book_id: DEV_BOOK_ID },
+      { word_id: 'abrupt', word_text: 'abrupt', meaning: '突然的', phonetic: '/əˈbrʌpt/', book_id: DEV_BOOK_ID },
     ];
     console.log(`[DevStore] Using ${this.wordPool.length} fallback words (PG not available).`);
   }
@@ -847,7 +889,12 @@ export class DevStore {
     // Assumption (temporary, not frozen):
     // Group size is temporarily fixed at 3 for Phase 1 development
     const groupSize = 3;
-    const reviewWords = this.wordPool.filter(w => w.word_id.startsWith('word-r-'));
+    // v0.3.0 P1: review eligibility was previously inferred from the legacy
+    // 'word-r-*' prefix on synthesized word_ids. Now that all word_ids are
+    // canonical, we use the explicit REVIEW_SEED_WORD_IDS dev fixture set.
+    const reviewWords = this.wordPool.filter((w) =>
+      DevStore.REVIEW_SEED_WORD_IDS.has(w.word_id),
+    );
     const selectedWords = reviewWords.slice(0, groupSize);
 
     const group: ReviewGroup = {

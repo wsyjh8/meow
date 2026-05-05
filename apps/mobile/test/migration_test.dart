@@ -18,15 +18,15 @@ void main() {
       expect(await db.select(db.customWordbooks).get(), isEmpty);
       expect(await db.select(db.vocabularyNotebook).get(), isEmpty);
 
-      // FSRS tables
+      // FSRS tables (v0.3.0 P1: cached_words removed in v10)
       expect(await db.select(db.cardStates).get(), isEmpty);
       expect(await db.select(db.reviewLogs).get(), isEmpty);
-      expect(await db.select(db.cachedWords).get(), isEmpty);
 
       await db.close();
     });
 
-    test('fresh install: can insert and read from all FSRS tables', () async {
+    test('fresh install: can insert and read from FSRS + content tables',
+        () async {
       final db = AppDatabase.forTesting(NativeDatabase.memory());
       final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
 
@@ -55,17 +55,16 @@ void main() {
       expect(logs.length, 1);
       expect(logs.first.rating, 3);
 
-      // cached_words
-      await db.into(db.cachedWords).insert(CachedWordsCompanion.insert(
-            wordId: 'cet4-hello',
-            bookId: 'book-001',
+      // word_entries (v0.3.0 P1: replaces cached_words)
+      await db.into(db.wordEntries).insert(WordEntriesCompanion.insert(
+            wordId: 'hello',
             wordText: 'hello',
             meaning: '你好',
-            cachedAt: nowMs,
+            importedAt: nowMs,
           ));
-      final cached = await db.select(db.cachedWords).get();
-      expect(cached.length, 1);
-      expect(cached.first.wordText, 'hello');
+      final entries = await db.select(db.wordEntries).get();
+      expect(entries.length, 1);
+      expect(entries.first.wordText, 'hello');
 
       await db.close();
     });
@@ -131,16 +130,17 @@ void main() {
 
       final db = AppDatabase.forTesting(nativeDb);
 
-      // Verify legacy data survived migration
+      // Verify legacy data survived migration. v0.3.0 P1 (drift v10) strips
+      // the 'cet4-' prefix from word_records.word_id in place, so the row
+      // we seeded as 'cet4-old' should now be 'old'.
       final records = await db.select(db.wordRecords).get();
       expect(records.length, 1);
-      expect(records.first.wordId, 'cet4-old');
+      expect(records.first.wordId, 'old');
       expect(records.first.actionResult, 'know');
 
-      // Verify new FSRS tables were created
+      // Verify new FSRS tables were created (cached_words gone in v10).
       expect(await db.select(db.cardStates).get(), isEmpty);
       expect(await db.select(db.reviewLogs).get(), isEmpty);
-      expect(await db.select(db.cachedWords).get(), isEmpty);
 
       // Verify we can write to new tables
       final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;

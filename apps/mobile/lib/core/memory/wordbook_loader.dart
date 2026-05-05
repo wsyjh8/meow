@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/services.dart';
 
 import '../storage/drift/app_database.dart';
+import '../util/stable_id.dart' show computeExampleStableId, normalizeWord;
 
 /// Loads a preset wordbook (ZK / GK) from bundled assets into the local
 /// SQLite database on first launch.
@@ -34,6 +35,14 @@ class WordbookLoader {
   /// On version mismatch: drops and recreates all 4 content-layer tables, then
   /// reimports from the asset. Safe because these tables are asset-derived only.
   ///
+  /// Integrity backstop (v0.3.0 P0): even when versions match, if any row in
+  /// `example_sentences` is missing `stable_id` we treat the cache as
+  /// corrupt and force a reimport. This catches the case where an earlier
+  /// build of the same content_version imported rows BEFORE the stable_id
+  /// field was wired through — bumping content_version is the canonical
+  /// fix, but bumping it twice (e.g. content briefly flipped to '3' before
+  /// stable_id, then back) wouldn't trigger reimport without this check.
+  ///
   /// Returns the number of words imported into [word_entries] (0 = already up to date).
   Future<int> loadIfNeeded(String bookSlug) async {
     final jsonString =
@@ -42,13 +51,38 @@ class WordbookLoader {
     final assetVersion = data['contentVersion'] as String?;
 
     final storedVersion = await _storedContentVersion(bookSlug);
-    if (storedVersion != null && storedVersion == assetVersion) return 0;
+    if (storedVersion != null && storedVersion == assetVersion) {
+      // Integrity backstop — see method doc.
+      if (await _exampleSentencesIntegrityOk()) {
+        return 0;
+      }
+      // ignore: avoid_print
+      print(
+          '[WordbookLoader] $bookSlug: version match ($assetVersion) but '
+          'example_sentences integrity check failed (null stable_id detected) '
+          '— forcing reimport.');
+    }
 
-    // Either first load or version mismatch — clear content tables and reimport.
+    // Either first load, version mismatch, or integrity-backstop trigger —
+    // clear content tables and reimport.
     if (storedVersion != null) {
       await _clearContentTables();
     }
     return _loadFromData(bookSlug, data);
+  }
+
+  /// True if every row in `example_sentences` has a non-null `stable_id`.
+  /// Returns true also when the table is empty (no rows = nothing to be
+  /// inconsistent about; the version-mismatch path handles first load).
+  Future<bool> _exampleSentencesIntegrityOk() async {
+    final row = await _db
+        .customSelect(
+            'SELECT COUNT(*) AS missing FROM example_sentences '
+            'WHERE stable_id IS NULL')
+        .getSingleOrNull();
+    if (row == null) return true;
+    final missing = row.read<int>('missing');
+    return missing == 0;
   }
 
   Future<String?> _storedContentVersion(String bookSlug) async {
@@ -127,17 +161,37 @@ class WordbookLoader {
 
         // 4. Insert example sentences (INSERT OR IGNORE — first book wins;
         //    unique index on (word_id, sort_order) makes this truly idempotent)
+        //
+        // v0.3.0 P0: read `stableId` from asset JSON. Assets exported with
+        // contentVersion '3'+ guarantee this field; older assets fall back
+        // to compute-on-the-fly via the Dart reference impl (one-shot at
+        // import time, never at runtime — DB §3.5).
+        // Canonical word_id for stable_id hash input — normalize_word of wordText.
+        // For single-word entries this == wordId from JSON; for multi-word phrases
+        // (e.g. "give up") JSON's wordId hyphenates ("give-up") while the canonical
+        // form keeps the space ("give up"). Codex pipeline uses the canonical form,
+        // so we must too — otherwise fallback-computed stableId would diverge.
+        final canonicalWordId =
+            normalizeWord(map['wordText'] as String);
         for (final ex in examples) {
           final exMap = ex as Map<String, dynamic>;
+          final en = (exMap['en'] as String?) ?? '';
+          final assetStableId = exMap['stableId'] as String?;
+          // Asset-supplied value is the source of truth. Fallback computes
+          // on the fly only when missing (pre-v3 assets or partial data).
+          final resolvedStableId = (assetStableId != null && assetStableId.isNotEmpty)
+              ? assetStableId
+              : computeExampleStableId(canonicalWordId, en);
           batch.insert(
             _db.exampleSentences,
             ExampleSentencesCompanion.insert(
               wordId: wordId,
               sense: (exMap['sense'] as String?) ?? '',
-              en: (exMap['en'] as String?) ?? '',
+              en: en,
               cn: (exMap['cn'] as String?) ?? '',
               sortOrder:
                   Value((exMap['sortOrder'] as num?)?.toInt() ?? 0),
+              stableId: Value(resolvedStableId),
             ),
             mode: InsertMode.insertOrIgnore,
           );

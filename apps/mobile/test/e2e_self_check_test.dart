@@ -16,17 +16,35 @@ AppDatabase _createTestDb() => AppDatabase.forTesting(NativeDatabase.memory());
 Future<void> _seedWords(AppDatabase db, int count) async {
   final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
   await db.batch((batch) {
+    // v0.3.0 P1: was cached_words pre-P1, unified content layer post-P1.
+    batch.insert(
+      db.presetWordbooks,
+      PresetWordbooksCompanion.insert(
+        slug: 'book-001',
+        displayName: 'CET-4',
+        totalWords: Value(count),
+      ),
+      mode: InsertMode.insertOrIgnore,
+    );
     for (int i = 1; i <= count; i++) {
       batch.insert(
-        db.cachedWords,
-        CachedWordsCompanion.insert(
+        db.wordEntries,
+        WordEntriesCompanion.insert(
           wordId: 'w$i',
-          bookId: 'book-001',
           wordText: 'word$i',
           meaning: '义$i',
-          sortOrder: Value(i),
-          cachedAt: nowMs,
+          importedAt: nowMs,
         ),
+        mode: InsertMode.insertOrIgnore,
+      );
+      batch.insert(
+        db.wordBookAssignments,
+        WordBookAssignmentsCompanion.insert(
+          wordId: 'w$i',
+          bookSlug: 'book-001',
+          sortOrder: Value(i),
+        ),
+        mode: InsertMode.insertOrIgnore,
       );
     }
   });

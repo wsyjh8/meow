@@ -11,17 +11,14 @@ import 'word_enrichment_service.dart';
 /// P3.1 — Local-first study service.
 ///
 /// Write flow: SQLite FIRST → UI feedback → background API sync
-/// Read flow: LOCAL cached_words → fallback to API if empty
+/// Read flow: LOCAL word_entries → fallback to API if empty
 ///
-/// P3.3.17: Words are now served from the pre-bundled local cache
-/// ([cached_words] drift table, populated from assets/words/book-001.json).
-/// No network is needed to get the next word.  API sync still happens in
+/// v0.3.0 P1: All books (CET-4 / ZK / GK) flow through the unified
+/// `word_entries` + `word_book_assignments` content layer (populated by
+/// WordbookLoader from assets/words/*.json). The legacy `cached_words`
+/// path is gone, and so is the `if (bookSlug == 'book-001')` branch.
+/// No network is needed to get the next word; API sync still happens in
 /// the background so daily-goal / settlement / cloud progress stay updated.
-///
-/// v3: Multi-wordbook support. When [activeWordbook] ≠ 'book-001', words are
-/// served from [word_entries] + [word_book_assignments] (ZK / GK content layer).
-/// Example sentences are fetched from [example_sentences] and attached to
-/// the returned [Word] in all paths.
 class StudyService {
   final ApiClient _apiClient;
   final LocalDatabase _db;
@@ -29,9 +26,6 @@ class StudyService {
   // Optional injected settings (for testability). If null, reads SharedPreferences.
   final LocalSettingsService? _settings;
   final WordDetailRepository _detailRepo;
-
-  /// Legacy CET-4 book ID — used when activeWordbook is 'book-001'.
-  static const String _legacyBookId = 'book-001';
 
   StudyService({
     required ApiClient apiClient,
@@ -60,6 +54,11 @@ class StudyService {
   Future<void> warmUpWordTexts(List<String> wordTexts) =>
       _detailRepo.warmUpWordTexts(wordTexts);
 
+  /// Default wordbook when settings unavailable. v0.3.0 P1: still 'book-001'
+  /// for backwards-compat (existing dev installs), but it's now just a
+  /// regular bookSlug — no special legacy treatment.
+  static const String _defaultBookSlug = 'book-001';
+
   /// Resolve the currently active wordbook slug.
   Future<String> _activeWordbook() async {
     if (_settings != null) return _settings!.activeWordbook;
@@ -67,17 +66,14 @@ class StudyService {
       final prefs = await SharedPreferences.getInstance();
       return LocalSettingsService(prefs).activeWordbook;
     } catch (_) {
-      return _legacyBookId;
+      return _defaultBookSlug;
     }
   }
 
   /// Get the next word to study.
   ///
-  /// Routing:
-  ///   activeWordbook == 'book-001' → legacy [cached_words] path (CET-4)
-  ///   activeWordbook == 'zk'/'gk'  → [word_entries] + [word_book_assignments]
-  ///
-  /// In both paths, up to 3 example sentences are fetched from
+  /// v0.3.0 P1: unified path through `word_entries` + `word_book_assignments`
+  /// for ALL books (CET-4 / ZK / GK). Up to 3 example sentences are fetched from
   /// [example_sentences] and attached to [Word.examples] if available.
   ///
   /// Fallback to API only when local cache is empty (edge-case / fresh install).
@@ -96,37 +92,23 @@ class StudyService {
 
     Word? word;
 
-    if (bookSlug == _legacyBookId) {
-      // ── Legacy CET-4 path ────────────────────────────────────────────
-      final cached =
-          await _driftDb.getNextUnstudiedWord(_legacyBookId, allExclude);
-      if (cached != null) {
-        word = Word(
-          wordId: cached.wordId,
-          wordText: cached.wordText,
-          meaning: cached.meaning,
-          phonetic: cached.phonetic,
-          bookId: cached.bookId,
-          translation: cached.translation,
-        );
-      }
-    } else {
-      // ── ZK / GK path ─────────────────────────────────────────────────
-      final entry =
-          await _driftDb.getNextWordFromWordbook(bookSlug, allExclude);
-      if (entry != null) {
-        word = Word(
-          wordId: entry.wordId,
-          wordText: entry.wordText,
-          meaning: entry.meaning,
-          phonetic: entry.phonetic,
-          bookId: bookSlug,
-          translation: entry.translation,
-          definition: entry.definition,
-          frequencyRank: entry.frequencyRank,
-          wordForms: entry.wordForms,
-        );
-      }
+    // v0.3.0 P1: unified path through word_entries / word_book_assignments
+    // for ALL books (CET-4 / ZK / GK). The legacy `getNextUnstudiedWord`
+    // (cached_words) branch is gone.
+    final entry =
+        await _driftDb.getNextWordFromWordbook(bookSlug, allExclude);
+    if (entry != null) {
+      word = Word(
+        wordId: entry.wordId,
+        wordText: entry.wordText,
+        meaning: entry.meaning,
+        phonetic: entry.phonetic,
+        bookId: bookSlug,
+        translation: entry.translation,
+        definition: entry.definition,
+        frequencyRank: entry.frequencyRank,
+        wordForms: entry.wordForms,
+      );
     }
 
     // 3. Attach examples (both paths — best-effort, silently ignored on failure)
@@ -175,8 +157,12 @@ class StudyService {
         frequencyRank: w.frequencyRank,
         wordForms: w.wordForms,
         examples: rows
-            .map((e) =>
-                WordExample(sense: e.sense, en: e.en, cn: e.cn))
+            .map((e) => WordExample(
+                  sense: e.sense,
+                  en: e.en,
+                  cn: e.cn,
+                  stableId: e.stableId, // v0.3.0 P0: propagate to UI for audio lookup
+                ))
             .toList(),
       );
 

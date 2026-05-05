@@ -2700,497 +2700,6 @@ class ReviewLogsCompanion extends UpdateCompanion<ReviewLog> {
   }
 }
 
-class $CachedWordsTable extends CachedWords
-    with TableInfo<$CachedWordsTable, CachedWord> {
-  @override
-  final GeneratedDatabase attachedDatabase;
-  final String? _alias;
-  $CachedWordsTable(this.attachedDatabase, [this._alias]);
-  static const VerificationMeta _wordIdMeta = const VerificationMeta('wordId');
-  @override
-  late final GeneratedColumn<String> wordId = GeneratedColumn<String>(
-      'word_id', aliasedName, false,
-      type: DriftSqlType.string, requiredDuringInsert: true);
-  static const VerificationMeta _bookIdMeta = const VerificationMeta('bookId');
-  @override
-  late final GeneratedColumn<String> bookId = GeneratedColumn<String>(
-      'book_id', aliasedName, false,
-      type: DriftSqlType.string, requiredDuringInsert: true);
-  static const VerificationMeta _wordTextMeta =
-      const VerificationMeta('wordText');
-  @override
-  late final GeneratedColumn<String> wordText = GeneratedColumn<String>(
-      'word_text', aliasedName, false,
-      type: DriftSqlType.string, requiredDuringInsert: true);
-  static const VerificationMeta _meaningMeta =
-      const VerificationMeta('meaning');
-  @override
-  late final GeneratedColumn<String> meaning = GeneratedColumn<String>(
-      'meaning', aliasedName, false,
-      type: DriftSqlType.string, requiredDuringInsert: true);
-  static const VerificationMeta _phoneticMeta =
-      const VerificationMeta('phonetic');
-  @override
-  late final GeneratedColumn<String> phonetic = GeneratedColumn<String>(
-      'phonetic', aliasedName, true,
-      type: DriftSqlType.string, requiredDuringInsert: false);
-  static const VerificationMeta _translationMeta =
-      const VerificationMeta('translation');
-  @override
-  late final GeneratedColumn<String> translation = GeneratedColumn<String>(
-      'translation', aliasedName, true,
-      type: DriftSqlType.string, requiredDuringInsert: false);
-  static const VerificationMeta _frequencyRankMeta =
-      const VerificationMeta('frequencyRank');
-  @override
-  late final GeneratedColumn<int> frequencyRank = GeneratedColumn<int>(
-      'frequency_rank', aliasedName, false,
-      type: DriftSqlType.int,
-      requiredDuringInsert: false,
-      defaultValue: const Constant(0));
-  static const VerificationMeta _sortOrderMeta =
-      const VerificationMeta('sortOrder');
-  @override
-  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
-      'sort_order', aliasedName, false,
-      type: DriftSqlType.int,
-      requiredDuringInsert: false,
-      defaultValue: const Constant(0));
-  static const VerificationMeta _cachedAtMeta =
-      const VerificationMeta('cachedAt');
-  @override
-  late final GeneratedColumn<int> cachedAt = GeneratedColumn<int>(
-      'cached_at', aliasedName, false,
-      type: DriftSqlType.int, requiredDuringInsert: true);
-  @override
-  List<GeneratedColumn> get $columns => [
-        wordId,
-        bookId,
-        wordText,
-        meaning,
-        phonetic,
-        translation,
-        frequencyRank,
-        sortOrder,
-        cachedAt
-      ];
-  @override
-  String get aliasedName => _alias ?? actualTableName;
-  @override
-  String get actualTableName => $name;
-  static const String $name = 'cached_words';
-  @override
-  VerificationContext validateIntegrity(Insertable<CachedWord> instance,
-      {bool isInserting = false}) {
-    final context = VerificationContext();
-    final data = instance.toColumns(true);
-    if (data.containsKey('word_id')) {
-      context.handle(_wordIdMeta,
-          wordId.isAcceptableOrUnknown(data['word_id']!, _wordIdMeta));
-    } else if (isInserting) {
-      context.missing(_wordIdMeta);
-    }
-    if (data.containsKey('book_id')) {
-      context.handle(_bookIdMeta,
-          bookId.isAcceptableOrUnknown(data['book_id']!, _bookIdMeta));
-    } else if (isInserting) {
-      context.missing(_bookIdMeta);
-    }
-    if (data.containsKey('word_text')) {
-      context.handle(_wordTextMeta,
-          wordText.isAcceptableOrUnknown(data['word_text']!, _wordTextMeta));
-    } else if (isInserting) {
-      context.missing(_wordTextMeta);
-    }
-    if (data.containsKey('meaning')) {
-      context.handle(_meaningMeta,
-          meaning.isAcceptableOrUnknown(data['meaning']!, _meaningMeta));
-    } else if (isInserting) {
-      context.missing(_meaningMeta);
-    }
-    if (data.containsKey('phonetic')) {
-      context.handle(_phoneticMeta,
-          phonetic.isAcceptableOrUnknown(data['phonetic']!, _phoneticMeta));
-    }
-    if (data.containsKey('translation')) {
-      context.handle(
-          _translationMeta,
-          translation.isAcceptableOrUnknown(
-              data['translation']!, _translationMeta));
-    }
-    if (data.containsKey('frequency_rank')) {
-      context.handle(
-          _frequencyRankMeta,
-          frequencyRank.isAcceptableOrUnknown(
-              data['frequency_rank']!, _frequencyRankMeta));
-    }
-    if (data.containsKey('sort_order')) {
-      context.handle(_sortOrderMeta,
-          sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta));
-    }
-    if (data.containsKey('cached_at')) {
-      context.handle(_cachedAtMeta,
-          cachedAt.isAcceptableOrUnknown(data['cached_at']!, _cachedAtMeta));
-    } else if (isInserting) {
-      context.missing(_cachedAtMeta);
-    }
-    return context;
-  }
-
-  @override
-  Set<GeneratedColumn> get $primaryKey => {wordId};
-  @override
-  CachedWord map(Map<String, dynamic> data, {String? tablePrefix}) {
-    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
-    return CachedWord(
-      wordId: attachedDatabase.typeMapping
-          .read(DriftSqlType.string, data['${effectivePrefix}word_id'])!,
-      bookId: attachedDatabase.typeMapping
-          .read(DriftSqlType.string, data['${effectivePrefix}book_id'])!,
-      wordText: attachedDatabase.typeMapping
-          .read(DriftSqlType.string, data['${effectivePrefix}word_text'])!,
-      meaning: attachedDatabase.typeMapping
-          .read(DriftSqlType.string, data['${effectivePrefix}meaning'])!,
-      phonetic: attachedDatabase.typeMapping
-          .read(DriftSqlType.string, data['${effectivePrefix}phonetic']),
-      translation: attachedDatabase.typeMapping
-          .read(DriftSqlType.string, data['${effectivePrefix}translation']),
-      frequencyRank: attachedDatabase.typeMapping
-          .read(DriftSqlType.int, data['${effectivePrefix}frequency_rank'])!,
-      sortOrder: attachedDatabase.typeMapping
-          .read(DriftSqlType.int, data['${effectivePrefix}sort_order'])!,
-      cachedAt: attachedDatabase.typeMapping
-          .read(DriftSqlType.int, data['${effectivePrefix}cached_at'])!,
-    );
-  }
-
-  @override
-  $CachedWordsTable createAlias(String alias) {
-    return $CachedWordsTable(attachedDatabase, alias);
-  }
-}
-
-class CachedWord extends DataClass implements Insertable<CachedWord> {
-  /// Word identifier, e.g. 'cet4-abandon'. Primary key.
-  final String wordId;
-
-  /// Which book this word belongs to, e.g. 'book-001'.
-  final String bookId;
-
-  /// The word text, e.g. 'abandon'.
-  final String wordText;
-
-  /// Short Chinese meaning, e.g. '放弃'.
-  final String meaning;
-
-  /// Phonetic notation, e.g. '/əˈbændən/'.
-  final String? phonetic;
-
-  /// Full Chinese translation (multi-POS).
-  final String? translation;
-
-  /// Frequency rank (lower = more common). Used for sort_order.
-  final int frequencyRank;
-
-  /// Learning order (typically same as frequency_rank).
-  final int sortOrder;
-
-  /// When this word was cached locally. UTC epoch ms.
-  final int cachedAt;
-  const CachedWord(
-      {required this.wordId,
-      required this.bookId,
-      required this.wordText,
-      required this.meaning,
-      this.phonetic,
-      this.translation,
-      required this.frequencyRank,
-      required this.sortOrder,
-      required this.cachedAt});
-  @override
-  Map<String, Expression> toColumns(bool nullToAbsent) {
-    final map = <String, Expression>{};
-    map['word_id'] = Variable<String>(wordId);
-    map['book_id'] = Variable<String>(bookId);
-    map['word_text'] = Variable<String>(wordText);
-    map['meaning'] = Variable<String>(meaning);
-    if (!nullToAbsent || phonetic != null) {
-      map['phonetic'] = Variable<String>(phonetic);
-    }
-    if (!nullToAbsent || translation != null) {
-      map['translation'] = Variable<String>(translation);
-    }
-    map['frequency_rank'] = Variable<int>(frequencyRank);
-    map['sort_order'] = Variable<int>(sortOrder);
-    map['cached_at'] = Variable<int>(cachedAt);
-    return map;
-  }
-
-  CachedWordsCompanion toCompanion(bool nullToAbsent) {
-    return CachedWordsCompanion(
-      wordId: Value(wordId),
-      bookId: Value(bookId),
-      wordText: Value(wordText),
-      meaning: Value(meaning),
-      phonetic: phonetic == null && nullToAbsent
-          ? const Value.absent()
-          : Value(phonetic),
-      translation: translation == null && nullToAbsent
-          ? const Value.absent()
-          : Value(translation),
-      frequencyRank: Value(frequencyRank),
-      sortOrder: Value(sortOrder),
-      cachedAt: Value(cachedAt),
-    );
-  }
-
-  factory CachedWord.fromJson(Map<String, dynamic> json,
-      {ValueSerializer? serializer}) {
-    serializer ??= driftRuntimeOptions.defaultSerializer;
-    return CachedWord(
-      wordId: serializer.fromJson<String>(json['wordId']),
-      bookId: serializer.fromJson<String>(json['bookId']),
-      wordText: serializer.fromJson<String>(json['wordText']),
-      meaning: serializer.fromJson<String>(json['meaning']),
-      phonetic: serializer.fromJson<String?>(json['phonetic']),
-      translation: serializer.fromJson<String?>(json['translation']),
-      frequencyRank: serializer.fromJson<int>(json['frequencyRank']),
-      sortOrder: serializer.fromJson<int>(json['sortOrder']),
-      cachedAt: serializer.fromJson<int>(json['cachedAt']),
-    );
-  }
-  @override
-  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
-    serializer ??= driftRuntimeOptions.defaultSerializer;
-    return <String, dynamic>{
-      'wordId': serializer.toJson<String>(wordId),
-      'bookId': serializer.toJson<String>(bookId),
-      'wordText': serializer.toJson<String>(wordText),
-      'meaning': serializer.toJson<String>(meaning),
-      'phonetic': serializer.toJson<String?>(phonetic),
-      'translation': serializer.toJson<String?>(translation),
-      'frequencyRank': serializer.toJson<int>(frequencyRank),
-      'sortOrder': serializer.toJson<int>(sortOrder),
-      'cachedAt': serializer.toJson<int>(cachedAt),
-    };
-  }
-
-  CachedWord copyWith(
-          {String? wordId,
-          String? bookId,
-          String? wordText,
-          String? meaning,
-          Value<String?> phonetic = const Value.absent(),
-          Value<String?> translation = const Value.absent(),
-          int? frequencyRank,
-          int? sortOrder,
-          int? cachedAt}) =>
-      CachedWord(
-        wordId: wordId ?? this.wordId,
-        bookId: bookId ?? this.bookId,
-        wordText: wordText ?? this.wordText,
-        meaning: meaning ?? this.meaning,
-        phonetic: phonetic.present ? phonetic.value : this.phonetic,
-        translation: translation.present ? translation.value : this.translation,
-        frequencyRank: frequencyRank ?? this.frequencyRank,
-        sortOrder: sortOrder ?? this.sortOrder,
-        cachedAt: cachedAt ?? this.cachedAt,
-      );
-  CachedWord copyWithCompanion(CachedWordsCompanion data) {
-    return CachedWord(
-      wordId: data.wordId.present ? data.wordId.value : this.wordId,
-      bookId: data.bookId.present ? data.bookId.value : this.bookId,
-      wordText: data.wordText.present ? data.wordText.value : this.wordText,
-      meaning: data.meaning.present ? data.meaning.value : this.meaning,
-      phonetic: data.phonetic.present ? data.phonetic.value : this.phonetic,
-      translation:
-          data.translation.present ? data.translation.value : this.translation,
-      frequencyRank: data.frequencyRank.present
-          ? data.frequencyRank.value
-          : this.frequencyRank,
-      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
-      cachedAt: data.cachedAt.present ? data.cachedAt.value : this.cachedAt,
-    );
-  }
-
-  @override
-  String toString() {
-    return (StringBuffer('CachedWord(')
-          ..write('wordId: $wordId, ')
-          ..write('bookId: $bookId, ')
-          ..write('wordText: $wordText, ')
-          ..write('meaning: $meaning, ')
-          ..write('phonetic: $phonetic, ')
-          ..write('translation: $translation, ')
-          ..write('frequencyRank: $frequencyRank, ')
-          ..write('sortOrder: $sortOrder, ')
-          ..write('cachedAt: $cachedAt')
-          ..write(')'))
-        .toString();
-  }
-
-  @override
-  int get hashCode => Object.hash(wordId, bookId, wordText, meaning, phonetic,
-      translation, frequencyRank, sortOrder, cachedAt);
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      (other is CachedWord &&
-          other.wordId == this.wordId &&
-          other.bookId == this.bookId &&
-          other.wordText == this.wordText &&
-          other.meaning == this.meaning &&
-          other.phonetic == this.phonetic &&
-          other.translation == this.translation &&
-          other.frequencyRank == this.frequencyRank &&
-          other.sortOrder == this.sortOrder &&
-          other.cachedAt == this.cachedAt);
-}
-
-class CachedWordsCompanion extends UpdateCompanion<CachedWord> {
-  final Value<String> wordId;
-  final Value<String> bookId;
-  final Value<String> wordText;
-  final Value<String> meaning;
-  final Value<String?> phonetic;
-  final Value<String?> translation;
-  final Value<int> frequencyRank;
-  final Value<int> sortOrder;
-  final Value<int> cachedAt;
-  final Value<int> rowid;
-  const CachedWordsCompanion({
-    this.wordId = const Value.absent(),
-    this.bookId = const Value.absent(),
-    this.wordText = const Value.absent(),
-    this.meaning = const Value.absent(),
-    this.phonetic = const Value.absent(),
-    this.translation = const Value.absent(),
-    this.frequencyRank = const Value.absent(),
-    this.sortOrder = const Value.absent(),
-    this.cachedAt = const Value.absent(),
-    this.rowid = const Value.absent(),
-  });
-  CachedWordsCompanion.insert({
-    required String wordId,
-    required String bookId,
-    required String wordText,
-    required String meaning,
-    this.phonetic = const Value.absent(),
-    this.translation = const Value.absent(),
-    this.frequencyRank = const Value.absent(),
-    this.sortOrder = const Value.absent(),
-    required int cachedAt,
-    this.rowid = const Value.absent(),
-  })  : wordId = Value(wordId),
-        bookId = Value(bookId),
-        wordText = Value(wordText),
-        meaning = Value(meaning),
-        cachedAt = Value(cachedAt);
-  static Insertable<CachedWord> custom({
-    Expression<String>? wordId,
-    Expression<String>? bookId,
-    Expression<String>? wordText,
-    Expression<String>? meaning,
-    Expression<String>? phonetic,
-    Expression<String>? translation,
-    Expression<int>? frequencyRank,
-    Expression<int>? sortOrder,
-    Expression<int>? cachedAt,
-    Expression<int>? rowid,
-  }) {
-    return RawValuesInsertable({
-      if (wordId != null) 'word_id': wordId,
-      if (bookId != null) 'book_id': bookId,
-      if (wordText != null) 'word_text': wordText,
-      if (meaning != null) 'meaning': meaning,
-      if (phonetic != null) 'phonetic': phonetic,
-      if (translation != null) 'translation': translation,
-      if (frequencyRank != null) 'frequency_rank': frequencyRank,
-      if (sortOrder != null) 'sort_order': sortOrder,
-      if (cachedAt != null) 'cached_at': cachedAt,
-      if (rowid != null) 'rowid': rowid,
-    });
-  }
-
-  CachedWordsCompanion copyWith(
-      {Value<String>? wordId,
-      Value<String>? bookId,
-      Value<String>? wordText,
-      Value<String>? meaning,
-      Value<String?>? phonetic,
-      Value<String?>? translation,
-      Value<int>? frequencyRank,
-      Value<int>? sortOrder,
-      Value<int>? cachedAt,
-      Value<int>? rowid}) {
-    return CachedWordsCompanion(
-      wordId: wordId ?? this.wordId,
-      bookId: bookId ?? this.bookId,
-      wordText: wordText ?? this.wordText,
-      meaning: meaning ?? this.meaning,
-      phonetic: phonetic ?? this.phonetic,
-      translation: translation ?? this.translation,
-      frequencyRank: frequencyRank ?? this.frequencyRank,
-      sortOrder: sortOrder ?? this.sortOrder,
-      cachedAt: cachedAt ?? this.cachedAt,
-      rowid: rowid ?? this.rowid,
-    );
-  }
-
-  @override
-  Map<String, Expression> toColumns(bool nullToAbsent) {
-    final map = <String, Expression>{};
-    if (wordId.present) {
-      map['word_id'] = Variable<String>(wordId.value);
-    }
-    if (bookId.present) {
-      map['book_id'] = Variable<String>(bookId.value);
-    }
-    if (wordText.present) {
-      map['word_text'] = Variable<String>(wordText.value);
-    }
-    if (meaning.present) {
-      map['meaning'] = Variable<String>(meaning.value);
-    }
-    if (phonetic.present) {
-      map['phonetic'] = Variable<String>(phonetic.value);
-    }
-    if (translation.present) {
-      map['translation'] = Variable<String>(translation.value);
-    }
-    if (frequencyRank.present) {
-      map['frequency_rank'] = Variable<int>(frequencyRank.value);
-    }
-    if (sortOrder.present) {
-      map['sort_order'] = Variable<int>(sortOrder.value);
-    }
-    if (cachedAt.present) {
-      map['cached_at'] = Variable<int>(cachedAt.value);
-    }
-    if (rowid.present) {
-      map['rowid'] = Variable<int>(rowid.value);
-    }
-    return map;
-  }
-
-  @override
-  String toString() {
-    return (StringBuffer('CachedWordsCompanion(')
-          ..write('wordId: $wordId, ')
-          ..write('bookId: $bookId, ')
-          ..write('wordText: $wordText, ')
-          ..write('meaning: $meaning, ')
-          ..write('phonetic: $phonetic, ')
-          ..write('translation: $translation, ')
-          ..write('frequencyRank: $frequencyRank, ')
-          ..write('sortOrder: $sortOrder, ')
-          ..write('cachedAt: $cachedAt, ')
-          ..write('rowid: $rowid')
-          ..write(')'))
-        .toString();
-  }
-}
-
 class $PresetWordbooksTable extends PresetWordbooks
     with TableInfo<$PresetWordbooksTable, PresetWordbook> {
   @override
@@ -4370,6 +3879,12 @@ class $ExampleSentencesTable extends ExampleSentences
   late final GeneratedColumn<String> wordId = GeneratedColumn<String>(
       'word_id', aliasedName, false,
       type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _stableIdMeta =
+      const VerificationMeta('stableId');
+  @override
+  late final GeneratedColumn<String> stableId = GeneratedColumn<String>(
+      'stable_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _senseMeta = const VerificationMeta('sense');
   @override
   late final GeneratedColumn<String> sense = GeneratedColumn<String>(
@@ -4394,7 +3909,8 @@ class $ExampleSentencesTable extends ExampleSentences
       requiredDuringInsert: false,
       defaultValue: const Constant(0));
   @override
-  List<GeneratedColumn> get $columns => [id, wordId, sense, en, cn, sortOrder];
+  List<GeneratedColumn> get $columns =>
+      [id, wordId, stableId, sense, en, cn, sortOrder];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -4413,6 +3929,10 @@ class $ExampleSentencesTable extends ExampleSentences
           wordId.isAcceptableOrUnknown(data['word_id']!, _wordIdMeta));
     } else if (isInserting) {
       context.missing(_wordIdMeta);
+    }
+    if (data.containsKey('stable_id')) {
+      context.handle(_stableIdMeta,
+          stableId.isAcceptableOrUnknown(data['stable_id']!, _stableIdMeta));
     }
     if (data.containsKey('sense')) {
       context.handle(
@@ -4447,6 +3967,8 @@ class $ExampleSentencesTable extends ExampleSentences
           .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
       wordId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}word_id'])!,
+      stableId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}stable_id']),
       sense: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}sense'])!,
       en: attachedDatabase.typeMapping
@@ -4470,6 +3992,12 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
   /// FK → word_entries.word_id.
   final String wordId;
 
+  /// v0.3.0 P0: content-addressable stable ID.
+  /// = sha256_24(canonical_json([normalize_word(word_text), normalize_text(en)]))
+  /// Nullable for legacy rows imported before v9 migration; populated by all
+  /// new WordbookLoader imports.
+  final String? stableId;
+
   /// Sense/义项 label, e.g. 'v. 放弃；抛弃'.
   final String sense;
 
@@ -4484,6 +4012,7 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
   const ExampleSentence(
       {required this.id,
       required this.wordId,
+      this.stableId,
       required this.sense,
       required this.en,
       required this.cn,
@@ -4493,6 +4022,9 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
     final map = <String, Expression>{};
     map['id'] = Variable<int>(id);
     map['word_id'] = Variable<String>(wordId);
+    if (!nullToAbsent || stableId != null) {
+      map['stable_id'] = Variable<String>(stableId);
+    }
     map['sense'] = Variable<String>(sense);
     map['en'] = Variable<String>(en);
     map['cn'] = Variable<String>(cn);
@@ -4504,6 +4036,9 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
     return ExampleSentencesCompanion(
       id: Value(id),
       wordId: Value(wordId),
+      stableId: stableId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(stableId),
       sense: Value(sense),
       en: Value(en),
       cn: Value(cn),
@@ -4517,6 +4052,7 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
     return ExampleSentence(
       id: serializer.fromJson<int>(json['id']),
       wordId: serializer.fromJson<String>(json['wordId']),
+      stableId: serializer.fromJson<String?>(json['stableId']),
       sense: serializer.fromJson<String>(json['sense']),
       en: serializer.fromJson<String>(json['en']),
       cn: serializer.fromJson<String>(json['cn']),
@@ -4529,6 +4065,7 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
     return <String, dynamic>{
       'id': serializer.toJson<int>(id),
       'wordId': serializer.toJson<String>(wordId),
+      'stableId': serializer.toJson<String?>(stableId),
       'sense': serializer.toJson<String>(sense),
       'en': serializer.toJson<String>(en),
       'cn': serializer.toJson<String>(cn),
@@ -4539,6 +4076,7 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
   ExampleSentence copyWith(
           {int? id,
           String? wordId,
+          Value<String?> stableId = const Value.absent(),
           String? sense,
           String? en,
           String? cn,
@@ -4546,6 +4084,7 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
       ExampleSentence(
         id: id ?? this.id,
         wordId: wordId ?? this.wordId,
+        stableId: stableId.present ? stableId.value : this.stableId,
         sense: sense ?? this.sense,
         en: en ?? this.en,
         cn: cn ?? this.cn,
@@ -4555,6 +4094,7 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
     return ExampleSentence(
       id: data.id.present ? data.id.value : this.id,
       wordId: data.wordId.present ? data.wordId.value : this.wordId,
+      stableId: data.stableId.present ? data.stableId.value : this.stableId,
       sense: data.sense.present ? data.sense.value : this.sense,
       en: data.en.present ? data.en.value : this.en,
       cn: data.cn.present ? data.cn.value : this.cn,
@@ -4567,6 +4107,7 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
     return (StringBuffer('ExampleSentence(')
           ..write('id: $id, ')
           ..write('wordId: $wordId, ')
+          ..write('stableId: $stableId, ')
           ..write('sense: $sense, ')
           ..write('en: $en, ')
           ..write('cn: $cn, ')
@@ -4576,13 +4117,15 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
   }
 
   @override
-  int get hashCode => Object.hash(id, wordId, sense, en, cn, sortOrder);
+  int get hashCode =>
+      Object.hash(id, wordId, stableId, sense, en, cn, sortOrder);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is ExampleSentence &&
           other.id == this.id &&
           other.wordId == this.wordId &&
+          other.stableId == this.stableId &&
           other.sense == this.sense &&
           other.en == this.en &&
           other.cn == this.cn &&
@@ -4592,6 +4135,7 @@ class ExampleSentence extends DataClass implements Insertable<ExampleSentence> {
 class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
   final Value<int> id;
   final Value<String> wordId;
+  final Value<String?> stableId;
   final Value<String> sense;
   final Value<String> en;
   final Value<String> cn;
@@ -4599,6 +4143,7 @@ class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
   const ExampleSentencesCompanion({
     this.id = const Value.absent(),
     this.wordId = const Value.absent(),
+    this.stableId = const Value.absent(),
     this.sense = const Value.absent(),
     this.en = const Value.absent(),
     this.cn = const Value.absent(),
@@ -4607,6 +4152,7 @@ class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
   ExampleSentencesCompanion.insert({
     this.id = const Value.absent(),
     required String wordId,
+    this.stableId = const Value.absent(),
     required String sense,
     required String en,
     required String cn,
@@ -4618,6 +4164,7 @@ class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
   static Insertable<ExampleSentence> custom({
     Expression<int>? id,
     Expression<String>? wordId,
+    Expression<String>? stableId,
     Expression<String>? sense,
     Expression<String>? en,
     Expression<String>? cn,
@@ -4626,6 +4173,7 @@ class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (wordId != null) 'word_id': wordId,
+      if (stableId != null) 'stable_id': stableId,
       if (sense != null) 'sense': sense,
       if (en != null) 'en': en,
       if (cn != null) 'cn': cn,
@@ -4636,6 +4184,7 @@ class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
   ExampleSentencesCompanion copyWith(
       {Value<int>? id,
       Value<String>? wordId,
+      Value<String?>? stableId,
       Value<String>? sense,
       Value<String>? en,
       Value<String>? cn,
@@ -4643,6 +4192,7 @@ class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
     return ExampleSentencesCompanion(
       id: id ?? this.id,
       wordId: wordId ?? this.wordId,
+      stableId: stableId ?? this.stableId,
       sense: sense ?? this.sense,
       en: en ?? this.en,
       cn: cn ?? this.cn,
@@ -4658,6 +4208,9 @@ class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
     }
     if (wordId.present) {
       map['word_id'] = Variable<String>(wordId.value);
+    }
+    if (stableId.present) {
+      map['stable_id'] = Variable<String>(stableId.value);
     }
     if (sense.present) {
       map['sense'] = Variable<String>(sense.value);
@@ -4679,6 +4232,7 @@ class ExampleSentencesCompanion extends UpdateCompanion<ExampleSentence> {
     return (StringBuffer('ExampleSentencesCompanion(')
           ..write('id: $id, ')
           ..write('wordId: $wordId, ')
+          ..write('stableId: $stableId, ')
           ..write('sense: $sense, ')
           ..write('en: $en, ')
           ..write('cn: $cn, ')
@@ -7569,6 +7123,438 @@ class WordMorphemeMatchesCompanion extends UpdateCompanion<WordMorphemeMatche> {
   }
 }
 
+class $AudioFileCacheTable extends AudioFileCache
+    with TableInfo<$AudioFileCacheTable, AudioFileCacheData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AudioFileCacheTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _audioIdMeta =
+      const VerificationMeta('audioId');
+  @override
+  late final GeneratedColumn<String> audioId = GeneratedColumn<String>(
+      'audio_id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _localPathMeta =
+      const VerificationMeta('localPath');
+  @override
+  late final GeneratedColumn<String> localPath = GeneratedColumn<String>(
+      'local_path', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _bytesMeta = const VerificationMeta('bytes');
+  @override
+  late final GeneratedColumn<int> bytes = GeneratedColumn<int>(
+      'bytes', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _cachedAtMeta =
+      const VerificationMeta('cachedAt');
+  @override
+  late final GeneratedColumn<int> cachedAt = GeneratedColumn<int>(
+      'cached_at', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _lastPlayedAtMeta =
+      const VerificationMeta('lastPlayedAt');
+  @override
+  late final GeneratedColumn<int> lastPlayedAt = GeneratedColumn<int>(
+      'last_played_at', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _cachedChecksumMeta =
+      const VerificationMeta('cachedChecksum');
+  @override
+  late final GeneratedColumn<String> cachedChecksum = GeneratedColumn<String>(
+      'cached_checksum', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _cachedContentVersionMeta =
+      const VerificationMeta('cachedContentVersion');
+  @override
+  late final GeneratedColumn<String> cachedContentVersion =
+      GeneratedColumn<String>('cached_content_version', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        audioId,
+        localPath,
+        bytes,
+        cachedAt,
+        lastPlayedAt,
+        cachedChecksum,
+        cachedContentVersion
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'audio_file_cache';
+  @override
+  VerificationContext validateIntegrity(Insertable<AudioFileCacheData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('audio_id')) {
+      context.handle(_audioIdMeta,
+          audioId.isAcceptableOrUnknown(data['audio_id']!, _audioIdMeta));
+    } else if (isInserting) {
+      context.missing(_audioIdMeta);
+    }
+    if (data.containsKey('local_path')) {
+      context.handle(_localPathMeta,
+          localPath.isAcceptableOrUnknown(data['local_path']!, _localPathMeta));
+    } else if (isInserting) {
+      context.missing(_localPathMeta);
+    }
+    if (data.containsKey('bytes')) {
+      context.handle(
+          _bytesMeta, bytes.isAcceptableOrUnknown(data['bytes']!, _bytesMeta));
+    } else if (isInserting) {
+      context.missing(_bytesMeta);
+    }
+    if (data.containsKey('cached_at')) {
+      context.handle(_cachedAtMeta,
+          cachedAt.isAcceptableOrUnknown(data['cached_at']!, _cachedAtMeta));
+    } else if (isInserting) {
+      context.missing(_cachedAtMeta);
+    }
+    if (data.containsKey('last_played_at')) {
+      context.handle(
+          _lastPlayedAtMeta,
+          lastPlayedAt.isAcceptableOrUnknown(
+              data['last_played_at']!, _lastPlayedAtMeta));
+    }
+    if (data.containsKey('cached_checksum')) {
+      context.handle(
+          _cachedChecksumMeta,
+          cachedChecksum.isAcceptableOrUnknown(
+              data['cached_checksum']!, _cachedChecksumMeta));
+    }
+    if (data.containsKey('cached_content_version')) {
+      context.handle(
+          _cachedContentVersionMeta,
+          cachedContentVersion.isAcceptableOrUnknown(
+              data['cached_content_version']!, _cachedContentVersionMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {audioId};
+  @override
+  AudioFileCacheData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AudioFileCacheData(
+      audioId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}audio_id'])!,
+      localPath: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}local_path'])!,
+      bytes: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}bytes'])!,
+      cachedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}cached_at'])!,
+      lastPlayedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}last_played_at']),
+      cachedChecksum: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}cached_checksum']),
+      cachedContentVersion: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}cached_content_version']),
+    );
+  }
+
+  @override
+  $AudioFileCacheTable createAlias(String alias) {
+    return $AudioFileCacheTable(attachedDatabase, alias);
+  }
+}
+
+class AudioFileCacheData extends DataClass
+    implements Insertable<AudioFileCacheData> {
+  /// = audio_assets.id (24-hex sha256, includes audio_version).
+  final String audioId;
+
+  /// Absolute path to the cached binary on the device filesystem.
+  final String localPath;
+
+  /// Byte size of the cached file. Required for capacity calculation.
+  final int bytes;
+
+  /// When this row was first written. UTC epoch ms.
+  final int cachedAt;
+
+  /// When the audio was last played. UTC epoch ms. Nullable means
+  /// "downloaded but never played" — also a valid state.
+  final int? lastPlayedAt;
+
+  /// SHA-256 of the binary as reported by `audio_assets.checksum_sha256`
+  /// at download time. Used to detect server-side replacements.
+  final String? cachedChecksum;
+
+  /// content_version of the manifest package the audio was sourced from.
+  /// Used by §7.4.1 trigger 2 for orphan detection.
+  final String? cachedContentVersion;
+  const AudioFileCacheData(
+      {required this.audioId,
+      required this.localPath,
+      required this.bytes,
+      required this.cachedAt,
+      this.lastPlayedAt,
+      this.cachedChecksum,
+      this.cachedContentVersion});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['audio_id'] = Variable<String>(audioId);
+    map['local_path'] = Variable<String>(localPath);
+    map['bytes'] = Variable<int>(bytes);
+    map['cached_at'] = Variable<int>(cachedAt);
+    if (!nullToAbsent || lastPlayedAt != null) {
+      map['last_played_at'] = Variable<int>(lastPlayedAt);
+    }
+    if (!nullToAbsent || cachedChecksum != null) {
+      map['cached_checksum'] = Variable<String>(cachedChecksum);
+    }
+    if (!nullToAbsent || cachedContentVersion != null) {
+      map['cached_content_version'] = Variable<String>(cachedContentVersion);
+    }
+    return map;
+  }
+
+  AudioFileCacheCompanion toCompanion(bool nullToAbsent) {
+    return AudioFileCacheCompanion(
+      audioId: Value(audioId),
+      localPath: Value(localPath),
+      bytes: Value(bytes),
+      cachedAt: Value(cachedAt),
+      lastPlayedAt: lastPlayedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastPlayedAt),
+      cachedChecksum: cachedChecksum == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cachedChecksum),
+      cachedContentVersion: cachedContentVersion == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cachedContentVersion),
+    );
+  }
+
+  factory AudioFileCacheData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AudioFileCacheData(
+      audioId: serializer.fromJson<String>(json['audioId']),
+      localPath: serializer.fromJson<String>(json['localPath']),
+      bytes: serializer.fromJson<int>(json['bytes']),
+      cachedAt: serializer.fromJson<int>(json['cachedAt']),
+      lastPlayedAt: serializer.fromJson<int?>(json['lastPlayedAt']),
+      cachedChecksum: serializer.fromJson<String?>(json['cachedChecksum']),
+      cachedContentVersion:
+          serializer.fromJson<String?>(json['cachedContentVersion']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'audioId': serializer.toJson<String>(audioId),
+      'localPath': serializer.toJson<String>(localPath),
+      'bytes': serializer.toJson<int>(bytes),
+      'cachedAt': serializer.toJson<int>(cachedAt),
+      'lastPlayedAt': serializer.toJson<int?>(lastPlayedAt),
+      'cachedChecksum': serializer.toJson<String?>(cachedChecksum),
+      'cachedContentVersion': serializer.toJson<String?>(cachedContentVersion),
+    };
+  }
+
+  AudioFileCacheData copyWith(
+          {String? audioId,
+          String? localPath,
+          int? bytes,
+          int? cachedAt,
+          Value<int?> lastPlayedAt = const Value.absent(),
+          Value<String?> cachedChecksum = const Value.absent(),
+          Value<String?> cachedContentVersion = const Value.absent()}) =>
+      AudioFileCacheData(
+        audioId: audioId ?? this.audioId,
+        localPath: localPath ?? this.localPath,
+        bytes: bytes ?? this.bytes,
+        cachedAt: cachedAt ?? this.cachedAt,
+        lastPlayedAt:
+            lastPlayedAt.present ? lastPlayedAt.value : this.lastPlayedAt,
+        cachedChecksum:
+            cachedChecksum.present ? cachedChecksum.value : this.cachedChecksum,
+        cachedContentVersion: cachedContentVersion.present
+            ? cachedContentVersion.value
+            : this.cachedContentVersion,
+      );
+  AudioFileCacheData copyWithCompanion(AudioFileCacheCompanion data) {
+    return AudioFileCacheData(
+      audioId: data.audioId.present ? data.audioId.value : this.audioId,
+      localPath: data.localPath.present ? data.localPath.value : this.localPath,
+      bytes: data.bytes.present ? data.bytes.value : this.bytes,
+      cachedAt: data.cachedAt.present ? data.cachedAt.value : this.cachedAt,
+      lastPlayedAt: data.lastPlayedAt.present
+          ? data.lastPlayedAt.value
+          : this.lastPlayedAt,
+      cachedChecksum: data.cachedChecksum.present
+          ? data.cachedChecksum.value
+          : this.cachedChecksum,
+      cachedContentVersion: data.cachedContentVersion.present
+          ? data.cachedContentVersion.value
+          : this.cachedContentVersion,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AudioFileCacheData(')
+          ..write('audioId: $audioId, ')
+          ..write('localPath: $localPath, ')
+          ..write('bytes: $bytes, ')
+          ..write('cachedAt: $cachedAt, ')
+          ..write('lastPlayedAt: $lastPlayedAt, ')
+          ..write('cachedChecksum: $cachedChecksum, ')
+          ..write('cachedContentVersion: $cachedContentVersion')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(audioId, localPath, bytes, cachedAt,
+      lastPlayedAt, cachedChecksum, cachedContentVersion);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AudioFileCacheData &&
+          other.audioId == this.audioId &&
+          other.localPath == this.localPath &&
+          other.bytes == this.bytes &&
+          other.cachedAt == this.cachedAt &&
+          other.lastPlayedAt == this.lastPlayedAt &&
+          other.cachedChecksum == this.cachedChecksum &&
+          other.cachedContentVersion == this.cachedContentVersion);
+}
+
+class AudioFileCacheCompanion extends UpdateCompanion<AudioFileCacheData> {
+  final Value<String> audioId;
+  final Value<String> localPath;
+  final Value<int> bytes;
+  final Value<int> cachedAt;
+  final Value<int?> lastPlayedAt;
+  final Value<String?> cachedChecksum;
+  final Value<String?> cachedContentVersion;
+  final Value<int> rowid;
+  const AudioFileCacheCompanion({
+    this.audioId = const Value.absent(),
+    this.localPath = const Value.absent(),
+    this.bytes = const Value.absent(),
+    this.cachedAt = const Value.absent(),
+    this.lastPlayedAt = const Value.absent(),
+    this.cachedChecksum = const Value.absent(),
+    this.cachedContentVersion = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AudioFileCacheCompanion.insert({
+    required String audioId,
+    required String localPath,
+    required int bytes,
+    required int cachedAt,
+    this.lastPlayedAt = const Value.absent(),
+    this.cachedChecksum = const Value.absent(),
+    this.cachedContentVersion = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : audioId = Value(audioId),
+        localPath = Value(localPath),
+        bytes = Value(bytes),
+        cachedAt = Value(cachedAt);
+  static Insertable<AudioFileCacheData> custom({
+    Expression<String>? audioId,
+    Expression<String>? localPath,
+    Expression<int>? bytes,
+    Expression<int>? cachedAt,
+    Expression<int>? lastPlayedAt,
+    Expression<String>? cachedChecksum,
+    Expression<String>? cachedContentVersion,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (audioId != null) 'audio_id': audioId,
+      if (localPath != null) 'local_path': localPath,
+      if (bytes != null) 'bytes': bytes,
+      if (cachedAt != null) 'cached_at': cachedAt,
+      if (lastPlayedAt != null) 'last_played_at': lastPlayedAt,
+      if (cachedChecksum != null) 'cached_checksum': cachedChecksum,
+      if (cachedContentVersion != null)
+        'cached_content_version': cachedContentVersion,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AudioFileCacheCompanion copyWith(
+      {Value<String>? audioId,
+      Value<String>? localPath,
+      Value<int>? bytes,
+      Value<int>? cachedAt,
+      Value<int?>? lastPlayedAt,
+      Value<String?>? cachedChecksum,
+      Value<String?>? cachedContentVersion,
+      Value<int>? rowid}) {
+    return AudioFileCacheCompanion(
+      audioId: audioId ?? this.audioId,
+      localPath: localPath ?? this.localPath,
+      bytes: bytes ?? this.bytes,
+      cachedAt: cachedAt ?? this.cachedAt,
+      lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
+      cachedChecksum: cachedChecksum ?? this.cachedChecksum,
+      cachedContentVersion: cachedContentVersion ?? this.cachedContentVersion,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (audioId.present) {
+      map['audio_id'] = Variable<String>(audioId.value);
+    }
+    if (localPath.present) {
+      map['local_path'] = Variable<String>(localPath.value);
+    }
+    if (bytes.present) {
+      map['bytes'] = Variable<int>(bytes.value);
+    }
+    if (cachedAt.present) {
+      map['cached_at'] = Variable<int>(cachedAt.value);
+    }
+    if (lastPlayedAt.present) {
+      map['last_played_at'] = Variable<int>(lastPlayedAt.value);
+    }
+    if (cachedChecksum.present) {
+      map['cached_checksum'] = Variable<String>(cachedChecksum.value);
+    }
+    if (cachedContentVersion.present) {
+      map['cached_content_version'] =
+          Variable<String>(cachedContentVersion.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AudioFileCacheCompanion(')
+          ..write('audioId: $audioId, ')
+          ..write('localPath: $localPath, ')
+          ..write('bytes: $bytes, ')
+          ..write('cachedAt: $cachedAt, ')
+          ..write('lastPlayedAt: $lastPlayedAt, ')
+          ..write('cachedChecksum: $cachedChecksum, ')
+          ..write('cachedContentVersion: $cachedContentVersion, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -7582,7 +7568,6 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       $VocabularyNotebookTable(this);
   late final $CardStatesTable cardStates = $CardStatesTable(this);
   late final $ReviewLogsTable reviewLogs = $ReviewLogsTable(this);
-  late final $CachedWordsTable cachedWords = $CachedWordsTable(this);
   late final $PresetWordbooksTable presetWordbooks =
       $PresetWordbooksTable(this);
   late final $WordEntriesTable wordEntries = $WordEntriesTable(this);
@@ -7599,6 +7584,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       $MorphemeEntriesTable(this);
   late final $WordMorphemeMatchesTable wordMorphemeMatches =
       $WordMorphemeMatchesTable(this);
+  late final $AudioFileCacheTable audioFileCache = $AudioFileCacheTable(this);
   late final Index idxCardStatesDue = Index('idx_card_states_due',
       'CREATE INDEX idx_card_states_due ON card_states (due)');
   late final Index idxCardStatesState = Index('idx_card_states_state',
@@ -7612,6 +7598,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       'CREATE INDEX idx_wba_book_order ON word_book_assignments (book_slug, sort_order)');
   late final Index idxEsWordOrder = Index('idx_es_word_order',
       'CREATE UNIQUE INDEX idx_es_word_order ON example_sentences (word_id, sort_order)');
+  late final Index idxEsStableId = Index('idx_es_stable_id',
+      'CREATE UNIQUE INDEX idx_es_stable_id ON example_sentences (stable_id)');
   late final Index idxWordFormsWord = Index('idx_word_forms_word',
       'CREATE INDEX idx_word_forms_word ON word_forms (word)');
   late final Index idxWordRelationsWord = Index('idx_word_relations_word',
@@ -7623,6 +7611,12 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final Index idxWordMorphemeMatchesWord = Index(
       'idx_word_morpheme_matches_word',
       'CREATE INDEX idx_word_morpheme_matches_word ON word_morpheme_matches (word)');
+  late final Index idxAudioFileCacheLastPlayed = Index(
+      'idx_audio_file_cache_last_played',
+      'CREATE INDEX idx_audio_file_cache_last_played ON audio_file_cache (last_played_at)');
+  late final Index idxAudioFileCacheContentVersion = Index(
+      'idx_audio_file_cache_content_version',
+      'CREATE INDEX idx_audio_file_cache_content_version ON audio_file_cache (cached_content_version)');
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -7635,7 +7629,6 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         vocabularyNotebook,
         cardStates,
         reviewLogs,
-        cachedWords,
         presetWordbooks,
         wordEntries,
         wordBookAssignments,
@@ -7647,17 +7640,21 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         wordPhrases,
         morphemeEntries,
         wordMorphemeMatches,
+        audioFileCache,
         idxCardStatesDue,
         idxCardStatesState,
         idxReviewLogsWordId,
         idxReviewLogsReviewTime,
         idxWbaBookOrder,
         idxEsWordOrder,
+        idxEsStableId,
         idxWordFormsWord,
         idxWordRelationsWord,
         idxWordPhrasesWord,
         idxMorphemeEntriesNorm,
-        idxWordMorphemeMatchesWord
+        idxWordMorphemeMatchesWord,
+        idxAudioFileCacheLastPlayed,
+        idxAudioFileCacheContentVersion
       ];
 }
 
@@ -9217,234 +9214,6 @@ typedef $$ReviewLogsTableProcessedTableManager = ProcessedTableManager<
     (ReviewLog, $$ReviewLogsTableReferences),
     ReviewLog,
     PrefetchHooks Function({bool cardStateId})>;
-typedef $$CachedWordsTableCreateCompanionBuilder = CachedWordsCompanion
-    Function({
-  required String wordId,
-  required String bookId,
-  required String wordText,
-  required String meaning,
-  Value<String?> phonetic,
-  Value<String?> translation,
-  Value<int> frequencyRank,
-  Value<int> sortOrder,
-  required int cachedAt,
-  Value<int> rowid,
-});
-typedef $$CachedWordsTableUpdateCompanionBuilder = CachedWordsCompanion
-    Function({
-  Value<String> wordId,
-  Value<String> bookId,
-  Value<String> wordText,
-  Value<String> meaning,
-  Value<String?> phonetic,
-  Value<String?> translation,
-  Value<int> frequencyRank,
-  Value<int> sortOrder,
-  Value<int> cachedAt,
-  Value<int> rowid,
-});
-
-class $$CachedWordsTableFilterComposer
-    extends Composer<_$AppDatabase, $CachedWordsTable> {
-  $$CachedWordsTableFilterComposer({
-    required super.$db,
-    required super.$table,
-    super.joinBuilder,
-    super.$addJoinBuilderToRootComposer,
-    super.$removeJoinBuilderFromRootComposer,
-  });
-  ColumnFilters<String> get wordId => $composableBuilder(
-      column: $table.wordId, builder: (column) => ColumnFilters(column));
-
-  ColumnFilters<String> get bookId => $composableBuilder(
-      column: $table.bookId, builder: (column) => ColumnFilters(column));
-
-  ColumnFilters<String> get wordText => $composableBuilder(
-      column: $table.wordText, builder: (column) => ColumnFilters(column));
-
-  ColumnFilters<String> get meaning => $composableBuilder(
-      column: $table.meaning, builder: (column) => ColumnFilters(column));
-
-  ColumnFilters<String> get phonetic => $composableBuilder(
-      column: $table.phonetic, builder: (column) => ColumnFilters(column));
-
-  ColumnFilters<String> get translation => $composableBuilder(
-      column: $table.translation, builder: (column) => ColumnFilters(column));
-
-  ColumnFilters<int> get frequencyRank => $composableBuilder(
-      column: $table.frequencyRank, builder: (column) => ColumnFilters(column));
-
-  ColumnFilters<int> get sortOrder => $composableBuilder(
-      column: $table.sortOrder, builder: (column) => ColumnFilters(column));
-
-  ColumnFilters<int> get cachedAt => $composableBuilder(
-      column: $table.cachedAt, builder: (column) => ColumnFilters(column));
-}
-
-class $$CachedWordsTableOrderingComposer
-    extends Composer<_$AppDatabase, $CachedWordsTable> {
-  $$CachedWordsTableOrderingComposer({
-    required super.$db,
-    required super.$table,
-    super.joinBuilder,
-    super.$addJoinBuilderToRootComposer,
-    super.$removeJoinBuilderFromRootComposer,
-  });
-  ColumnOrderings<String> get wordId => $composableBuilder(
-      column: $table.wordId, builder: (column) => ColumnOrderings(column));
-
-  ColumnOrderings<String> get bookId => $composableBuilder(
-      column: $table.bookId, builder: (column) => ColumnOrderings(column));
-
-  ColumnOrderings<String> get wordText => $composableBuilder(
-      column: $table.wordText, builder: (column) => ColumnOrderings(column));
-
-  ColumnOrderings<String> get meaning => $composableBuilder(
-      column: $table.meaning, builder: (column) => ColumnOrderings(column));
-
-  ColumnOrderings<String> get phonetic => $composableBuilder(
-      column: $table.phonetic, builder: (column) => ColumnOrderings(column));
-
-  ColumnOrderings<String> get translation => $composableBuilder(
-      column: $table.translation, builder: (column) => ColumnOrderings(column));
-
-  ColumnOrderings<int> get frequencyRank => $composableBuilder(
-      column: $table.frequencyRank,
-      builder: (column) => ColumnOrderings(column));
-
-  ColumnOrderings<int> get sortOrder => $composableBuilder(
-      column: $table.sortOrder, builder: (column) => ColumnOrderings(column));
-
-  ColumnOrderings<int> get cachedAt => $composableBuilder(
-      column: $table.cachedAt, builder: (column) => ColumnOrderings(column));
-}
-
-class $$CachedWordsTableAnnotationComposer
-    extends Composer<_$AppDatabase, $CachedWordsTable> {
-  $$CachedWordsTableAnnotationComposer({
-    required super.$db,
-    required super.$table,
-    super.joinBuilder,
-    super.$addJoinBuilderToRootComposer,
-    super.$removeJoinBuilderFromRootComposer,
-  });
-  GeneratedColumn<String> get wordId =>
-      $composableBuilder(column: $table.wordId, builder: (column) => column);
-
-  GeneratedColumn<String> get bookId =>
-      $composableBuilder(column: $table.bookId, builder: (column) => column);
-
-  GeneratedColumn<String> get wordText =>
-      $composableBuilder(column: $table.wordText, builder: (column) => column);
-
-  GeneratedColumn<String> get meaning =>
-      $composableBuilder(column: $table.meaning, builder: (column) => column);
-
-  GeneratedColumn<String> get phonetic =>
-      $composableBuilder(column: $table.phonetic, builder: (column) => column);
-
-  GeneratedColumn<String> get translation => $composableBuilder(
-      column: $table.translation, builder: (column) => column);
-
-  GeneratedColumn<int> get frequencyRank => $composableBuilder(
-      column: $table.frequencyRank, builder: (column) => column);
-
-  GeneratedColumn<int> get sortOrder =>
-      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
-
-  GeneratedColumn<int> get cachedAt =>
-      $composableBuilder(column: $table.cachedAt, builder: (column) => column);
-}
-
-class $$CachedWordsTableTableManager extends RootTableManager<
-    _$AppDatabase,
-    $CachedWordsTable,
-    CachedWord,
-    $$CachedWordsTableFilterComposer,
-    $$CachedWordsTableOrderingComposer,
-    $$CachedWordsTableAnnotationComposer,
-    $$CachedWordsTableCreateCompanionBuilder,
-    $$CachedWordsTableUpdateCompanionBuilder,
-    (CachedWord, BaseReferences<_$AppDatabase, $CachedWordsTable, CachedWord>),
-    CachedWord,
-    PrefetchHooks Function()> {
-  $$CachedWordsTableTableManager(_$AppDatabase db, $CachedWordsTable table)
-      : super(TableManagerState(
-          db: db,
-          table: table,
-          createFilteringComposer: () =>
-              $$CachedWordsTableFilterComposer($db: db, $table: table),
-          createOrderingComposer: () =>
-              $$CachedWordsTableOrderingComposer($db: db, $table: table),
-          createComputedFieldComposer: () =>
-              $$CachedWordsTableAnnotationComposer($db: db, $table: table),
-          updateCompanionCallback: ({
-            Value<String> wordId = const Value.absent(),
-            Value<String> bookId = const Value.absent(),
-            Value<String> wordText = const Value.absent(),
-            Value<String> meaning = const Value.absent(),
-            Value<String?> phonetic = const Value.absent(),
-            Value<String?> translation = const Value.absent(),
-            Value<int> frequencyRank = const Value.absent(),
-            Value<int> sortOrder = const Value.absent(),
-            Value<int> cachedAt = const Value.absent(),
-            Value<int> rowid = const Value.absent(),
-          }) =>
-              CachedWordsCompanion(
-            wordId: wordId,
-            bookId: bookId,
-            wordText: wordText,
-            meaning: meaning,
-            phonetic: phonetic,
-            translation: translation,
-            frequencyRank: frequencyRank,
-            sortOrder: sortOrder,
-            cachedAt: cachedAt,
-            rowid: rowid,
-          ),
-          createCompanionCallback: ({
-            required String wordId,
-            required String bookId,
-            required String wordText,
-            required String meaning,
-            Value<String?> phonetic = const Value.absent(),
-            Value<String?> translation = const Value.absent(),
-            Value<int> frequencyRank = const Value.absent(),
-            Value<int> sortOrder = const Value.absent(),
-            required int cachedAt,
-            Value<int> rowid = const Value.absent(),
-          }) =>
-              CachedWordsCompanion.insert(
-            wordId: wordId,
-            bookId: bookId,
-            wordText: wordText,
-            meaning: meaning,
-            phonetic: phonetic,
-            translation: translation,
-            frequencyRank: frequencyRank,
-            sortOrder: sortOrder,
-            cachedAt: cachedAt,
-            rowid: rowid,
-          ),
-          withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
-              .toList(),
-          prefetchHooksCallback: null,
-        ));
-}
-
-typedef $$CachedWordsTableProcessedTableManager = ProcessedTableManager<
-    _$AppDatabase,
-    $CachedWordsTable,
-    CachedWord,
-    $$CachedWordsTableFilterComposer,
-    $$CachedWordsTableOrderingComposer,
-    $$CachedWordsTableAnnotationComposer,
-    $$CachedWordsTableCreateCompanionBuilder,
-    $$CachedWordsTableUpdateCompanionBuilder,
-    (CachedWord, BaseReferences<_$AppDatabase, $CachedWordsTable, CachedWord>),
-    CachedWord,
-    PrefetchHooks Function()>;
 typedef $$PresetWordbooksTableCreateCompanionBuilder = PresetWordbooksCompanion
     Function({
   required String slug,
@@ -10031,6 +9800,7 @@ typedef $$ExampleSentencesTableCreateCompanionBuilder
     = ExampleSentencesCompanion Function({
   Value<int> id,
   required String wordId,
+  Value<String?> stableId,
   required String sense,
   required String en,
   required String cn,
@@ -10040,6 +9810,7 @@ typedef $$ExampleSentencesTableUpdateCompanionBuilder
     = ExampleSentencesCompanion Function({
   Value<int> id,
   Value<String> wordId,
+  Value<String?> stableId,
   Value<String> sense,
   Value<String> en,
   Value<String> cn,
@@ -10060,6 +9831,9 @@ class $$ExampleSentencesTableFilterComposer
 
   ColumnFilters<String> get wordId => $composableBuilder(
       column: $table.wordId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get stableId => $composableBuilder(
+      column: $table.stableId, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get sense => $composableBuilder(
       column: $table.sense, builder: (column) => ColumnFilters(column));
@@ -10089,6 +9863,9 @@ class $$ExampleSentencesTableOrderingComposer
   ColumnOrderings<String> get wordId => $composableBuilder(
       column: $table.wordId, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get stableId => $composableBuilder(
+      column: $table.stableId, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get sense => $composableBuilder(
       column: $table.sense, builder: (column) => ColumnOrderings(column));
 
@@ -10116,6 +9893,9 @@ class $$ExampleSentencesTableAnnotationComposer
 
   GeneratedColumn<String> get wordId =>
       $composableBuilder(column: $table.wordId, builder: (column) => column);
+
+  GeneratedColumn<String> get stableId =>
+      $composableBuilder(column: $table.stableId, builder: (column) => column);
 
   GeneratedColumn<String> get sense =>
       $composableBuilder(column: $table.sense, builder: (column) => column);
@@ -10159,6 +9939,7 @@ class $$ExampleSentencesTableTableManager extends RootTableManager<
           updateCompanionCallback: ({
             Value<int> id = const Value.absent(),
             Value<String> wordId = const Value.absent(),
+            Value<String?> stableId = const Value.absent(),
             Value<String> sense = const Value.absent(),
             Value<String> en = const Value.absent(),
             Value<String> cn = const Value.absent(),
@@ -10167,6 +9948,7 @@ class $$ExampleSentencesTableTableManager extends RootTableManager<
               ExampleSentencesCompanion(
             id: id,
             wordId: wordId,
+            stableId: stableId,
             sense: sense,
             en: en,
             cn: cn,
@@ -10175,6 +9957,7 @@ class $$ExampleSentencesTableTableManager extends RootTableManager<
           createCompanionCallback: ({
             Value<int> id = const Value.absent(),
             required String wordId,
+            Value<String?> stableId = const Value.absent(),
             required String sense,
             required String en,
             required String cn,
@@ -10183,6 +9966,7 @@ class $$ExampleSentencesTableTableManager extends RootTableManager<
               ExampleSentencesCompanion.insert(
             id: id,
             wordId: wordId,
+            stableId: stableId,
             sense: sense,
             en: en,
             cn: cn,
@@ -11657,6 +11441,215 @@ typedef $$WordMorphemeMatchesTableProcessedTableManager = ProcessedTableManager<
     ),
     WordMorphemeMatche,
     PrefetchHooks Function()>;
+typedef $$AudioFileCacheTableCreateCompanionBuilder = AudioFileCacheCompanion
+    Function({
+  required String audioId,
+  required String localPath,
+  required int bytes,
+  required int cachedAt,
+  Value<int?> lastPlayedAt,
+  Value<String?> cachedChecksum,
+  Value<String?> cachedContentVersion,
+  Value<int> rowid,
+});
+typedef $$AudioFileCacheTableUpdateCompanionBuilder = AudioFileCacheCompanion
+    Function({
+  Value<String> audioId,
+  Value<String> localPath,
+  Value<int> bytes,
+  Value<int> cachedAt,
+  Value<int?> lastPlayedAt,
+  Value<String?> cachedChecksum,
+  Value<String?> cachedContentVersion,
+  Value<int> rowid,
+});
+
+class $$AudioFileCacheTableFilterComposer
+    extends Composer<_$AppDatabase, $AudioFileCacheTable> {
+  $$AudioFileCacheTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get audioId => $composableBuilder(
+      column: $table.audioId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get localPath => $composableBuilder(
+      column: $table.localPath, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get bytes => $composableBuilder(
+      column: $table.bytes, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get cachedAt => $composableBuilder(
+      column: $table.cachedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get lastPlayedAt => $composableBuilder(
+      column: $table.lastPlayedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get cachedChecksum => $composableBuilder(
+      column: $table.cachedChecksum,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get cachedContentVersion => $composableBuilder(
+      column: $table.cachedContentVersion,
+      builder: (column) => ColumnFilters(column));
+}
+
+class $$AudioFileCacheTableOrderingComposer
+    extends Composer<_$AppDatabase, $AudioFileCacheTable> {
+  $$AudioFileCacheTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get audioId => $composableBuilder(
+      column: $table.audioId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get localPath => $composableBuilder(
+      column: $table.localPath, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get bytes => $composableBuilder(
+      column: $table.bytes, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get cachedAt => $composableBuilder(
+      column: $table.cachedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get lastPlayedAt => $composableBuilder(
+      column: $table.lastPlayedAt,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get cachedChecksum => $composableBuilder(
+      column: $table.cachedChecksum,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get cachedContentVersion => $composableBuilder(
+      column: $table.cachedContentVersion,
+      builder: (column) => ColumnOrderings(column));
+}
+
+class $$AudioFileCacheTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AudioFileCacheTable> {
+  $$AudioFileCacheTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get audioId =>
+      $composableBuilder(column: $table.audioId, builder: (column) => column);
+
+  GeneratedColumn<String> get localPath =>
+      $composableBuilder(column: $table.localPath, builder: (column) => column);
+
+  GeneratedColumn<int> get bytes =>
+      $composableBuilder(column: $table.bytes, builder: (column) => column);
+
+  GeneratedColumn<int> get cachedAt =>
+      $composableBuilder(column: $table.cachedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get lastPlayedAt => $composableBuilder(
+      column: $table.lastPlayedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get cachedChecksum => $composableBuilder(
+      column: $table.cachedChecksum, builder: (column) => column);
+
+  GeneratedColumn<String> get cachedContentVersion => $composableBuilder(
+      column: $table.cachedContentVersion, builder: (column) => column);
+}
+
+class $$AudioFileCacheTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $AudioFileCacheTable,
+    AudioFileCacheData,
+    $$AudioFileCacheTableFilterComposer,
+    $$AudioFileCacheTableOrderingComposer,
+    $$AudioFileCacheTableAnnotationComposer,
+    $$AudioFileCacheTableCreateCompanionBuilder,
+    $$AudioFileCacheTableUpdateCompanionBuilder,
+    (
+      AudioFileCacheData,
+      BaseReferences<_$AppDatabase, $AudioFileCacheTable, AudioFileCacheData>
+    ),
+    AudioFileCacheData,
+    PrefetchHooks Function()> {
+  $$AudioFileCacheTableTableManager(
+      _$AppDatabase db, $AudioFileCacheTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AudioFileCacheTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AudioFileCacheTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AudioFileCacheTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> audioId = const Value.absent(),
+            Value<String> localPath = const Value.absent(),
+            Value<int> bytes = const Value.absent(),
+            Value<int> cachedAt = const Value.absent(),
+            Value<int?> lastPlayedAt = const Value.absent(),
+            Value<String?> cachedChecksum = const Value.absent(),
+            Value<String?> cachedContentVersion = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AudioFileCacheCompanion(
+            audioId: audioId,
+            localPath: localPath,
+            bytes: bytes,
+            cachedAt: cachedAt,
+            lastPlayedAt: lastPlayedAt,
+            cachedChecksum: cachedChecksum,
+            cachedContentVersion: cachedContentVersion,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String audioId,
+            required String localPath,
+            required int bytes,
+            required int cachedAt,
+            Value<int?> lastPlayedAt = const Value.absent(),
+            Value<String?> cachedChecksum = const Value.absent(),
+            Value<String?> cachedContentVersion = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AudioFileCacheCompanion.insert(
+            audioId: audioId,
+            localPath: localPath,
+            bytes: bytes,
+            cachedAt: cachedAt,
+            lastPlayedAt: lastPlayedAt,
+            cachedChecksum: cachedChecksum,
+            cachedContentVersion: cachedContentVersion,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$AudioFileCacheTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $AudioFileCacheTable,
+    AudioFileCacheData,
+    $$AudioFileCacheTableFilterComposer,
+    $$AudioFileCacheTableOrderingComposer,
+    $$AudioFileCacheTableAnnotationComposer,
+    $$AudioFileCacheTableCreateCompanionBuilder,
+    $$AudioFileCacheTableUpdateCompanionBuilder,
+    (
+      AudioFileCacheData,
+      BaseReferences<_$AppDatabase, $AudioFileCacheTable, AudioFileCacheData>
+    ),
+    AudioFileCacheData,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -11675,8 +11668,6 @@ class $AppDatabaseManager {
       $$CardStatesTableTableManager(_db, _db.cardStates);
   $$ReviewLogsTableTableManager get reviewLogs =>
       $$ReviewLogsTableTableManager(_db, _db.reviewLogs);
-  $$CachedWordsTableTableManager get cachedWords =>
-      $$CachedWordsTableTableManager(_db, _db.cachedWords);
   $$PresetWordbooksTableTableManager get presetWordbooks =>
       $$PresetWordbooksTableTableManager(_db, _db.presetWordbooks);
   $$WordEntriesTableTableManager get wordEntries =>
@@ -11699,4 +11690,6 @@ class $AppDatabaseManager {
       $$MorphemeEntriesTableTableManager(_db, _db.morphemeEntries);
   $$WordMorphemeMatchesTableTableManager get wordMorphemeMatches =>
       $$WordMorphemeMatchesTableTableManager(_db, _db.wordMorphemeMatches);
+  $$AudioFileCacheTableTableManager get audioFileCache =>
+      $$AudioFileCacheTableTableManager(_db, _db.audioFileCache);
 }

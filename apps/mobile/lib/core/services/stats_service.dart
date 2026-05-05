@@ -358,7 +358,7 @@ class StatsService {
 
   /// Top N 顽固单词：按 lapses DESC, reps ASC 排序。
   ///
-  /// 跨 card_states + word_entries / cached_words 查 word_text + meaning。
+  /// v0.3.0 P1: 单一 word_entries 查 word_text + meaning（CET-4 / ZK / GK 统一表）。
   /// lapses=0 不入榜。
   Future<List<StubbornWord>> getTopStubbornWords({int limit = 10}) async {
     final csRows = await _driftDb.customSelect(
@@ -371,7 +371,6 @@ class StatsService {
     if (csRows.isEmpty) return [];
 
     final wordIds = csRows.map((r) => r.read<String>('word_id')).toList();
-    // 批量取 wordText + meaning（word_entries 优先，cached_words 兜底）
     final wePh = wordIds.map((_) => '?').join(', ');
     final weRows = await _driftDb.customSelect(
       'SELECT word_id, word_text, meaning FROM word_entries WHERE word_id IN ($wePh)',
@@ -381,18 +380,6 @@ class StatsService {
     for (final r in weRows) {
       wordMap[r.read<String>('word_id')] =
           (r.read<String>('word_text'), r.read<String>('meaning'));
-    }
-    final remaining = wordIds.where((id) => !wordMap.containsKey(id)).toList();
-    if (remaining.isNotEmpty) {
-      final cwPh = remaining.map((_) => '?').join(', ');
-      final cwRows = await _driftDb.customSelect(
-        'SELECT word_id, word_text, meaning FROM cached_words WHERE word_id IN ($cwPh)',
-        variables: remaining.map(Variable.withString).toList(),
-      ).get();
-      for (final r in cwRows) {
-        wordMap[r.read<String>('word_id')] =
-            (r.read<String>('word_text'), r.read<String>('meaning'));
-      }
     }
 
     return csRows

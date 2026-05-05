@@ -67,7 +67,7 @@ describe('Degraded-State Write Gating (H1)', () => {
     it('blocks study attempt submission', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/me/new-words')
-        .send({ word_id: 'word-001', book_id: 'book-001', study_type: 'new', action_result: 'know' })
+        .send({ word_id: 'abandon', book_id: 'book-001', study_type: 'new', action_result: 'know' })
         .set('X-Idempotency-Key', 'maint-study-001');
       expectDegradedResponse(res, 'MAINTENANCE_MODE_ACTIVE');
     });
@@ -75,7 +75,7 @@ describe('Degraded-State Write Gating (H1)', () => {
     it('blocks review attempt submission', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/review-attempts')
-        .send({ review_group_id: 'rg-fake', word_id: 'word-r-001', action_result: 'correct' })
+        .send({ review_group_id: 'rg-fake', word_id: 'background', action_result: 'correct' })
         .set('X-Idempotency-Key', 'maint-review-001');
       expectDegradedResponse(res, 'MAINTENANCE_MODE_ACTIVE');
     });
@@ -142,7 +142,7 @@ describe('Degraded-State Write Gating (H1)', () => {
       // Attempt blocked study
       await request(app.getHttpServer())
         .post('/api/v1/me/new-words')
-        .send({ word_id: 'word-001', book_id: 'book-001', study_type: 'new', action_result: 'know' })
+        .send({ word_id: 'abandon', book_id: 'book-001', study_type: 'new', action_result: 'know' })
         .set('X-Idempotency-Key', 'maint-noadvance-001')
         .expect(503);
 
@@ -188,7 +188,7 @@ describe('Degraded-State Write Gating (H1)', () => {
     it('blocks study attempt with READ_ONLY_MODE_ACTIVE', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/me/new-words')
-        .send({ word_id: 'word-001', book_id: 'book-001', study_type: 'new', action_result: 'know' })
+        .send({ word_id: 'abandon', book_id: 'book-001', study_type: 'new', action_result: 'know' })
         .set('X-Idempotency-Key', 'ro-study-001');
       expectDegradedResponse(res, 'READ_ONLY_MODE_ACTIVE');
       expect(res.body.error.details.read_only).toBe(true);

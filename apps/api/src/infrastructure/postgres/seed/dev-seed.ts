@@ -3,20 +3,67 @@
  *
  * Seeds the database with minimal dev data matching current DevStore static data.
  * Idempotent: uses ON CONFLICT DO NOTHING for all inserts.
+ *
+ * v0.3.0 P1: words now use canonical ids (lowercase normalized form, no
+ * 'cet4-' prefix). Book membership lives in the new word_book_memberships
+ * table. The "review seed" concept moves out of fake word_ids ('word-r-*')
+ * and into DevStore.REVIEW_SEED_WORD_IDS (a static set of canonical ids).
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { getPool, closePool } from '../client';
+import { normalizeWord } from '../../../lib/stable-id';
 
 const DEV_USER_ID = 'dev-user-001';
 const DEV_BOOK_ID = 'book-001';
 const DEV_BOOK_NAME = 'CET-4';
 
+/**
+ * 30 dev fixture words. v0.3.0 dedupes — 'abandon' was previously listed
+ * twice (once as new, once as review). Now appears once; review-eligible
+ * status is tracked separately via DevStore.REVIEW_SEED_WORD_IDS, not by
+ * synthesizing fake 'word-r-*' ids.
+ */
+const DEV_WORDS: Array<{ text: string; meaning: string; phonetic: string }> = [
+  // Originally "new" 20
+  { text: 'abandon', meaning: '放弃', phonetic: '/əˈbændən/' },
+  { text: 'ability', meaning: '能力', phonetic: '/əˈbɪləti/' },
+  { text: 'abnormal', meaning: '异常的', phonetic: '/æbˈnɔːrml/' },
+  { text: 'aboard', meaning: '在船上', phonetic: '/əˈbɔːrd/' },
+  { text: 'abrupt', meaning: '突然的', phonetic: '/əˈbrʌpt/' },
+  { text: 'absence', meaning: '缺席', phonetic: '/ˈæbsəns/' },
+  { text: 'absolute', meaning: '绝对的', phonetic: '/ˈæbsəluːt/' },
+  { text: 'absorb', meaning: '吸收', phonetic: '/əbˈzɔːrb/' },
+  { text: 'abstract', meaning: '抽象的', phonetic: '/ˈæbstrækt/' },
+  { text: 'abundant', meaning: '丰富的', phonetic: '/əˈbʌndənt/' },
+  { text: 'academic', meaning: '学术的', phonetic: '/ˌækəˈdemɪk/' },
+  { text: 'accelerate', meaning: '加速', phonetic: '/əkˈseləreɪt/' },
+  { text: 'access', meaning: '进入', phonetic: '/ˈækses/' },
+  { text: 'accommodate', meaning: '容纳', phonetic: '/əˈkɒmədeɪt/' },
+  { text: 'accompany', meaning: '陪伴', phonetic: '/əˈkʌmpəni/' },
+  { text: 'accomplish', meaning: '完成', phonetic: '/əˈkʌmplɪʃ/' },
+  { text: 'account', meaning: '账户', phonetic: '/əˈkaʊnt/' },
+  { text: 'accumulate', meaning: '积累', phonetic: '/əˈkjuːmjəleɪt/' },
+  { text: 'accurate', meaning: '准确的', phonetic: '/ˈækjərət/' },
+  { text: 'achieve', meaning: '实现', phonetic: '/əˈtʃiːv/' },
+  // Originally "review" — these are canonical too. The fact that they're
+  // review-seed words is encoded in DevStore.REVIEW_SEED_WORD_IDS.
+  { text: 'background', meaning: '背景', phonetic: '/ˈbækɡraʊnd/' },
+  { text: 'bacteria', meaning: '细菌', phonetic: '/bækˈtɪriə/' },
+  { text: 'balance', meaning: '平衡', phonetic: '/ˈbæləns/' },
+  { text: 'banner', meaning: '横幅', phonetic: '/ˈbænər/' },
+  { text: 'barrier', meaning: '障碍', phonetic: '/ˈbæriər/' },
+  { text: 'behavior', meaning: '行为', phonetic: '/bɪˈheɪvjər/' },
+  { text: 'benefit', meaning: '利益', phonetic: '/ˈbenɪfɪt/' },
+  { text: 'biology', meaning: '生物学', phonetic: '/baɪˈɒlədʒi/' },
+  { text: 'boundary', meaning: '边界', phonetic: '/ˈbaʊndri/' },
+];
+
 async function seed() {
   const pool = getPool();
 
-  console.log('[seed] Starting dev seed...');
+  console.log('[seed] Starting dev seed (v0.3.0 P1, canonical word_ids)...');
 
   // 1. Dev user
   await pool.query(`
@@ -29,9 +76,9 @@ async function seed() {
   // 2. Word book
   await pool.query(`
     INSERT INTO word_books (id, name, description, word_count, is_active)
-    VALUES ($1, $2, 'CET-4 word book for development', 30, TRUE)
+    VALUES ($1, $2, 'CET-4 word book for development', $3, TRUE)
     ON CONFLICT (id) DO NOTHING
-  `, [DEV_BOOK_ID, DEV_BOOK_NAME]);
+  `, [DEV_BOOK_ID, DEV_BOOK_NAME, DEV_WORDS.length]);
   console.log('[seed] Word book seeded.');
 
   // 3. User book settings
@@ -42,51 +89,22 @@ async function seed() {
   `, [DEV_USER_ID, DEV_BOOK_ID]);
   console.log('[seed] User book settings seeded.');
 
-  // 4. Words (matching DevStore wordPool exactly)
-  const words = [
-    // New words (20)
-    { id: 'word-001', text: 'abandon', meaning: '放弃', phonetic: '/əˈbændən/', type: 'new' },
-    { id: 'word-002', text: 'ability', meaning: '能力', phonetic: '/əˈbɪləti/', type: 'new' },
-    { id: 'word-003', text: 'abnormal', meaning: '异常的', phonetic: '/æbˈnɔːrml/', type: 'new' },
-    { id: 'word-004', text: 'aboard', meaning: '在船上', phonetic: '/əˈbɔːrd/', type: 'new' },
-    { id: 'word-005', text: 'abrupt', meaning: '突然的', phonetic: '/əˈbrʌpt/', type: 'new' },
-    { id: 'word-006', text: 'absence', meaning: '缺席', phonetic: '/ˈæbsəns/', type: 'new' },
-    { id: 'word-007', text: 'absolute', meaning: '绝对的', phonetic: '/ˈæbsəluːt/', type: 'new' },
-    { id: 'word-008', text: 'absorb', meaning: '吸收', phonetic: '/əbˈzɔːrb/', type: 'new' },
-    { id: 'word-009', text: 'abstract', meaning: '抽象的', phonetic: '/ˈæbstrækt/', type: 'new' },
-    { id: 'word-010', text: 'abundant', meaning: '丰富的', phonetic: '/əˈbʌndənt/', type: 'new' },
-    { id: 'word-011', text: 'academic', meaning: '学术的', phonetic: '/ˌækəˈdemɪk/', type: 'new' },
-    { id: 'word-012', text: 'accelerate', meaning: '加速', phonetic: '/əkˈseləreɪt/', type: 'new' },
-    { id: 'word-013', text: 'access', meaning: '进入', phonetic: '/ˈækses/', type: 'new' },
-    { id: 'word-014', text: 'accommodate', meaning: '容纳', phonetic: '/əˈkɒmədeɪt/', type: 'new' },
-    { id: 'word-015', text: 'accompany', meaning: '陪伴', phonetic: '/əˈkʌmpəni/', type: 'new' },
-    { id: 'word-016', text: 'accomplish', meaning: '完成', phonetic: '/əˈkʌmplɪʃ/', type: 'new' },
-    { id: 'word-017', text: 'account', meaning: '账户', phonetic: '/əˈkaʊnt/', type: 'new' },
-    { id: 'word-018', text: 'accumulate', meaning: '积累', phonetic: '/əˈkjuːmjəleɪt/', type: 'new' },
-    { id: 'word-019', text: 'accurate', meaning: '准确的', phonetic: '/ˈækjərət/', type: 'new' },
-    { id: 'word-020', text: 'achieve', meaning: '实现', phonetic: '/əˈtʃiːv/', type: 'new' },
-    // Review words (10)
-    { id: 'word-r-001', text: 'abandon', meaning: '放弃', phonetic: '/əˈbændən/', type: 'review' },
-    { id: 'word-r-002', text: 'background', meaning: '背景', phonetic: '/ˈbækɡraʊnd/', type: 'review' },
-    { id: 'word-r-003', text: 'bacteria', meaning: '细菌', phonetic: '/bækˈtɪriə/', type: 'review' },
-    { id: 'word-r-004', text: 'balance', meaning: '平衡', phonetic: '/ˈbæləns/', type: 'review' },
-    { id: 'word-r-005', text: 'banner', meaning: '横幅', phonetic: '/ˈbænər/', type: 'review' },
-    { id: 'word-r-006', text: 'barrier', meaning: '障碍', phonetic: '/ˈbæriər/', type: 'review' },
-    { id: 'word-r-007', text: 'behavior', meaning: '行为', phonetic: '/bɪˈheɪvjər/', type: 'review' },
-    { id: 'word-r-008', text: 'benefit', meaning: '利益', phonetic: '/ˈbenɪfɪt/', type: 'review' },
-    { id: 'word-r-009', text: 'biology', meaning: '生物学', phonetic: '/baɪˈɒlədʒi/', type: 'review' },
-    { id: 'word-r-010', text: 'boundary', meaning: '边界', phonetic: '/ˈbaʊndri/', type: 'review' },
-  ];
-
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i];
+  // 4. Words (canonical id = normalize_word(text)) + word_book_memberships
+  for (let i = 0; i < DEV_WORDS.length; i++) {
+    const w = DEV_WORDS[i];
+    const wordId = normalizeWord(w.text);
     await pool.query(`
-      INSERT INTO words (id, book_id, word_text, meaning, phonetic, word_type, sort_order)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO words (id, word_text, meaning, phonetic)
+      VALUES ($1, $2, $3, $4)
       ON CONFLICT (id) DO NOTHING
-    `, [w.id, DEV_BOOK_ID, w.text, w.meaning, w.phonetic, w.type, i + 1]);
+    `, [wordId, w.text, w.meaning, w.phonetic]);
+    await pool.query(`
+      INSERT INTO word_book_memberships (word_id, book_id, sort_order, source_key)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (word_id, book_id) DO NOTHING
+    `, [wordId, DEV_BOOK_ID, i + 1, `dev-${i + 1}`]);
   }
-  console.log(`[seed] ${words.length} words seeded.`);
+  console.log(`[seed] ${DEV_WORDS.length} words + memberships seeded.`);
 
   // 5. Shop catalog items (matching DevStore catalog exactly)
   const catalogItems = [

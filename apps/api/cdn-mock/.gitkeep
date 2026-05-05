@@ -1,0 +1,5 @@
+# Mock CDN root.
+# Codex (audio pipeline) writes published mp3 files here under:
+#   audio/v1/{kind}s/{locale}/{voice}/{audio_version}/{shard}/{audio_id}.mp3
+# Served by NestJS at /cdn prefix (see apps/api/src/main.ts useStaticAssets).
+# audio/ subdir is gitignored (.gitignore at repo root); this .gitkeep keeps the dir.
