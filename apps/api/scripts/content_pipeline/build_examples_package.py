@@ -52,13 +52,21 @@ def _load_word_ids_from_asset(assets_dir: Path, book_slug: str) -> dict[str, int
     return word_to_sort
 
 
-def _file_sha256(path: Path) -> str:
-    """SHA-256 hex of file content. Used by Day 3 manifest writer."""
+def file_sha256(path: Path) -> str:
+    """SHA-256 hex of file content. Used by Day 3 publish-manifest too.
+
+    Renamed from `_file_sha256` to public API in PR-A Day 3 — pipeline.py
+    publish-manifest reuses this for manifest.checksum_sha256.
+    """
     h = hashlib.sha256()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+# Backward-compat alias (in case any external code referenced the underscored name)
+_file_sha256 = file_sha256
 
 
 def run(book_slug: str, out_dir: str, update_pg: bool, assets_dir: str) -> int:
@@ -150,7 +158,7 @@ def run(book_slug: str, out_dir: str, update_pg: bool, assets_dir: str) -> int:
                 )
 
         size_bytes = out_path.stat().st_size
-        sha256 = _file_sha256(out_path)
+        sha256 = file_sha256(out_path)
         print(f"  wrote {out_path}")
         print(f"  rows={len(rows)} bytes={size_bytes:,} sha256={sha256}")
 
