@@ -1,0 +1,38 @@
+# normalize_word golden fixtures
+# Auto-filled by apps/api/scripts/audio_pipeline/fill_fixtures.py
+# Per DB_TARGET_ARCHITECTURE_v0.3.0 §3.2.1.
+
+cases:
+  - name: simple
+    input: "abandon"
+    output: "abandon"
+  - name: trailing_space
+    input: "abandon  "
+    output: "abandon"
+  - name: csv_newline
+    input: "abandon\r\n"
+    output: "abandon"
+  - name: lowercase_folded
+    input: "Abandon"
+    output: "abandon"
+  - name: all_caps
+    input: "ABANDON"
+    output: "abandon"
+  - name: hyphen_preserved
+    input: "fire-proof"
+    output: "fire-proof"
+  - name: apostrophe_preserved
+    input: "it's"
+    output: "it's"
+  - name: diacritic_preserved_nfc
+    input: "naïve"
+    output: "naïve"
+  - name: us_uk_distinct
+    input: "colour"
+    output: "colour"
+  - name: capital_proper_noun
+    input: "Polish"
+    output: "polish"
+  - name: leading_uppercase_diacritic
+    input: "Übergang"
+    output: "übergang"

@@ -1,0 +1,52 @@
+# normalize_text golden fixtures
+# Auto-filled by apps/api/scripts/audio_pipeline/fill_fixtures.py
+# Per DB_TARGET_ARCHITECTURE_v0.3.0 §3.2.2.
+
+cases:
+  - name: simple
+    input: "He had to abandon his car."
+    output: "He had to abandon his car."
+  - name: leading_trailing_whitespace
+    input: "  He had to abandon his car.  "
+    output: "He had to abandon his car."
+  - name: tab_newline_collapse
+    input: "He\thad\nto\rabandon."
+    output: "He had to abandon."
+  - name: multiple_spaces_collapse
+    input: "He    had   to    abandon."
+    output: "He had to abandon."
+  - name: case_preserved
+    input: "ABANDON, said the captain."
+    output: "ABANDON, said the captain."
+  - name: brackets_preserved
+    input: "[abandon] his plans"
+    output: "[abandon] his plans"
+  - name: apostrophe_preserved
+    input: "it's a tough decision."
+    output: "it's a tough decision."
+  - name: hyphen_preserved
+    input: "It is a fire-proof building."
+    output: "It is a fire-proof building."
+  - name: diacritic_nfc_normalized
+    input: "she is naïve"
+    output: "she is naïve"
+  - name: chinese_punctuation_preserved
+    input: "他不得不放弃他的车。"
+    output: "他不得不放弃他的车。"
+  - name: emoji_preserved
+    input: "I love it 😊"
+    output: "I love it 😊"
+  - name: unicode_quote_preserved
+    input: "\"abandon\" he said."
+    output: "\"abandon\" he said."
+  - name: non_breaking_space_collapsed
+    input: "He had to abandon his car."
+    output: "He had to abandon his car."
+
+edge_cases:
+  - name: only_whitespace
+    input: "   \t\n\r  "
+    output: ""
+  - name: empty
+    input: ""
+    output: ""

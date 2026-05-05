@@ -1,0 +1,47 @@
+# audio_id golden fixtures
+# Auto-filled by apps/api/scripts/audio_pipeline/fill_fixtures.py
+# Formula:
+#   sha256(canonical_json([target_kind, target_id, locale, voice,
+#                          format, audio_version])).hexdigest()[:24]
+
+cases:
+  - name: word_abandon_us_female_v1
+    target_kind: "word"
+    target_id: "abandon"
+    locale: "en-US"
+    voice: "af_bella"
+    format: "mp3"
+    audio_version: "v1"
+    expected_audio_id: '2b92ca35d77552dbd358aeca'
+  - name: word_abandon_us_female_v2_differs_from_v1
+    target_kind: "word"
+    target_id: "abandon"
+    locale: "en-US"
+    voice: "af_bella"
+    format: "mp3"
+    audio_version: "v2"
+    expected_audio_id: '38cb80ee21755605ce850015'
+  - name: word_abandon_uk_male_v1
+    target_kind: "word"
+    target_id: "abandon"
+    locale: "en-GB"
+    voice: "bm_george"
+    format: "mp3"
+    audio_version: "v1"
+    expected_audio_id: '223faa9aa144c2a72f13f3fc'
+  - name: example_basic
+    target_kind: "example"
+    target_id: "a3f9c1e4b8d720568f12c4d7"
+    locale: "en-US"
+    voice: "af_bella"
+    format: "mp3"
+    audio_version: "v1"
+    expected_audio_id: 'd116638d6112ce912fd797cc'
+  - name: example_format_change
+    target_kind: "example"
+    target_id: "a3f9c1e4b8d720568f12c4d7"
+    locale: "en-US"
+    voice: "af_bella"
+    format: "opus"
+    audio_version: "v1"
+    expected_audio_id: 'a8d4cbb9a2290ee6d2b4844e'
