@@ -8,6 +8,14 @@ describe('Meow API (e2e)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
+    // Wait for DevStore PG-side hydration (wordPool / userDailyNewTarget) to
+    // finish before any test runs. Module-load fires `devStore.initAsync()`
+    // fire-and-forget; without this await, JSON-backend tests can race against
+    // the wordPool query and observe an empty pool (review-group tests fail
+    // because canonical word_ids like 'background' aren't in the 5-word
+    // fallback). Mirror what `pg-regression.e2e-spec.ts` already does.
+    await devStore.initAsync();
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -60,7 +68,7 @@ describe('Meow API (e2e)', () => {
 
   describe('POST /api/v1/study-attempts', () => {
     const studyAttemptDto = {
-      word_id: 'word-001',
+      word_id: 'abandon',
       book_id: 'book-001',
       study_type: 'new' as const,
       action_result: 'know' as const,
@@ -153,7 +161,7 @@ describe('Meow API (e2e)', () => {
         .post('/api/v1/review-attempts')
         .send({
           review_group_id: reviewGroupId,
-          word_id: 'word-r-001',
+          word_id: 'background',
           action_result: 'correct',
         })
         .set('X-Idempotency-Key', 'review-key-001')
@@ -171,7 +179,7 @@ describe('Meow API (e2e)', () => {
         .post('/api/v1/review-attempts')
         .send({
           review_group_id: reviewGroupId,
-          word_id: 'word-r-001',
+          word_id: 'background',
           action_result: 'correct',
         })
         .set('X-Idempotency-Key', idempotencyKey)
@@ -183,7 +191,7 @@ describe('Meow API (e2e)', () => {
             .post('/api/v1/review-attempts')
             .send({
               review_group_id: reviewGroupId,
-              word_id: 'word-r-001',
+              word_id: 'background',
               action_result: 'correct',
             })
             .set('X-Idempotency-Key', idempotencyKey)
@@ -522,6 +530,10 @@ describe('Meow API (e2e)', () => {
             equipped_preview: {},
             change_highlights: expect.any(Array),
             stats_summary: expect.any(Object),
+            // phase-3.4 added a `review_debt` (active review group pending
+            // count) field to the secondary-summary response. toEqual is
+            // strict, so the expected shape needs to enumerate it.
+            review_debt: expect.any(Number),
           });
           expect(res.body.coins).toBe(5);
           expect(res.body.fish_treats).toBe(1);
@@ -1296,7 +1308,7 @@ describe('Meow API (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/me/new-words')
         .send({
-          word_id: 'word-001',
+          word_id: 'abandon',
           book_id: 'book-001',
           study_type: 'new',
           action_result: 'know',
@@ -1977,7 +1989,7 @@ describe('Meow API (e2e)', () => {
       return request(app.getHttpServer())
         .post('/api/v1/me/new-words')
         .send({
-          word_id: 'word-learning-day-001',
+          word_id: 'abandon',
           book_id: 'book-001',
           study_type: 'new',
           action_result: 'know',

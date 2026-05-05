@@ -1,0 +1,34 @@
+# stable_id golden fixtures
+# Auto-filled by apps/api/scripts/audio_pipeline/fill_fixtures.py
+# Formula: sha256(canonical_json([word_id, normalize_text(en)])).hexdigest()[:24]
+
+cases:
+  - name: abandon_basic
+    word_id: "abandon"
+    en: "He had to abandon his car in the snow."
+    expected_stable_id: '5ffc9a4101f28bfc45136965'
+  - name: abandon_with_brackets
+    word_id: "abandon"
+    en: "[abandon] his plans"
+    expected_stable_id: '4f4e6e2e04cd23cf686b9e10'
+  - name: leading_whitespace_irrelevant
+    word_id: "abandon"
+    en: "  He had to abandon his car in the snow.  "
+    expected_stable_id: '5ffc9a4101f28bfc45136965'
+  - name: tab_in_middle_irrelevant
+    word_id: "abandon"
+    en: "He\thad\nto abandon his car in the snow."
+    expected_stable_id: '5ffc9a4101f28bfc45136965'
+  - name: case_change_produces_different_id
+    word_id: "abandon"
+    en: "He had to ABANDON his car in the snow."
+    expected_stable_id: '0e842e32ff2e46a1aee11f79'
+  - name: chinese_word_with_chinese_text
+    word_id: "放弃"
+    en: "他不得不放弃他的车。"
+    expected_stable_id: '8affffdbeb04039603bdc3d4'
+  - name: diacritic_nfc_collision
+    word_id: "abandon"
+    en_nfd: "she is naïve"
+    en_nfc: "she is naïve"
+    expected_stable_id_both: '78d3ffde44f2c429bebe4dbd'

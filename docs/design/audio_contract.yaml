@@ -1,0 +1,134 @@
+# audio_contract.yaml
+# SSOT for audio asset hashing, naming, and field values.
+# Referenced by:
+#   - DB_TARGET_ARCHITECTURE_v0.3.0_candidate.md  (schema)
+#   - AUDIO_GENERATION_PIPELINE_v0.1_local_windows.md  (pipeline)
+#   - apps/api  (TypeScript codegen for runtime validation)
+#   - apps/mobile  (Dart codegen for enum constants)
+#
+# RULE: any change to this file requires updating all 4 fixtures under
+# tests/fixtures/ and re-running the byte-identical golden tests in 3 langs
+# (Python pipeline / TypeScript API / Dart App).
+
+version: "1.0"
+status: candidate
+
+# ====================== Hash algorithm strict spec ======================
+hash:
+  algorithm: sha256
+  output_length_hex_chars: 24      # = 96 bit
+  output_case: lowercase            # never uppercase
+  encoding: utf-8                   # no BOM
+  canonical_format: json_array_strict
+  json_array_strict_rules:
+    separators: [",", ":"]          # compact, no whitespace
+    ensure_ascii: false              # do NOT escape non-ASCII
+    no_null_in_array: true
+    no_nested_structures: true       # only flat array of strings/ints
+    no_trailing_whitespace: true
+
+# ====================== Stable ID input fields ======================
+stable_id:
+  example:
+    fields_in_order:
+      - word_id            # already normalized (LOWER + trim + NFC)
+      - normalized_text_en # normalize_text(en) per DB §3.2.2
+  word:
+    direct: word_id        # words.id IS already the stable id (no hash)
+
+# ====================== Audio ID input fields ======================
+audio_id:
+  fields_in_order:
+    - target_kind          # 'word' | 'example'
+    - target_id            # word_id or example.stable_id
+    - locale               # whitelist below
+    - voice                # whitelist below
+    - format               # whitelist below
+    - audio_version        # pattern below
+
+# ====================== Source text hash (audit / release gate) ======================
+source_text_hash:
+  algorithm: sha256
+  output_length_hex_chars: 16      # = 64 bit, only for audit
+  input:
+    example: normalized_text_en    # normalize_text(examples.en)
+    word: word_id                  # words.id (normalized form)
+  is_release_gate: true            # MUST be checked at generate + release stages
+
+# ====================== Field whitelists (App codegen reads these) ======================
+locales:
+  - id: en-US
+    display_name: English (US)
+  - id: en-GB
+    display_name: English (UK)
+  # Future: en-AU, etc.
+
+voices:
+  af_bella:
+    locale: en-US
+    gender: f
+    accent: us
+  af_nicole:
+    locale: en-US
+    gender: f
+    accent: us
+  am_michael:
+    locale: en-US
+    gender: m
+    accent: us
+  bf_emma:
+    locale: en-GB
+    gender: f
+    accent: uk
+  bm_george:
+    locale: en-GB
+    gender: m
+    accent: uk
+  # Add new voices via PR; pipeline asserts every used voice exists here.
+
+formats:
+  - mp3
+  # Future: opus
+
+# ====================== audio_version is content-driven, NOT app-controlled ======================
+audio_version:
+  format_pattern: "^v[0-9]+(-[a-z0-9]+)*$"   # v1, v2, v1-kokoro82m
+  source: manifest                            # App reads from content_manifest at runtime
+  app_must_not_hardcode: true                 # explicit prohibition
+  enforcement:
+    - dart_codegen_must_omit: true            # do NOT generate Dart enum for versions
+    - typescript_codegen_must_omit: true
+
+# ====================== CDN path template ======================
+cdn_path_template:
+  origin_var: "${CDN_ORIGIN}"
+  prefix: audio/v1
+  word: "${prefix}/words/${locale}/${voice}/${audio_version}/${audio_id[:2]}/${audio_id}.${format}"
+  example: "${prefix}/sentences/${locale}/${voice}/${audio_version}/${audio_id[:2]}/${audio_id}.${format}"
+
+# ====================== Cross-language test fixtures ======================
+fixtures:
+  required:
+    - tests/fixtures/canonical_json.yaml
+    - tests/fixtures/normalize_text.yaml
+    - tests/fixtures/normalize_word.yaml
+    - tests/fixtures/stable_id.yaml
+    - tests/fixtures/audio_id.yaml
+  enforcement:
+    - python_pipeline: P0   # mandatory before any release
+    - typescript_api: P0    # mandatory if API computes any hash
+    - dart_app: P1          # mandatory only when App computes hash (currently doesn't)
+
+# ====================== Release gate (mirrors DB §4.6.2) ======================
+release_gate:
+  must_pass_at_generate_stage:
+    - stable_id_consistency    # examples.stable_id == sha256_24(canonical_json([word_id, normalize_text(en)]))
+  must_pass_at_release_stage:
+    - audio_id_recompute       # 100%, no sampling
+    - source_text_hash_match   # 100%, no sampling, no warning fallback
+    - referential_integrity    # 100%, no sampling
+    - cdn_url_head_check       # 5% sampling allowed (HEAD cost)
+  prohibitions:
+    - no_bypass_flag
+    - no_warning_downgrade
+    - no_sampling_for_first_three_checks

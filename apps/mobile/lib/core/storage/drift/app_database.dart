@@ -21,6 +21,11 @@ part 'app_database.g.dart';
 ///                       - word_entries.cached_at → imported_at
 ///                       - word_book_assignments.source_key
 ///                       - example_sentences unique index on (word_id, sort_order)
+///   v5–v8:            session, review_records, enrichment, morpheme tables
+///   v9 (P0):          example_sentences.stable_id column (content-addressable IDs)
+///   v10 (P1):         cached_words DROPPED — CET-4 unified into word_entries;
+///                       word_records.word_id and card_states.word_id strip
+///                       'cet4-' prefix in place to preserve user history.
 @DriftDatabase(tables: [
   // Legacy tables (v1, migrated from raw sqflite)
   WordRecords,
@@ -31,7 +36,7 @@ part 'app_database.g.dart';
   // FSRS tables (v2, new)
   CardStates,
   ReviewLogs,
-  CachedWords,
+  // (CachedWords removed in v10; CET-4 now flows through word_entries.)
   // Content layer (v3, wordbooks + examples)
   PresetWordbooks,
   WordEntries,
@@ -47,15 +52,36 @@ part 'app_database.g.dart';
   // Morpheme layer (v8, Need #12: word root / affix catalog + per-word matches)
   MorphemeEntries,
   WordMorphemeMatches,
+  // Audio cache (v11, P2.1: device-local mp3 cache index, DB v0.3.0 §7.4)
+  AudioFileCache,
 ])
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(_openConnection());
+  /// Production constructor — process-wide singleton.
+  ///
+  /// drift recommends one [GeneratedDatabase] per process (see drift docs:
+  /// "creating multiple instances when these two databases use the same
+  /// QueryExecutor causes race conditions"). The factory routes every
+  /// `AppDatabase()` call back to a single lazily-built `_instance`, so
+  /// services that previously did `AppDatabase()` inside their own ctor
+  /// (e.g. [AudioCacheRepository], [ExampleAudioService], [WordAudioService])
+  /// now share the main one without any call-site change.
+  ///
+  /// This was the trigger for the "multiple databases" warning observed
+  /// during P2.1 study-page boot, and the implicit race window during
+  /// migrations on cold start. With the factory, only `_internal()` ever
+  /// hits drift's `super(_openConnection())` — exactly once per process.
+  factory AppDatabase() => _instance ??= AppDatabase._internal();
+  AppDatabase._internal() : super(_openConnection());
+  static AppDatabase? _instance;
 
-  /// For testing: accept any QueryExecutor.
+  /// Testing path — bypasses the singleton and lets each test inject its
+  /// own [QueryExecutor] (typically `NativeDatabase.memory()`). Tests must
+  /// NEVER call `AppDatabase()` directly; the production singleton would
+  /// leak across tests and cause cross-test pollution.
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -73,10 +99,14 @@ class AppDatabase extends _$AppDatabase {
           if (from < 2) {
             // Upgrading from raw sqflite v1:
             // The 5 legacy tables already exist in the database file.
-            // Only create the 3 new FSRS tables + their indexes.
+            // Only create the 2 new FSRS tables + their indexes.
+            //
+            // Historical note: v2 also created a `cached_words` table, but
+            // v10 (P1) drops it. A v1→v10 fresh upgrade therefore skips
+            // creating it, since the v10 step below would just drop it
+            // anyway.
             await m.createTable(cardStates);
             await m.createTable(reviewLogs);
-            await m.createTable(cachedWords);
             // Note: @TableIndex annotations on CardStates/ReviewLogs
             // generate indexes in createTable automatically.
           }
@@ -137,6 +167,78 @@ class AppDatabase extends _$AppDatabase {
             await _safeCreateTable(m, morphemeEntries);
             await _safeCreateTable(m, wordMorphemeMatches);
           }
+          if (from < 9) {
+            // v9 (P0): example_sentences gains stable_id column for v0.3.0
+            // content-addressable IDs. Nullable so existing rows imported
+            // before this migration don't violate NOT NULL; new
+            // WordbookLoader imports populate it from assets/words/*.json
+            // (schemaVersion 4 + contentVersion 3+).
+            //
+            // Asset-derived data — safe to flush and reload to ensure full
+            // population. WordbookLoader will detect contentVersion mismatch
+            // and re-import on next launch.
+            await _safeAddColumn(m, exampleSentences, exampleSentences.stableId);
+            // Guard the partial index so migration tests that don't pre-create
+            // example_sentences don't crash here either.
+            final hasTable = await customSelect(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='example_sentences'").get();
+            if (hasTable.isNotEmpty) {
+              await customStatement(
+                  'CREATE UNIQUE INDEX IF NOT EXISTS idx_es_stable_id '
+                  'ON example_sentences(stable_id) WHERE stable_id IS NOT NULL');
+            }
+          }
+          if (from < 10) {
+            // v10 (P1): unify word storage. CET-4's `cet4-abandon` form is
+            // collapsed to canonical `abandon`, matching ZK / GK. The legacy
+            // `cached_words` table goes away — CET-4 now flows through
+            // `word_entries` + `word_book_assignments` like the others.
+            //
+            // User history (`word_records`, `card_states`) is preserved by
+            // stripping the `cet4-` prefix in place. card_states has a
+            // UNIQUE(word_id) constraint, so we first delete any prefixed
+            // row whose canonical sibling already exists (rare overlap when
+            // user has studied the word in BOTH CET-4 and ZK pre-P1).
+            //
+            // Each table operation is guarded by `_tableExists(...)` so
+            // partial-state dev devices and migration tests that simulate
+            // older schemas (without all intermediate tables) don't crash.
+            if (await _tableExists('card_states')) {
+              await customStatement(
+                  "DELETE FROM card_states "
+                  "WHERE word_id LIKE 'cet4-%' "
+                  "AND SUBSTR(word_id, 6) IN (SELECT word_id FROM card_states "
+                  "                           WHERE word_id NOT LIKE 'cet4-%')");
+              await customStatement(
+                  "UPDATE card_states "
+                  "SET word_id = SUBSTR(word_id, 6) "
+                  "WHERE word_id LIKE 'cet4-%'");
+            }
+            if (await _tableExists('word_records')) {
+              await customStatement(
+                  "UPDATE word_records "
+                  "SET word_id = SUBSTR(word_id, 6) "
+                  "WHERE word_id LIKE 'cet4-%'");
+            }
+            // Drop legacy CET-4-only table; data flows through word_entries
+            // populated by WordbookLoader from assets/words/book-001.json.
+            await customStatement('DROP TABLE IF EXISTS cached_words');
+            // The above migration runs alongside `contentVersion '3'`
+            // detection in WordbookLoader, which triggers a flush+reimport
+            // of the content-layer tables on next launch — the new
+            // book-001.json (canonical wordIds + schemaVersion 4) will
+            // populate word_entries / word_book_assignments / example_sentences
+            // for CET-4.
+          }
+          if (from < 11) {
+            // v11 (P2.1): device-local audio cache index. Tracks the mp3
+            // files sitting in the app's docs dir; drives the LRU +
+            // content-version eviction strategies in DB v0.3.0 §7.4.1.
+            // Idempotent (safe-create) so partial-state dev devices can
+            // re-run.
+            await _safeCreateTable(m, audioFileCache);
+          }
         },
       );
 
@@ -151,10 +253,29 @@ class AppDatabase extends _$AppDatabase {
     final cols = await customSelect(
       'PRAGMA table_info(${table.actualTableName})',
     ).get();
+    if (cols.isEmpty) {
+      // Table doesn't exist — nothing to alter. This guards partial-state
+      // dev devices and migration tests that simulate older schemas
+      // without all intermediate tables. The table will be created
+      // through its normal onUpgrade branch (or the next createAll for a
+      // truly fresh install).
+      return;
+    }
     final existing =
         cols.map((r) => r.read<String>('name')).toSet();
     if (existing.contains(column.$name)) return;
     await m.addColumn(table, column);
+  }
+
+  /// Returns true iff a table with the given name exists in the database.
+  /// Reads sqlite_master directly so it works regardless of drift's internal
+  /// schema cache state.
+  Future<bool> _tableExists(String tableName) async {
+    final rows = await customSelect(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+      variables: [Variable.withString(tableName)],
+    ).get();
+    return rows.isNotEmpty;
   }
 
   /// Create a table iff it doesn't already exist. Uses sqlite_master so it
@@ -170,53 +291,12 @@ class AppDatabase extends _$AppDatabase {
     await m.createTable(table);
   }
 
-  /// Return the next word in [bookId] that the user has not yet studied.
+  /// Return the next word in [bookSlug] that the user has not yet studied.
   ///
-  /// [excludeWordIds] — word IDs already mastered (from [word_records]);
-  ///   these are skipped so the user doesn't see the same word twice.
+  /// v0.3.0 P1: unified path for ALL books (CET-4 / ZK / GK). The legacy
+  /// `getNextUnstudiedWord(bookId)` that read `cached_words` is gone —
+  /// every caller should use [getNextWordFromWordbook] now.
   ///
-  /// Words are served in [sort_order] ASC (CSV import order ≈ frequency order).
-  /// Returns null if all words have been mastered or the cache is empty.
-  Future<CachedWord?> getNextUnstudiedWord(
-    String bookId,
-    Set<String> excludeWordIds,
-  ) async {
-    if (excludeWordIds.isEmpty) {
-      return (select(cachedWords)
-            ..where((t) => t.bookId.equals(bookId))
-            ..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])
-            ..limit(1))
-          .getSingleOrNull();
-    }
-    // NOT IN with raw SQL — safe for up to a few thousand IDs.
-    final placeholders = excludeWordIds.map((_) => '?').join(', ');
-    final rows = await customSelect(
-      'SELECT * FROM cached_words WHERE book_id = ? AND word_id NOT IN ($placeholders) ORDER BY sort_order ASC LIMIT 1',
-      variables: [
-        Variable.withString(bookId),
-        ...excludeWordIds.map(Variable.withString),
-      ],
-      readsFrom: {cachedWords},
-    ).get();
-    if (rows.isEmpty) return null;
-    final r = rows.first;
-    return CachedWord(
-      wordId: r.read<String>('word_id'),
-      bookId: r.read<String>('book_id'),
-      wordText: r.read<String>('word_text'),
-      meaning: r.read<String>('meaning'),
-      phonetic: r.readNullable<String>('phonetic'),
-      translation: r.readNullable<String>('translation'),
-      frequencyRank: r.read<int>('frequency_rank'),
-      sortOrder: r.read<int>('sort_order'),
-      cachedAt: r.read<int>('cached_at'),
-    );
-  }
-
-  /// Return the next word in [bookSlug] from [word_entries] + [word_book_assignments]
-  /// that the user has not yet studied.
-  ///
-  /// Used when [activeWordbook] is 'zk' or 'gk' (i.e. not the legacy 'book-001').
   /// [excludeWordIds] — mastered + session-seen word IDs to skip.
   /// Returns null if all words have been studied or the wordbook is empty.
   Future<WordEntry?> getNextWordFromWordbook(
@@ -265,8 +345,8 @@ class AppDatabase extends _$AppDatabase {
 
   /// Return all preset wordbooks ordered by [sort_order] ASC.
   ///
-  /// Does NOT include 'book-001' (CET-4) — that book is loaded via [AssetWordLoader]
-  /// into [cached_words] and is not represented in [preset_wordbooks].
+  /// v0.3.0 P1: 'book-001' (CET-4) is now in preset_wordbooks like ZK / GK
+  /// (populated by WordbookLoader from assets/words/book-001.json).
   Future<List<PresetWordbook>> getAllPresetWordbooks() {
     return (select(presetWordbooks)
       ..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])
@@ -275,20 +355,12 @@ class AppDatabase extends _$AppDatabase {
 
   /// Return all word IDs belonging to [bookSlug].
   ///
-  /// For 'book-001' (CET-4): reads [cached_words.word_id].
-  /// For ZK / GK: reads [word_book_assignments.word_id].
+  /// v0.3.0 P1: unified path through `word_book_assignments` for all books
+  /// including CET-4. The legacy `cached_words` branch is gone.
   ///
   /// Used by the home page to intersect with mastered IDs (from the sqflite
   /// [word_records] table) to compute per-book mastered word count.
   Future<Set<String>> getWordIdsForBook(String bookSlug) async {
-    if (bookSlug == 'book-001') {
-      final rows = await customSelect(
-        'SELECT word_id FROM cached_words WHERE book_id = ?',
-        variables: [Variable.withString(bookSlug)],
-        readsFrom: {cachedWords},
-      ).get();
-      return rows.map((r) => r.read<String>('word_id')).toSet();
-    }
     final rows = await customSelect(
       'SELECT word_id FROM word_book_assignments WHERE book_slug = ?',
       variables: [Variable.withString(bookSlug)],
@@ -299,17 +371,9 @@ class AppDatabase extends _$AppDatabase {
 
   /// Count total words available in [bookSlug].
   ///
-  /// For legacy 'book-001' (CET-4): counts rows in [cached_words].
-  /// For ZK / GK slugs: counts rows in [word_book_assignments].
+  /// v0.3.0 P1: unified path — all books (CET-4 / ZK / GK) live in
+  /// `word_book_assignments`.
   Future<int> countWordsInBook(String bookSlug) async {
-    if (bookSlug == 'book-001') {
-      final r = await customSelect(
-        'SELECT COUNT(*) AS cnt FROM cached_words WHERE book_id = ?',
-        variables: [Variable.withString(bookSlug)],
-        readsFrom: {cachedWords},
-      ).getSingle();
-      return r.read<int>('cnt');
-    }
     final r = await customSelect(
       'SELECT COUNT(*) AS cnt FROM word_book_assignments WHERE book_slug = ?',
       variables: [Variable.withString(bookSlug)],
@@ -318,27 +382,23 @@ class AppDatabase extends _$AppDatabase {
     return r.read<int>('cnt');
   }
 
-  /// Look up a single [WordEntry] by [wordId] (ZK / GK content layer).
-  /// Returns null if not found (CET-4 words live in [cached_words] instead).
+  /// Look up a single [WordEntry] by canonical [wordId].
+  /// Returns null if not found.
+  ///
+  /// v0.3.0 P1: getCachedWordById is gone — all words flow through word_entries.
   Future<WordEntry?> getWordEntryById(String wordId) {
     return (select(wordEntries)..where((t) => t.wordId.equals(wordId)))
-        .getSingleOrNull();
-  }
-
-  /// Look up a single [CachedWord] by [wordId] (CET-4 / legacy path).
-  /// Returns null if not found.
-  Future<CachedWord?> getCachedWordById(String wordId) {
-    return (select(cachedWords)..where((t) => t.wordId.equals(wordId)))
         .getSingleOrNull();
   }
 
   /// Return up to [limit] example sentences for [wordId] from [example_sentences],
   /// ordered by sort_order ASC.
   ///
-  /// Legacy (pre Need #11 follow-up): example_sentences is keyed on the
-  /// per-wordbook word_id — so CET-4 'ability' (cet4-…) does NOT see ZK
-  /// 'ability' (zk-…) examples. Prefer [getExamplesForWordText] in new
-  /// callers; this method stays for backward compatibility.
+  /// v0.3.0 P1: with canonical word_ids, ZK 'ability' and CET-4 'ability'
+  /// share the same `word_id='ability'` and therefore the same example pool.
+  /// [getExamplesForWordText] is functionally equivalent now (the join
+  /// becomes a no-op) but is still provided for callers that only have the
+  /// raw text and not the normalized id.
   Future<List<ExampleSentence>> getExamplesForWord(
     String wordId, {
     int limit = 3,
@@ -357,6 +417,12 @@ class AppDatabase extends _$AppDatabase {
               en: r.read<String>('en'),
               cn: r.read<String>('cn'),
               sortOrder: r.read<int>('sort_order'),
+              // v0.3.0 P0: must hydrate stable_id so UI can show example
+              // play button. Drift's auto-mapped queries pull every column,
+              // but customSelect needs explicit reads — easy to miss when
+              // a column is added later (this was the cause of "exemple
+              // shows but no audio button" pre-fix).
+              stableId: r.readNullable<String>('stable_id'),
             ))
         .toList();
   }
@@ -388,43 +454,20 @@ class AppDatabase extends _$AppDatabase {
               en: r.read<String>('en'),
               cn: r.read<String>('cn'),
               sortOrder: r.read<int>('sort_order'),
+              // v0.3.0 P0: see getExamplesForWord — same stable_id hydration.
+              stableId: r.readNullable<String>('stable_id'),
             ))
         .toList();
   }
 
   /// Peek at the next [limit] unstudied word_text values in [bookSlug].
   ///
-  /// Same ordering as [getNextUnstudiedWord] / [getNextWordFromWordbook]
-  /// but returns multiple word texts (for pronunciation prefetch).
+  /// v0.3.0 P1: unified path — same query for all books (CET-4 / ZK / GK).
   Future<List<String>> peekNextWordTexts(
     String bookSlug,
     Set<String> excludeWordIds,
     int limit,
   ) async {
-    if (bookSlug == 'book-001') {
-      if (excludeWordIds.isEmpty) {
-        final rows = await customSelect(
-          'SELECT word_text FROM cached_words WHERE book_id = ? '
-          'ORDER BY sort_order ASC LIMIT $limit',
-          variables: [Variable.withString(bookSlug)],
-          readsFrom: {cachedWords},
-        ).get();
-        return rows.map((r) => r.read<String>('word_text')).toList();
-      }
-      final ph = excludeWordIds.map((_) => '?').join(', ');
-      final rows = await customSelect(
-        'SELECT word_text FROM cached_words '
-        'WHERE book_id = ? AND word_id NOT IN ($ph) '
-        'ORDER BY sort_order ASC LIMIT $limit',
-        variables: [
-          Variable.withString(bookSlug),
-          ...excludeWordIds.map(Variable.withString),
-        ],
-        readsFrom: {cachedWords},
-      ).get();
-      return rows.map((r) => r.read<String>('word_text')).toList();
-    }
-    // ZK / GK
     if (excludeWordIds.isEmpty) {
       final rows = await customSelect(
         'SELECT we.word_text FROM word_entries we '
@@ -453,13 +496,12 @@ class AppDatabase extends _$AppDatabase {
 
   /// Batch-resolve word_id → word_text for a list of word IDs.
   ///
-  /// Checks [word_entries] first (ZK / GK), then [cached_words] (CET-4)
-  /// for any remaining IDs. Used by review page to build prefetch list
-  /// from the FSRS due-card queue (which only stores word_id).
+  /// v0.3.0 P1: single source — word_entries holds all books.
+  /// Used by review page to build prefetch list from the FSRS due-card queue
+  /// (which only stores word_id).
   Future<Map<String, String>> getWordTextsForIds(List<String> wordIds) async {
     if (wordIds.isEmpty) return {};
     final result = <String, String>{};
-    // word_entries (ZK / GK)
     final wePh = wordIds.map((_) => '?').join(', ');
     final weRows = await customSelect(
       'SELECT word_id, word_text FROM word_entries WHERE word_id IN ($wePh)',
@@ -469,27 +511,14 @@ class AppDatabase extends _$AppDatabase {
     for (final r in weRows) {
       result[r.read<String>('word_id')] = r.read<String>('word_text');
     }
-    // cached_words (CET-4) — only for IDs not yet resolved
-    final remaining = wordIds.where((id) => !result.containsKey(id)).toList();
-    if (remaining.isNotEmpty) {
-      final cwPh = remaining.map((_) => '?').join(', ');
-      final cwRows = await customSelect(
-        'SELECT word_id, word_text FROM cached_words WHERE word_id IN ($cwPh)',
-        variables: remaining.map(Variable.withString).toList(),
-        readsFrom: {cachedWords},
-      ).get();
-      for (final r in cwRows) {
-        result[r.read<String>('word_id')] = r.read<String>('word_text');
-      }
-    }
     return result;
   }
 
   /// Batch-resolve word_id → translation for a list of word IDs.
   ///
-  /// Same lookup order as [getWordTextsForIds]: word_entries first, then
-  /// cached_words for remaining. Used by stats page to compute POS radar.
-  /// Words with NULL translation are still in the result map with null value.
+  /// v0.3.0 P1: single source — word_entries holds all books.
+  /// Used by stats page to compute POS radar. Words with NULL translation
+  /// are still in the result map with null value.
   Future<Map<String, String?>> getTranslationsForIds(List<String> wordIds) async {
     if (wordIds.isEmpty) return {};
     final result = <String, String?>{};
@@ -501,18 +530,6 @@ class AppDatabase extends _$AppDatabase {
     ).get();
     for (final r in weRows) {
       result[r.read<String>('word_id')] = r.readNullable<String>('translation');
-    }
-    final remaining = wordIds.where((id) => !result.containsKey(id)).toList();
-    if (remaining.isNotEmpty) {
-      final cwPh = remaining.map((_) => '?').join(', ');
-      final cwRows = await customSelect(
-        'SELECT word_id, translation FROM cached_words WHERE word_id IN ($cwPh)',
-        variables: remaining.map(Variable.withString).toList(),
-        readsFrom: {cachedWords},
-      ).get();
-      for (final r in cwRows) {
-        result[r.read<String>('word_id')] = r.readNullable<String>('translation');
-      }
     }
     return result;
   }

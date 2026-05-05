@@ -87,7 +87,7 @@ describe('Save Hardening (H3)', () => {
     it('study attempt succeeds with confirmed persistence', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/me/new-words')
-        .send({ word_id: 'word-001', book_id: 'book-001', study_type: 'new', action_result: 'know' })
+        .send({ word_id: 'abandon', book_id: 'book-001', study_type: 'new', action_result: 'know' })
         .set('X-Idempotency-Key', 'h3-study-001')
         .expect(200);
 

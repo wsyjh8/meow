@@ -20,6 +20,10 @@ import { PronunciationController } from '../controllers/pronunciation.controller
 import { DailyTasksController } from '../controllers/daily-tasks.controller';
 import { TaskAttemptsController } from '../controllers/task-attempts.controller';
 import { LotteryController } from '../controllers/lottery.controller';
+import {
+  AudioAssetsExamplesController,
+  AudioAssetsWordsController,
+} from '../controllers/audio-assets.controller';
 
 @Module({
   controllers: [
@@ -45,6 +49,11 @@ import { LotteryController } from '../controllers/lottery.controller';
     DailyTasksController,
     TaskAttemptsController,
     LotteryController,
+    // v0.3.0 pilot: audio assets (mock CDN era)
+    //   - examples: P2.1 (例句音频)
+    //   - words: P2.2 (单词音频, replaces legacy /api/v1/pronunciation)
+    AudioAssetsExamplesController,
+    AudioAssetsWordsController,
   ],
 })
 export class RoutesModule {}

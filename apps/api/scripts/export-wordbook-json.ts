@@ -21,6 +21,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { computeExampleStableId, normalizeWord } from '../src/lib/stable-id';
 
 // ── CSV parser (RFC 4180, handles quoted fields with embedded commas) ──
 
@@ -69,7 +70,12 @@ function extractMeaning(translation: string): string {
 /// Increment this when the content schema or generation logic changes.
 /// WordbookLoader compares this against the stored value in preset_wordbooks
 /// and re-imports if they differ.
-const CONTENT_VERSION = '2';
+///
+/// v3 (P0): each example carries `stableId` — content-addressable
+///          sha256_24(canonical_json([word_id, normalize_text(en)])).
+///          App uses this to query `/api/v1/examples/:stable_id/audio`
+///          per DB v0.3.0 §3.4.
+const CONTENT_VERSION = '3';
 
 interface WordEntry {
   wordId: string;
@@ -90,6 +96,12 @@ interface ExampleEntry {
   en: string;
   cn: string;
   sortOrder: number;
+  /// v0.3.0 P0: content-addressable example ID.
+  /// = sha256_24(canonical_json([normalizeWord(wordText), normalizeText(en)]))
+  /// Same value will be produced by Codex local Windows TTS pipeline (Python)
+  /// and by the API ingest path (TypeScript) — verified byte-identical via
+  /// tests/fixtures/stable_id.yaml.
+  stableId: string;
 }
 
 interface BookConfig {
@@ -134,14 +146,22 @@ for (const book of BOOKS) {
     const exData = JSON.parse(exRaw) as { items: any[] };
     const items = exData.items ?? [];
     for (const item of items) {
-      const wordKey = (item.word as string).toLowerCase().trim();
-      const examples: ExampleEntry[] = (item.examples ?? []).map((ex: any, idx: number) => ({
-        sense: (ex.sense as string) ?? '',
-        // Prefer en_plain (no brackets) if present, else keep bracketed form
-        en: (ex.en as string) ?? '',
-        cn: (ex.cn as string) ?? '',
-        sortOrder: idx,
-      }));
+      const rawWord = item.word as string;
+      const wordKey = rawWord.toLowerCase().trim();
+      // v0.3.0 P0: stable_id input must use the canonical normalize_word form
+      // (not the legacy hyphenated wordId used elsewhere in this script).
+      // This way the export-script-emitted stableId matches Codex pipeline's.
+      const canonicalWordId = normalizeWord(rawWord);
+      const examples: ExampleEntry[] = (item.examples ?? []).map((ex: any, idx: number) => {
+        const en = (ex.en as string) ?? '';
+        return {
+          sense: (ex.sense as string) ?? '',
+          en,
+          cn: (ex.cn as string) ?? '',
+          sortOrder: idx,
+          stableId: computeExampleStableId(canonicalWordId, en),
+        };
+      });
       examplesMap.set(wordKey, examples);
     }
     console.log(`  ✓ Loaded examples for ${examplesMap.size} words`);

@@ -6,19 +6,14 @@
  *   cd apps/api
  *   npx ts-node scripts/export-cet4-json.ts
  *
- * Output format (one entry):
- *   {
- *     "wordId": "cet4-abandon",
- *     "wordText": "abandon",
- *     "meaning": "放弃",
- *     "phonetic": "/əˈbændən/",
- *     "translation": "vt. 放弃, 抛弃...",
- *     "frequencyRank": 2057,
- *     "sortOrder": 1
- *   }
+ * v0.3.0 P1: emits canonical word ids (no `cet4-` prefix) and aligns the
+ * output schema with ZK / GK exports (bookSlug / displayName /
+ * schemaVersion 4 / contentVersion 3 / sourceKey on each word).
+ * Examples are NOT included in this export — see plan §11 (P1 留空).
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { normalizeWord } from '../src/lib/stable-id';
 
 // ── CSV parser (RFC 4180, handles quoted fields with embedded commas) ──
 
@@ -98,8 +93,11 @@ for (let i = 1; i < lines.length; i++) {
 
   if (!wordText) continue;
 
-  // Stable word ID: prefix + lowercase word (spaces → hyphens)
-  const wordId = `cet4-${wordText.toLowerCase().replace(/\s+/g, '-')}`;
+  // v0.3.0 P1: canonical word id = normalize_word(wordText). Multi-word
+  // phrases (rare in cet4.csv) keep an internal space — they SHOULD live
+  // in word_phrases per DB §3.2.1, but for MVP they ride on the words
+  // table and get the same canonical-id treatment.
+  const wordId = normalizeWord(wordText);
   const meaning = extractMeaning(translation) || wordText;
   // frequencyRank: prefer BNC (British corpus), fallback to COCA frq
   const frequencyRank = bnc > 0 ? bnc : (frq > 0 ? frq : 99999);
@@ -111,7 +109,9 @@ for (let i = 1; i < lines.length; i++) {
     phonetic: phonetic || null,
     translation: translation || null,
     frequencyRank,
+    wordForms: null, // P1 does not surface CSV exchange field for CET-4
     sortOrder: i, // 1-based, preserving CSV order
+    sourceKey: `cet4-${i}`,
   });
 }
 
@@ -120,9 +120,13 @@ if (!fs.existsSync(outDir)) {
   fs.mkdirSync(outDir, { recursive: true });
 }
 
+// v0.3.0 P1: align output schema with export-wordbook-json.ts (ZK/GK).
+// WordbookLoader handles all three books through one code path.
 const output = {
-  bookId: 'book-001',
-  schemaVersion: '1',
+  bookSlug: 'book-001',
+  displayName: 'CET-4',
+  schemaVersion: '4',
+  contentVersion: '3', // P0 contentVersion '3' marker; bump if schema changes
   totalWords: words.length,
   generatedAt: new Date().toISOString(),
   words,

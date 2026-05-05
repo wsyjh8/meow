@@ -39,13 +39,21 @@ export type SourceEventType = 'effective_new_word' | 'review_group_completed';
 export type RewardType = 'coins' | 'fish_treats' | 'exp';
 
 /**
- * Word entity
+ * Word entity.
+ *
+ * v0.3.0 P1: `word_id` is the canonical lowercase normalized form (e.g.
+ * `'abandon'`, no `'cet4-'` prefix). `book_id` is now a *denormalized
+ * convenience* field — the underlying SoT lives in the
+ * `word_book_memberships` (M:N) table. When a word belongs to multiple
+ * books, the in-memory representation may produce one Word per (word, book)
+ * pair to keep API responses simple.
  */
 export interface Word {
   word_id: string;
   word_text: string;
   meaning: string;
   phonetic?: string;
+  /** Denormalized from word_book_memberships; one of possibly several books. */
   book_id: string;
   // Extended fields from CET-4 CSV (all optional for backwards compatibility)
   translation?: string;

@@ -60,16 +60,19 @@ class LocalReviewQueueEmptyException implements Exception {
 }
 
 /// Thrown when a due-card's `wordId` has no matching row in
-/// `cached_words`. This is defensive — the builder does NOT swallow
+/// `word_entries`. This is defensive — the builder does NOT swallow
 /// database inconsistency. If this fires in a test, the test data is
 /// broken; if it ever fires in prod, the DB is broken.
+///
+/// v0.3.0 P1: previously joined `cached_words`; now joins `word_entries`
+/// (the unified content layer for all books).
 class LocalReviewQueueMissingWordException implements Exception {
   final String wordId;
   const LocalReviewQueueMissingWordException(this.wordId);
 
   @override
   String toString() =>
-      'LocalReviewQueueMissingWordException: no cached_words row for '
+      'LocalReviewQueueMissingWordException: no word_entries row for '
       'wordId="$wordId"';
 }
 
@@ -91,7 +94,7 @@ abstract final class LocalReviewQueueBuilder {
   /// Build a `ReviewGroup` from the local FSRS due queue.
   ///
   /// Parameters:
-  ///   - [db]: the drift database (for the cached_words join).
+  ///   - [db]: the drift database (for the word_entries join).
   ///   - [fsrs]: the FSRS service (used to query due cards).
   ///   - [nowLocal]: the local clock time used to select due cards.
   ///     Passed through to `FsrsService.listDueCards`.
@@ -101,7 +104,7 @@ abstract final class LocalReviewQueueBuilder {
   ///
   /// Throws [LocalReviewQueueEmptyException] when there are no due
   /// cards. Throws [LocalReviewQueueMissingWordException] when a due
-  /// card's wordId has no cached_words row.
+  /// card's wordId has no word_entries row.
   ///
   /// Defensive flag check: in release mode, the cutover flag MUST be
   /// true before this function is called. If the flag is false in
@@ -132,12 +135,13 @@ abstract final class LocalReviewQueueBuilder {
       throw const LocalReviewQueueEmptyException();
     }
 
-    // 2. Batch-join against cached_words to hydrate wordText + meaning.
+    // 2. Batch-join against word_entries to hydrate wordText + meaning.
+    //    v0.3.0 P1: was cached_words pre-P1; unified content layer post-P1.
     final wordIds = dueCards.map((c) => c.wordId).toList(growable: false);
-    final wordRows = await (db.select(db.cachedWords)
+    final wordRows = await (db.select(db.wordEntries)
           ..where((t) => t.wordId.isIn(wordIds)))
         .get();
-    final wordRowByWordId = <String, CachedWord>{
+    final wordRowByWordId = <String, WordEntry>{
       for (final row in wordRows) row.wordId: row,
     };
 

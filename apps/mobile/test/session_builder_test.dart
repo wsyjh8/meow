@@ -9,22 +9,44 @@ import 'package:meow_mobile/core/storage/drift/app_database.dart';
 
 AppDatabase _createTestDb() => AppDatabase.forTesting(NativeDatabase.memory());
 
-/// Helper: insert N words into cached_words table.
+/// Helper: insert N words into the unified content layer (word_entries +
+/// word_book_assignments). v0.3.0 P1: replaces the legacy cached_words
+/// fixture which is gone after the v10 migration.
 Future<void> _seedCachedWords(AppDatabase db, int count,
     {String bookId = 'book-001'}) async {
   final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
   await db.batch((batch) {
+    // Ensure preset_wordbooks row exists (FK target for assignments).
+    batch.insert(
+      db.presetWordbooks,
+      PresetWordbooksCompanion.insert(
+        slug: bookId,
+        displayName: bookId,
+        totalWords: Value(count),
+      ),
+      mode: InsertMode.insertOrIgnore,
+    );
     for (int i = 1; i <= count; i++) {
+      // Canonical word_id form (no '' prefix).
+      final wordId = 'word$i';
       batch.insert(
-        db.cachedWords,
-        CachedWordsCompanion.insert(
-          wordId: 'cet4-word$i',
-          bookId: bookId,
+        db.wordEntries,
+        WordEntriesCompanion.insert(
+          wordId: wordId,
           wordText: 'word$i',
           meaning: '释义$i',
-          sortOrder: Value(i),
-          cachedAt: nowMs,
+          importedAt: nowMs,
         ),
+        mode: InsertMode.insertOrIgnore,
+      );
+      batch.insert(
+        db.wordBookAssignments,
+        WordBookAssignmentsCompanion.insert(
+          wordId: wordId,
+          bookSlug: bookId,
+          sortOrder: Value(i),
+        ),
+        mode: InsertMode.insertOrIgnore,
       );
     }
   });
@@ -64,8 +86,8 @@ void main() {
       expect(session.queue.every((item) => item.isNew), isTrue);
 
       // Word IDs should be in sort_order (word1, word2, ..., word10)
-      expect(session.queue.first.wordId, 'cet4-word1');
-      expect(session.queue.last.wordId, 'cet4-word10');
+      expect(session.queue.first.wordId, 'word1');
+      expect(session.queue.last.wordId, 'word10');
     });
 
     test('100 cached words, 20 due cards, daily limit 10 → 10 new + 20 review',
@@ -76,9 +98,9 @@ void main() {
 
       // Create 20 cards that are due (created yesterday, rated "again" so they re-appear)
       for (int i = 1; i <= 20; i++) {
-        await fsrs.initCardForWord('cet4-review$i', nowUtc: pastTime);
+        await fsrs.initCardForWord('review$i', nowUtc: pastTime);
         // Rate "again" so they stay due
-        await fsrs.rateCard('cet4-review$i', ReviewRating.again,
+        await fsrs.rateCard('review$i', ReviewRating.again,
             nowUtc: pastTime);
       }
 
@@ -142,8 +164,8 @@ void main() {
 
       // Create 30 due cards
       for (int i = 1; i <= 30; i++) {
-        await fsrs.initCardForWord('cet4-rev$i', nowUtc: pastTime);
-        await fsrs.rateCard('cet4-rev$i', ReviewRating.again,
+        await fsrs.initCardForWord('rev$i', nowUtc: pastTime);
+        await fsrs.rateCard('rev$i', ReviewRating.again,
             nowUtc: pastTime);
       }
 

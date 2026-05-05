@@ -32,23 +32,44 @@ import 'package:meow_mobile/core/storage/drift/app_database.dart';
 
 AppDatabase _createTestDb() => AppDatabase.forTesting(NativeDatabase.memory());
 
-/// Seed N cached_words rows so the local review queue builder can join
-/// against them.
+/// Seed N word_entries (+ word_book_assignments) rows so the local review
+/// queue builder can join against them.
+///
+/// v0.3.0 P1: was cached_words pre-P1; the unified content layer post-P1.
+/// Function name kept for diff continuity; consider renaming in P5 cleanup.
 Future<void> _seedCachedWords(AppDatabase db, int count,
     {String bookId = 'book-001'}) async {
   final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
   await db.batch((batch) {
+    batch.insert(
+      db.presetWordbooks,
+      PresetWordbooksCompanion.insert(
+        slug: bookId,
+        displayName: bookId,
+        totalWords: Value(count),
+      ),
+      mode: InsertMode.insertOrIgnore,
+    );
     for (int i = 1; i <= count; i++) {
+      final wordId = 'word$i'; // canonical, no 'cet4-' prefix
       batch.insert(
-        db.cachedWords,
-        CachedWordsCompanion.insert(
-          wordId: 'cet4-word$i',
-          bookId: bookId,
+        db.wordEntries,
+        WordEntriesCompanion.insert(
+          wordId: wordId,
           wordText: 'word$i',
           meaning: '释义$i',
-          sortOrder: Value(i),
-          cachedAt: nowMs,
+          importedAt: nowMs,
         ),
+        mode: InsertMode.insertOrIgnore,
+      );
+      batch.insert(
+        db.wordBookAssignments,
+        WordBookAssignmentsCompanion.insert(
+          wordId: wordId,
+          bookSlug: bookId,
+          sortOrder: Value(i),
+        ),
+        mode: InsertMode.insertOrIgnore,
       );
     }
   });
@@ -58,7 +79,7 @@ Future<void> _seedCachedWords(AppDatabase db, int count,
 Future<void> _seedDueCards(FsrsService fsrs, int count,
     {required DateTime nowUtc}) async {
   for (int i = 1; i <= count; i++) {
-    await fsrs.initCardForWord('cet4-word$i', nowUtc: nowUtc);
+    await fsrs.initCardForWord('word$i', nowUtc: nowUtc);
   }
 }
 
@@ -118,12 +139,12 @@ void main() {
 
       // Due cards are seeded for word1, word2 in that order.
       final wordIds = group.items.map((i) => i.wordId).toList();
-      expect(wordIds, contains('cet4-word1'));
-      expect(wordIds, contains('cet4-word2'));
+      expect(wordIds, contains('word1'));
+      expect(wordIds, contains('word2'));
 
       for (final item in group.items) {
         // Derived from seed: word1 → 'word1' + '释义1' etc.
-        final expectedIndex = item.wordId.replaceFirst('cet4-word', '');
+        final expectedIndex = item.wordId.replaceFirst('word', '');
         expect(item.wordText, equals('word$expectedIndex'));
         expect(item.meaning, equals('释义$expectedIndex'));
       }

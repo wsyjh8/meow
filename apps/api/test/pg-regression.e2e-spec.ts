@@ -221,7 +221,7 @@ describeIfPg('PG Backend Regression (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/me/new-words')
         .send({
-          word_id: 'word-001',
+          word_id: 'abandon',
           book_id: 'book-001',
           study_type: 'new',
           action_result: 'know',
@@ -409,7 +409,7 @@ describeIfPg('PG Backend Regression (e2e)', () => {
       // Submit study attempt
       await request(app.getHttpServer())
         .post('/api/v1/me/new-words')
-        .send({ word_id: 'word-002', book_id: 'book-001', study_type: 'new', action_result: 'know' })
+        .send({ word_id: 'ability', book_id: 'book-001', study_type: 'new', action_result: 'know' })
         .set('X-Idempotency-Key', 'pg-learn-round-001')
         .expect(200);
 

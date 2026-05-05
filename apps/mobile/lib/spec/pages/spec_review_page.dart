@@ -211,45 +211,29 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
   }
 
   /// Resolve word details for a [CardStateData] row.
-  /// Checks word_entries (ZK/GK) first, falls back to cached_words (CET-4).
+  ///
+  /// v0.3.0 P1: unified path through word_entries for ALL books. The legacy
+  /// cached_words fallback (CET-4) is gone — CET-4 entries now live in
+  /// word_entries alongside ZK / GK.
   Future<Word?> _fetchWordForCard(CardStateData card) async {
     try {
-      // ZK / GK path
       final entry = await _driftDb.getWordEntryById(card.wordId);
-      if (entry != null) {
-        final exRows = await _driftDb.getExamplesForWord(card.wordId, limit: 3);
-        return Word(
-          wordId: entry.wordId,
-          wordText: entry.wordText,
-          meaning: entry.meaning,
-          phonetic: entry.phonetic,
-          translation: entry.translation,
-          definition: entry.definition,
-          frequencyRank: entry.frequencyRank,
-          wordForms: entry.wordForms,
-          bookId: 'review',
-          examples: exRows.isNotEmpty
-              ? exRows.map((e) => WordExample(sense: e.sense, en: e.en, cn: e.cn)).toList()
-              : null,
-        );
-      }
-      // CET-4 path
-      final cached = await _driftDb.getCachedWordById(card.wordId);
-      if (cached != null) {
-        final exRows = await _driftDb.getExamplesForWord(card.wordId, limit: 3);
-        return Word(
-          wordId: cached.wordId,
-          wordText: cached.wordText,
-          meaning: cached.meaning,
-          phonetic: cached.phonetic,
-          translation: cached.translation,
-          bookId: cached.bookId,
-          examples: exRows.isNotEmpty
-              ? exRows.map((e) => WordExample(sense: e.sense, en: e.en, cn: e.cn)).toList()
-              : null,
-        );
-      }
-      return null;
+      if (entry == null) return null;
+      final exRows = await _driftDb.getExamplesForWord(card.wordId, limit: 3);
+      return Word(
+        wordId: entry.wordId,
+        wordText: entry.wordText,
+        meaning: entry.meaning,
+        phonetic: entry.phonetic,
+        translation: entry.translation,
+        definition: entry.definition,
+        frequencyRank: entry.frequencyRank,
+        wordForms: entry.wordForms,
+        bookId: 'review',
+        examples: exRows.isNotEmpty
+            ? exRows.map((e) => WordExample(sense: e.sense, en: e.en, cn: e.cn, stableId: e.stableId)).toList()
+            : null,
+      );
     } catch (_) {
       return null;
     }

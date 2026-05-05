@@ -47,7 +47,10 @@ class SessionItem {
 }
 
 /// Builds a study session by combining FSRS due cards with new words
-/// from the local cached_words table.
+/// from the local word_entries table (joined via word_book_assignments).
+///
+/// v0.3.0 P1: was `cached_words` pre-P1; the unified content layer post-P1
+/// covers all books (CET-4 / ZK / GK).
 ///
 /// Key contract (pinned in FSRS_DESIGN_DRAFT.md §5):
 ///   - newCardsDailyLimit only controls NEW words
@@ -85,14 +88,18 @@ class SessionBuilder {
     final usedNew = await _fsrsService.countNewCardsToday(nowLocal: nowLocal);
     final remainingNew = (newCardsDailyLimit - usedNew).clamp(0, newCardsDailyLimit);
 
-    // === Step 3: Find new word candidates from cached_words ===
+    // === Step 3: Find new word candidates from word_entries ===
+    // v0.3.0 P1: was cached_words pre-P1. Now joins word_book_assignments
+    // so we can scope new cards to the user's currently active book if
+    // needed. For now we don't filter by book — any unstudied word_entries
+    // row is a candidate, ordered by membership.sort_order globally.
     List<String> newWordIds = [];
     if (remainingNew > 0) {
-      // Words in cached_words that do NOT yet have a card_states row
       final rows = await _db.customSelect(
-        'SELECT cw.word_id FROM cached_words cw '
-        'WHERE cw.word_id NOT IN (SELECT cs.word_id FROM card_states cs) '
-        'ORDER BY cw.sort_order ASC '
+        'SELECT we.word_id FROM word_entries we '
+        'JOIN word_book_assignments wba ON wba.word_id = we.word_id '
+        'WHERE we.word_id NOT IN (SELECT cs.word_id FROM card_states cs) '
+        'ORDER BY wba.sort_order ASC '
         'LIMIT ?',
         variables: [Variable.withInt(remainingNew)],
       ).get();

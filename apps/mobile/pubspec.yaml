@@ -22,6 +22,14 @@ dependencies:
   audioplayers: ^6.0.0
   fl_chart: ^0.69.0
   uuid: ^4.4.0
+  # v0.3.0 P0: SHA-256 for stable_id reference impl (used at WordbookLoader
+  # import time as a safety net; runtime never computes hashes per DB §3.5).
+  crypto: ^3.0.5
+  # v0.3.0 P0: Unicode NFC normalization (Python unicodedata.normalize('NFC')
+  # equivalent). Required for byte-identical hash inputs across pipeline
+  # (Python) ↔ ingest (TS) ↔ App (Dart). Real-world LLM-generated example
+  # text is almost always NFC, but the spec mandates explicit normalization.
+  unorm_dart: ^0.3.0
 
 dev_dependencies:
   flutter_test:

@@ -6,11 +6,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app/app.dart' show studyPageRouteObserver;
 import '../../core/api/api_client.dart';
+import '../../core/audio/audio_cache_repository.dart' show AudioFetchException;
+import '../../core/audio/example_audio_service.dart';
 import '../../core/audio/pronunciation_service.dart';
+import '../../core/audio/word_audio_service.dart';
+import '../../core/util/stable_id.dart' show normalizeWord;
 import '../../core/util/pos_label.dart';
 import '../../core/memory/fsrs_service.dart';
 import '../../core/memory/review_rating.dart';
-import '../../core/memory/word_cache_service.dart';
 import '../../core/services/session_store.dart';
 import '../../core/services/session_sync_service.dart';
 import '../../core/services/study_service.dart';
@@ -48,8 +51,9 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
   // ── Services ──────────────────────────────────────────────────────────────
   late final StudyService _studyService;
   late final FsrsService _fsrsService;
-  late final WordCacheService _wordCacheService;
   late final PronunciationService _pronunciationService;
+  late final ExampleAudioService _exampleAudioService;
+  late final WordAudioService _wordAudioService;
   late final SessionStore _sessionStore;
   late final SessionSyncService _sessionSyncService;
   late final WordEnrichmentService _enrichmentService;
@@ -147,8 +151,9 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
       driftDb: appDb,
     );
     _fsrsService = FsrsService(db: appDb);
-    _wordCacheService = WordCacheService(db: appDb);
     _pronunciationService = PronunciationService();
+    _exampleAudioService = ExampleAudioService();
+    _wordAudioService = WordAudioService();
     _sessionStore = SessionStore(apiClient: apiClient, driftDb: appDb);
     _sessionSyncService =
         SessionSyncService(apiClient: apiClient, driftDb: appDb);
@@ -247,6 +252,8 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
     _sessionStore.finish();
     _audioSub?.cancel();
     _pronunciationService.dispose();
+    _exampleAudioService.dispose();
+    _wordAudioService.dispose();
     _studyService.dispose();
     super.dispose();
   }
@@ -392,16 +399,10 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
             _loadEnrichmentForWord(word);
             _prefetchUpcoming();
 
-            // P3.3.17: Cache word locally for offline review queue — fire-and-forget.
-            _wordCacheService.insertWord(
-              wordId: word.wordId,
-              bookId: word.bookId,
-              wordText: word.wordText,
-              meaning: word.meaning,
-              phonetic: word.phonetic,
-              translation: word.translation,
-              frequencyRank: word.frequencyRank,
-            ).catchError((_) {});
+            // v0.3.0 P1: WordCacheService removed — words are already in
+            // word_entries (loaded by WordbookLoader from bundled assets).
+            // No API-served word cache step anymore. (Was P3.3.17's
+            // _wordCacheService.insertWord(...) call here.)
           }
           return;
         }
@@ -478,20 +479,52 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
     }
   }
 
-  /// Prefetch pronunciation audio for the next ~5 upcoming words.
+  /// Prefetch pronunciation audio + example audio + enrichment SQL for
+  /// the next ~5 upcoming words. All paths fire off the same
+  /// `peekNextWordTexts` result so we only ask the DB once. All errors
+  /// silently swallowed at every layer (peek, prefetch, warmUp) — best-effort.
   ///
-  /// Queries the DB for unstudied words after the current one, then hands
-  /// their word_text values to [PronunciationService.prefetch] which
-  /// downloads WAV files in the background. Already-cached words are skipped.
+  /// v0.3.0 P2.1/P2.2 prefetches:
+  ///   1. Word audio via WordAudioService (new MP3 path; canonical wordId
+  ///      via normalize_word — allowed at runtime, string normalization
+  ///      not a hash).
+  ///   2. Word audio via PronunciationService (legacy WAV; wordText as-is)
+  ///      —— transitional fallback while Codex finishes new word audio
+  ///      pipeline; remove once /api/v1/words/:id/audio covers all words.
+  ///   3. Enrichment SQL warm-up (so 其他形式 / 近反义词 / 常见词组 /
+  ///      词根词缀 don't visibly load when the user advances).
+  ///   4. Example audio for the *current* word's examples (DB §7.4.2 进
+  ///      词书时预下载策略 — render-time variant). The play button next
+  ///      to each example finds the mp3 already in audio_file_cache.
   void _prefetchUpcoming() {
-    // Build exclude set: mastered words are handled by the service;
-    // we only need to add session-seen IDs + current word.
     final exclude = Set<String>.from(_sessionSeenIds);
     if (_currentWord != null) exclude.add(_currentWord!.wordId);
-    _studyService
-        .peekNextWordTexts(5, extraExclude: exclude)
-        .then((wordTexts) => _pronunciationService.prefetch(wordTexts))
-        .catchError((_) {}); // best-effort — silent on failure
+    unawaited(
+      _studyService
+          .peekNextWordTexts(5, extraExclude: exclude)
+          .then((wordTexts) {
+            final wordIds = wordTexts
+                .map(normalizeWord)
+                .where((id) => id.isNotEmpty)
+                .toList(growable: false);
+            if (wordIds.isNotEmpty) _wordAudioService.prefetch(wordIds);
+            _pronunciationService.prefetch(wordTexts);
+            unawaited(_studyService.warmUpWordTexts(wordTexts));
+          })
+          .catchError((_) {}),
+    );
+
+    // Example audio prefetch for the current word's examples.
+    final examples = _currentWord?.examples;
+    if (examples != null && examples.isNotEmpty) {
+      final stableIds = examples
+          .map((e) => e.stableId)
+          .whereType<String>()
+          .toList(growable: false);
+      if (stableIds.isNotEmpty) {
+        _exampleAudioService.prefetch(stableIds);
+      }
+    }
   }
 
   // session_consolidation_v1: 4-button rating handler.
@@ -791,7 +824,10 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
     ];
 
     if (word.examples != null && word.examples!.isNotEmpty) {
-      modules.add(ExampleSentenceSection(examples: word.examples!));
+      modules.add(ExampleSentenceSection(
+        examples: word.examples!,
+        audioService: _exampleAudioService,
+      ));
     }
     final e = _enrichment;
     if (e != null) {
@@ -825,26 +861,43 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
   /// Speaker button handler — extracted so [WordHeaderSection] can stay
   /// purely presentational. Mirrors the previous inline GestureDetector
   /// onTap body (catch + SnackBar on failure).
+  ///
+  /// v0.3.0 P2.2: tries the new [WordAudioService] (audio_assets table → MP3
+  /// in cdn-mock) first. If the API returns 404 (Codex hasn't generated this
+  /// word's audio yet), falls back to legacy [PronunciationService] (WAV
+  /// served from `/api/v1/pronunciation/{word}.wav`). Once Codex finishes
+  /// the word audio pipeline, the fallback path will become unused and
+  /// PronunciationService can be deprecated.
   Future<void> _playPronunciation() async {
     final word = _currentWord;
     if (word == null) return;
     try {
-      await _pronunciationService.play(word.wordText);
-    } catch (_) {
-      if (mounted) {
-        setState(() => _isPlayingAudio = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('发音加载失败'),
-            duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-        );
+      await _wordAudioService.play(word.wordId);
+    } on AudioFetchException {
+      // Word audio not yet in audio_assets — fall back to legacy WAV path.
+      try {
+        await _pronunciationService.play(word.wordText);
+      } catch (_) {
+        _showPronunciationFailedSnackBar();
       }
+    } catch (_) {
+      _showPronunciationFailedSnackBar();
     }
+  }
+
+  void _showPronunciationFailedSnackBar() {
+    if (!mounted) return;
+    setState(() => _isPlayingAudio = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('发音加载失败'),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+      ),
+    );
   }
 
   // ── Bottom action pills ───────────────────────────────────────────────────

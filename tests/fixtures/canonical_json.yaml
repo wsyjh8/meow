@@ -1,0 +1,43 @@
+# canonical_json golden fixtures
+# Auto-filled by apps/api/scripts/audio_pipeline/fill_fixtures.py
+# Verifies cross-language byte-identical JSON serialization
+# per audio_contract.yaml §hash.
+#
+# Each port (Python / Dart / TypeScript) must produce the SAME
+# `expected_utf8_bytes_hex`. Frozen reference: Python `json.dumps` with
+# ensure_ascii=False, separators=(',',':').
+
+cases:
+  - name: simple_two_string
+    input: ['abandon', 'He had to abandon his car.']
+    expected_utf8_bytes_hex: '5b226162616e646f6e222c2248652068616420746f206162616e646f6e20686973206361722e225d'
+  - name: with_chinese_content
+    input: ['放弃', '中文测试句']
+    expected_utf8_bytes_hex: '5b22e694bee5bc83222c22e4b8ade69687e6b58be8af95e58fa5225d'
+  - name: with_brackets
+    input: ['abandon', '[abandon] his plans']
+    expected_utf8_bytes_hex: '5b226162616e646f6e222c225b6162616e646f6e5d2068697320706c616e73225d'
+  - name: with_apostrophe
+    input: ['it''s', 'it''s a test']
+    expected_utf8_bytes_hex: '5b2269742773222c226974277320612074657374225d'
+  - name: with_diacritic_nfc
+    input: ['naïve', 'she is naïve']
+    expected_utf8_bytes_hex: '5b226e61c3af7665222c22736865206973206e61c3af7665225d'
+  - name: audio_id_input_word
+    input: ['word', 'abandon', 'en-US', 'af_bella', 'mp3', 'v1']
+    expected_utf8_bytes_hex: '5b22776f7264222c226162616e646f6e222c22656e2d5553222c2261665f62656c6c61222c226d7033222c227631225d'
+  - name: audio_id_input_example
+    input: ['example', 'a3f9c1e4b8d720568f12c4d7', 'en-US', 'af_bella', 'mp3', 'v1']
+    expected_utf8_bytes_hex: '5b226578616d706c65222c22613366396331653462386437323035363866313263346437222c22656e2d5553222c2261665f62656c6c61222c226d7033222c227631225d'
+
+# Negative cases (must throw / reject)
+negative_cases:
+  - name: reject_null_in_array
+    input: ["word", null, "en-US"]
+    expected_error: "no_null_in_array"
+  - name: reject_nested_structure
+    input: ["word", ["nested"]]
+    expected_error: "no_nested_structures"
+  - name: reject_non_string_non_int
+    input: ["word", 1.5]
+    expected_error: "type_not_allowed"
