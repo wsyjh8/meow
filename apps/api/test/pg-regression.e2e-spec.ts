@@ -1164,4 +1164,118 @@ describeIfPg('PG Backend Regression (e2e)', () => {
       expect(sinceIds).not.toContain(midOld);
     });
   });
+
+  describe('orphan-scan SQL contract (PR-B1 Day 1)', () => {
+    // FS-side behavior is verified by the mandatory PowerShell smoke
+    // (pr-b1-day1.md Step 4). These tests pin the SQL queries that
+    // orphan_scan._scan_audio / _scan_packages issue, so a future schema
+    // change that breaks the "is referenced" classification is caught
+    // before the FS smoke runs.
+    const TEST_PREFIX = 'test-orphan-';
+
+    async function cleanup() {
+      const pool = getPool();
+      await pool.query(
+        `DELETE FROM content_manifest WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+      await pool.query(
+        `DELETE FROM content_release WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+      await pool.query(
+        `DELETE FROM audio_assets WHERE id LIKE '${TEST_PREFIX}%'`,
+      );
+    }
+
+    beforeEach(cleanup);
+    afterEach(cleanup);
+
+    it('audio_assets: status != deleted rows are referenced (deleted excluded)', async () => {
+      const pool = getPool();
+      // 3 rows: ready / superseded / deleted
+      // (audio_assets.url is NOT NULL per schema migration 004; the
+      //  IS NOT NULL guard in orphan_scan SQL is defensive but the
+      //  contract relevant to orphan-scan is the status filter.)
+      const baseCols =
+        'id, target_kind, target_id, locale, voice, format, audio_version, ' +
+        'checksum_sha256, source_text_hash, tts_provider, tts_model, ' +
+        'bytes, duration_ms, url, status, generated_at, transitioned_at';
+      await pool.query(
+        `INSERT INTO audio_assets (${baseCols})
+         VALUES
+           ($1, 'example', 't1', 'en-US', 'v1', 'mp3', 'v1',
+              'a'::char(64), 'b'::char(16), 'tts', 'm',
+              100, 1000,
+              'local://cdn/audio/v1/examples/en-US/v1/v1/aa/${TEST_PREFIX}ready.mp3',
+              'ready', NOW(), NOW()),
+           ($2, 'example', 't2', 'en-US', 'v1', 'mp3', 'v1',
+              'a'::char(64), 'b'::char(16), 'tts', 'm',
+              100, 1000,
+              'local://cdn/audio/v1/examples/en-US/v1/v1/bb/${TEST_PREFIX}sup.mp3',
+              'superseded', NOW(), NOW()),
+           ($3, 'example', 't3', 'en-US', 'v1', 'mp3', 'v1',
+              'a'::char(64), 'b'::char(16), 'tts', 'm',
+              100, 1000,
+              'local://cdn/audio/v1/examples/en-US/v1/v1/cc/${TEST_PREFIX}del.mp3',
+              'deleted', NOW(), NOW())`,
+        [
+          `${TEST_PREFIX}ready`,
+          `${TEST_PREFIX}sup`,
+          `${TEST_PREFIX}del`,
+        ],
+      );
+
+      // The exact query orphan_scan._scan_audio uses
+      const r = await pool.query(
+        `SELECT id, url FROM audio_assets
+          WHERE url IS NOT NULL AND status != 'deleted'
+            AND id LIKE $1
+          ORDER BY id`,
+        [`${TEST_PREFIX}%`],
+      );
+      const ids = r.rows.map((row) => row.id);
+      // ready + superseded should be present; deleted should not
+      expect(ids).toEqual([
+        `${TEST_PREFIX}ready`,
+        `${TEST_PREFIX}sup`,
+      ]);
+    });
+
+    it('content_manifest: only file_url IS NOT NULL are referenced', async () => {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO content_release
+           (release_id, status, package_set, generated_by)
+         VALUES ($1, 'draft', '[]'::jsonb, 'e2e-orphan')`,
+        [`${TEST_PREFIX}r1`],
+      );
+      // Two manifests: one with file_url, one without
+      await pool.query(
+        `INSERT INTO content_manifest
+           (id, package_name, package_kind, content_version, file_url,
+            checksum_sha256, size_bytes, min_app_version, is_active, release_id)
+         VALUES
+           ($1, 'examples-${TEST_PREFIX}with', 'examples', 'v1',
+              'file:///D:/test/audio-pipeline-staging/examples-${TEST_PREFIX}with@v1.jsonl.gz',
+              'sha256:x', 100, '0.0.0', false, $3),
+           ($2, 'examples-${TEST_PREFIX}none', 'examples', 'v1',
+              NULL,
+              'sha256:y', 100, '0.0.0', false, $3)`,
+        [
+          `${TEST_PREFIX}with@v1`,
+          `${TEST_PREFIX}none@v1`,
+          `${TEST_PREFIX}r1`,
+        ],
+      );
+
+      const r = await pool.query(
+        `SELECT id, file_url FROM content_manifest
+          WHERE file_url IS NOT NULL
+            AND id LIKE $1
+          ORDER BY id`,
+        [`${TEST_PREFIX}%`],
+      );
+      const ids = r.rows.map((row) => row.id);
+      expect(ids).toEqual([`${TEST_PREFIX}with@v1`]);
+    });
+  });
 });

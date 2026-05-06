@@ -12,6 +12,7 @@ Subcommands:
                                           #   注意: revoke 是撤销/下线，不是 rollback
   list-releases [--status S] [--limit N]  # PR-A Day 5 (治理可视化)
   gc-stale [--dry-run|--gc]               # PR-A Day 4
+  orphan-scan [--dry-run|--clean]         # PR-B1 Day 1 (FS 物理孤儿，两根目录)
 
 Usage (run from apps/api directory):
 
@@ -570,6 +571,29 @@ def cmd_gc_stale(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_orphan_scan(args: argparse.Namespace) -> int:
+    """PR-B1 Day 1 — FS orphan scan.
+
+    Two-root: cdn-mock (audio_assets.url) + audio-pipeline-staging
+    (content_manifest.file_url). Default --dry-run; --clean to delete.
+    """
+    if args.dry_run and args.clean:
+        print(
+            "ERROR: --dry-run and --clean are mutually exclusive",
+            file=sys.stderr,
+        )
+        return 2
+    from orphan_scan import run as run_orphan_scan
+
+    return run_orphan_scan(
+        cdn_mock_dir=Path(args.cdn_mock_dir).resolve(),
+        staging_dir=Path(args.staging_dir).resolve(),
+        dry_run=not args.clean,  # clean reverses default
+        clean=args.clean,
+        scope=args.scope,
+    )
+
+
 # =============================================================================
 # Argument parser
 # =============================================================================
@@ -715,6 +739,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="CDN mock root (relative to cwd, default 'cdn-mock')",
     )
     p_gc.set_defaults(func=cmd_gc_stale)
+
+    # ── orphan-scan (PR-B1 Day 1) ─────────────────────────────────────────
+    p_orphan = sub.add_parser(
+        "orphan-scan",
+        help="Scan FS for files not referenced by PG (filesystem orphan, two-root)",
+    )
+    p_orphan.add_argument(
+        "--dry-run", action="store_true",
+        help="(default) print orphan candidates only",
+    )
+    p_orphan.add_argument(
+        "--clean", action="store_true",
+        help="Actually delete orphans (mutually exclusive with --dry-run)",
+    )
+    p_orphan.add_argument(
+        "--cdn-mock-dir", default="cdn-mock",
+        help="CDN mock root for audio_assets URLs (default cdn-mock)",
+    )
+    p_orphan.add_argument(
+        "--staging-dir", default="audio-pipeline-staging",
+        help="Staging dir for content_manifest URLs (default audio-pipeline-staging)",
+    )
+    p_orphan.add_argument(
+        "--scope", default="all",
+        choices=["audio", "packages", "all"],
+        help="Limit scan target (default 'all')",
+    )
+    p_orphan.set_defaults(func=cmd_orphan_scan)
 
     return parser
 
