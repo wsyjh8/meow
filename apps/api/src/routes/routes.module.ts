@@ -24,6 +24,7 @@ import {
   AudioAssetsExamplesController,
   AudioAssetsWordsController,
 } from '../controllers/audio-assets.controller';
+import { ContentManifestController } from '../controllers/content-manifest.controller';
 
 @Module({
   controllers: [
@@ -54,6 +55,8 @@ import {
     //   - words: P2.2 (单词音频, replaces legacy /api/v1/pronunciation)
     AudioAssetsExamplesController,
     AudioAssetsWordsController,
+    // v0.3.0 PR-A Day 4: content manifest discovery for clients
+    ContentManifestController,
   ],
 })
 export class RoutesModule {}
