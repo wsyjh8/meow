@@ -128,9 +128,118 @@ python scripts/content_pipeline/pipeline.py revoke rel-2026-05-05-001 \
 **这不是 rollback** —— 不会自动恢复任何旧版本。如需恢复旧版本，操作员需
 publish 新 release（或 PR-B 之后加 `rollback --to <old_release>` 子命令）。
 
-### Day 4 / Day 5 (stub)
+### Day 4 实装
 
-- `gc-stale` 🟡 PR-A Day 4 (stub)：状态机查询版 GC
+#### `gc-stale` ✅
+
+audio_assets 状态机驱动的 **best-effort GC**（非事务原子）。两阶段：
+
+```
+ready                                    (active state)
+  ↓ (新音频 publish 替换；Day 5/PR-B；本 Day 4 不做)
+superseded
+  ↓ (grace_days_promote 后；gc-stale --promote 阶段)
+eligible_for_gc
+  ↓ (grace_days_delete 后 + 文件删除尝试；gc-stale --delete 阶段)
+deleted (终态，行保留作审计)
+```
+
+```bash
+\ 默认 dry-run，只打印候选 + 异常（transitioned_at IS NULL）告警
+python scripts/content_pipeline/pipeline.py gc-stale
+
+\ 实际执行（互斥 --dry-run）
+python scripts/content_pipeline/pipeline.py gc-stale --gc \
+  --grace-days-promote 30 --grace-days-delete 30
+```
+
+参数：
+- `--dry-run` (default) / `--gc`（互斥）
+- `--grace-days-promote N` 默认 30
+- `--grace-days-delete N` 默认 30
+- `--cdn-mock-dir <dir>` 默认 `cdn-mock`（相对 cwd）
+
+**安全语义**（review-driven，关键）：
+- **不是事务原子**：FS 删除不受 PG transaction 保护
+- 文件删除失败（权限错 / URL 解析失败）的行**保留 eligible_for_gc**，
+  下次 gc-stale 可重试。**不会误标 deleted 吞掉问题**
+- 文件已不存在（被人手动删过 / race）= 成功语义，标 deleted
+- 本次刚 promote 的行**不会被本次 delete**：delete candidates 在 promote
+  操作之前 SELECT，刚转入 eligible_for_gc 的行不在该集里
+- 负数 grace days / 互斥参数 → 早期 fail
+- `transitioned_at IS NULL` 的异常行：dry-run 输出 WARN 计数，**不自动处理**
+
+**Day 4 范围限定**（重要）：
+- ✅ 处理 DB 状态机驱动的 GC（superseded → eligible_for_gc → deleted）
+- ❌ **不处理 filesystem orphan**（cdn-mock 里有文件但 PG audio_assets 没行
+  对应它）—— 这类需要单独的 `orphan-scan` 子命令，留 Day 5 / PR-B
+
+### Day 5 (stub)
+
+- 完整 release 流程 e2e + filesystem orphan-scan
+
+## API: `GET /api/v1/content/manifest` ✅ Day 4 实装
+
+客户端发现入口。返回当前 active release 的所有 active manifest packages。
+
+```bash
+\ 默认: 所有 active packages
+curl http://localhost:3000/api/v1/content/manifest
+
+\ since_release 增量过滤
+curl "http://localhost:3000/api/v1/content/manifest?since_release=rel-2026-05-04-002"
+
+\ app_version 过滤（仅返回客户端兼容的包）
+curl "http://localhost:3000/api/v1/content/manifest?app_version=1.2.3"
+```
+
+Response shape：
+```json
+{
+  "release_ids": ["rel-2026-05-05-001"],
+  "packages": [
+    {
+      "package_id": "examples-zk@v5",
+      "package_kind": "examples",
+      "package_name": "examples-zk",
+      "book_id": "zk",
+      "content_version": "v5",
+      "file_url": "https://cdn.example.com/.../examples-zk.jsonl.gz",
+      "checksum_sha256": "...",
+      "size_bytes": 931741,
+      "compression": "gzip",
+      "min_app_version": "0.0.0",
+      "release_id": "rel-2026-05-05-001"
+    }
+  ]
+}
+```
+
+**Dual-condition filter**（v0.2 评审采纳 #11）：
+- `content_release.status = 'active'`（治理事实源："这一批是否生效"）
+- `content_manifest.is_active = true`（包文件级开关："包是否可被引用"）
+- 两条件**必须同时满足**才返回。已 revoke 的 release / `is_active=false` 的
+  manifest 都不返回
+
+**字段语义**：
+- `book_id` server-side 从 `package_name` 派生（命名约定保证），客户端不
+  需要解析字符串
+- `compression` 从 `file_url` 后缀派生（.gz → "gzip"，.br → "brotli"）
+- `size_bytes` JS number（服务端处理 BIGINT → string 的 node-pg 默认行为）
+- `min_app_version` 永远非空（`COALESCE(NULL, '0.0.0')`）
+
+**校验**：
+- `app_version` 必须 `^X.Y.Z$`（严格三段非负整数，禁 leading zeros）；
+  非法 → 400
+- `since_release` 不存在 → 400
+- `since_release` 存在但 activated_at IS NULL（draft）→ 等价于无 since 过滤
+
+**Production 安全**：
+- `NODE_ENV='production'` 时，`file_url` 以 `file://` 开头的包跳过返回 +
+  log error。防止生产环境暴露本地路径
+
+**首次安装客户端**: 不传 `since_release`，拿全量 active manifest。
+**已有本地状态客户端**: 传上次拿到的 release_id 作 since，仅拿增量。
 
 ## Package naming convention
 

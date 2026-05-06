@@ -456,7 +456,19 @@ def cmd_revoke(args: argparse.Namespace) -> int:
 
 
 def cmd_gc_stale(args: argparse.Namespace) -> int:
-    raise NotImplementedError("gc-stale: PR-A Day 4")
+    # Negative grace days early fail (review-driven safety)
+    if args.grace_days_promote < 0 or args.grace_days_delete < 0:
+        print("ERROR: grace days must be >= 0", file=sys.stderr)
+        return 2
+    from gc_stale import run as run_gc_stale
+
+    return run_gc_stale(
+        grace_days_promote=args.grace_days_promote,
+        grace_days_delete=args.grace_days_delete,
+        dry_run=args.dry_run,
+        gc=args.gc,
+        cdn_mock_dir=Path(args.cdn_mock_dir).resolve(),
+    )
 
 
 # =============================================================================
@@ -546,10 +558,31 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Audit log reason (default 'revoke cmd')")
     p_revoke.set_defaults(func=cmd_revoke)
 
-    # ── gc-stale (Day 4 stub) ─────────────────────────────────────────────
-    p_gc = sub.add_parser("gc-stale", help="[PR-A Day 4 stub]")
-    p_gc.add_argument("--dry-run", action="store_true")
-    p_gc.add_argument("--gc", action="store_true")
+    # ── gc-stale (Day 4) ──────────────────────────────────────────────────
+    p_gc = sub.add_parser(
+        "gc-stale",
+        help="audio_assets state-machine GC (best-effort, two-stage)",
+    )
+    p_gc.add_argument(
+        "--dry-run", action="store_true",
+        help="(default) print candidates only, no changes",
+    )
+    p_gc.add_argument(
+        "--gc", action="store_true",
+        help="actually promote + delete (mutually exclusive with --dry-run)",
+    )
+    p_gc.add_argument(
+        "--grace-days-promote", type=int, default=30,
+        help="superseded → eligible_for_gc grace days (default 30)",
+    )
+    p_gc.add_argument(
+        "--grace-days-delete", type=int, default=30,
+        help="eligible_for_gc → deleted grace days (default 30)",
+    )
+    p_gc.add_argument(
+        "--cdn-mock-dir", default="cdn-mock",
+        help="CDN mock root (relative to cwd, default 'cdn-mock')",
+    )
     p_gc.set_defaults(func=cmd_gc_stale)
 
     return parser
