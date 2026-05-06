@@ -1164,4 +1164,558 @@ describeIfPg('PG Backend Regression (e2e)', () => {
       expect(sinceIds).not.toContain(midOld);
     });
   });
+
+  describe('orphan-scan SQL contract (PR-B1 Day 1)', () => {
+    // FS-side behavior is verified by the mandatory PowerShell smoke
+    // (pr-b1-day1.md Step 4). These tests pin the SQL queries that
+    // orphan_scan._scan_audio / _scan_packages issue, so a future schema
+    // change that breaks the "is referenced" classification is caught
+    // before the FS smoke runs.
+    const TEST_PREFIX = 'test-orphan-';
+
+    async function cleanup() {
+      const pool = getPool();
+      await pool.query(
+        `DELETE FROM content_manifest WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+      await pool.query(
+        `DELETE FROM content_release WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+      await pool.query(
+        `DELETE FROM audio_assets WHERE id LIKE '${TEST_PREFIX}%'`,
+      );
+    }
+
+    beforeEach(cleanup);
+    afterEach(cleanup);
+
+    it('audio_assets: status != deleted rows are referenced (deleted excluded)', async () => {
+      const pool = getPool();
+      // 3 rows: ready / superseded / deleted
+      // (audio_assets.url is NOT NULL per schema migration 004; the
+      //  IS NOT NULL guard in orphan_scan SQL is defensive but the
+      //  contract relevant to orphan-scan is the status filter.)
+      const baseCols =
+        'id, target_kind, target_id, locale, voice, format, audio_version, ' +
+        'checksum_sha256, source_text_hash, tts_provider, tts_model, ' +
+        'bytes, duration_ms, url, status, generated_at, transitioned_at';
+      await pool.query(
+        `INSERT INTO audio_assets (${baseCols})
+         VALUES
+           ($1, 'example', 't1', 'en-US', 'v1', 'mp3', 'v1',
+              'a'::char(64), 'b'::char(16), 'tts', 'm',
+              100, 1000,
+              'local://cdn/audio/v1/examples/en-US/v1/v1/aa/${TEST_PREFIX}ready.mp3',
+              'ready', NOW(), NOW()),
+           ($2, 'example', 't2', 'en-US', 'v1', 'mp3', 'v1',
+              'a'::char(64), 'b'::char(16), 'tts', 'm',
+              100, 1000,
+              'local://cdn/audio/v1/examples/en-US/v1/v1/bb/${TEST_PREFIX}sup.mp3',
+              'superseded', NOW(), NOW()),
+           ($3, 'example', 't3', 'en-US', 'v1', 'mp3', 'v1',
+              'a'::char(64), 'b'::char(16), 'tts', 'm',
+              100, 1000,
+              'local://cdn/audio/v1/examples/en-US/v1/v1/cc/${TEST_PREFIX}del.mp3',
+              'deleted', NOW(), NOW())`,
+        [
+          `${TEST_PREFIX}ready`,
+          `${TEST_PREFIX}sup`,
+          `${TEST_PREFIX}del`,
+        ],
+      );
+
+      // The exact query orphan_scan._scan_audio uses
+      const r = await pool.query(
+        `SELECT id, url FROM audio_assets
+          WHERE url IS NOT NULL AND status != 'deleted'
+            AND id LIKE $1
+          ORDER BY id`,
+        [`${TEST_PREFIX}%`],
+      );
+      const ids = r.rows.map((row) => row.id);
+      // ready + superseded should be present; deleted should not
+      expect(ids).toEqual([
+        `${TEST_PREFIX}ready`,
+        `${TEST_PREFIX}sup`,
+      ]);
+    });
+
+    it('content_manifest: only file_url IS NOT NULL are referenced', async () => {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO content_release
+           (release_id, status, package_set, generated_by)
+         VALUES ($1, 'draft', '[]'::jsonb, 'e2e-orphan')`,
+        [`${TEST_PREFIX}r1`],
+      );
+      // Two manifests: one with file_url, one without
+      await pool.query(
+        `INSERT INTO content_manifest
+           (id, package_name, package_kind, content_version, file_url,
+            checksum_sha256, size_bytes, min_app_version, is_active, release_id)
+         VALUES
+           ($1, 'examples-${TEST_PREFIX}with', 'examples', 'v1',
+              'file:///D:/test/audio-pipeline-staging/examples-${TEST_PREFIX}with@v1.jsonl.gz',
+              'sha256:x', 100, '0.0.0', false, $3),
+           ($2, 'examples-${TEST_PREFIX}none', 'examples', 'v1',
+              NULL,
+              'sha256:y', 100, '0.0.0', false, $3)`,
+        [
+          `${TEST_PREFIX}with@v1`,
+          `${TEST_PREFIX}none@v1`,
+          `${TEST_PREFIX}r1`,
+        ],
+      );
+
+      const r = await pool.query(
+        `SELECT id, file_url FROM content_manifest
+          WHERE file_url IS NOT NULL
+            AND id LIKE $1
+          ORDER BY id`,
+        [`${TEST_PREFIX}%`],
+      );
+      const ids = r.rows.map((row) => row.id);
+      expect(ids).toEqual([`${TEST_PREFIX}with@v1`]);
+    });
+  });
+
+  describe('rollback subcommand contract (PR-B1 Day 2)', () => {
+    // Note: cmd_rollback's FS file-existence pre-check is NOT covered by these
+    // e2e cases — seed manifests use http://localhost:3000/cdn/... URLs which
+    // the rollback FS check explicitly skips (real-CDN scheme). The FS missing
+    // path is verified by the mandatory PowerShell smoke (Day 2 plan Step 4).
+    const TEST_PREFIX = 'test-rollback-';
+
+    async function cleanup() {
+      const pool = getPool();
+      await pool.query(
+        `DELETE FROM content_manifest WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+      await pool.query(
+        `DELETE FROM content_release WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+    }
+
+    beforeEach(cleanup);
+    afterEach(cleanup);
+
+    /** Insert a release in 'draft' state with given package_set. */
+    async function seedRelease(
+      releaseId: string,
+      status: string,
+      packageSet: string[] = [],
+    ) {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO content_release
+           (release_id, status, package_set, generated_by,
+            activated_at, revoked_at)
+         VALUES ($1, $2::text, $3::jsonb, 'e2e-day2-rollback',
+                 CASE WHEN $2::text = 'active' THEN NOW() ELSE NULL END,
+                 CASE WHEN $2::text = 'revoked' THEN NOW() ELSE NULL END)`,
+        [releaseId, status, JSON.stringify(packageSet)],
+      );
+    }
+
+    async function seedManifest(
+      releaseId: string,
+      manifestId: string,
+      packageName: string,
+      isActive = true,
+    ) {
+      const pool = getPool();
+      const fileUrl = `http://localhost:3000/cdn/${manifestId}.jsonl.gz`;
+      const checksum = `sha256:${manifestId}`;
+      await pool.query(
+        `INSERT INTO content_manifest
+           (id, package_name, package_kind, content_version,
+            file_url, checksum_sha256, size_bytes, min_app_version,
+            is_active, release_id)
+         VALUES ($1, $2, 'examples', 'v1', $3, $4, 1024, '0.0.0', $5, $6)`,
+        [manifestId, packageName, fileUrl, checksum, isActive, releaseId],
+      );
+    }
+
+    /**
+     * Mirrors content_release_repo's transition_status() SQL.
+     * Used to set up "deprecated" or "revoked" preconditions for tests.
+     */
+    async function transition(
+      releaseId: string,
+      fromStatus: string,
+      toStatus: string,
+      reason: string,
+    ) {
+      const pool = getPool();
+      const extraSet =
+        toStatus === 'active'
+          ? ', activated_at = NOW()'
+          : toStatus === 'revoked'
+          ? ', revoked_at = NOW()'
+          : '';
+      const result = await pool.query(
+        `UPDATE content_release
+            SET status = $1::text${extraSet},
+                activation_log = activation_log || jsonb_build_array(
+                  jsonb_build_object(
+                    'from', $2::text,
+                    'to', $1::text,
+                    'at', to_char(NOW() AT TIME ZONE 'UTC',
+                                  'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                    'reason', $3::text
+                  )
+                )
+          WHERE release_id = $4::text AND status = $2::text`,
+        [toStatus, fromStatus, reason, releaseId],
+      );
+      return result.rowCount;
+    }
+
+    /** Run rollback_release via direct SQL by calling Python? No — we test
+     *  the contract by replaying its semantics via SQL. The actual Python
+     *  helper is exercised by Step 4 PowerShell smoke. */
+    async function simulateRollback(targetId: string, reason: string) {
+      // Verify target is deprecated
+      const pool = getPool();
+      const t = await pool.query(
+        `SELECT release_id, status, package_set FROM content_release WHERE release_id = $1`,
+        [targetId],
+      );
+      if (t.rows.length === 0) {
+        throw new Error(`target ${targetId} not found`);
+      }
+      if (t.rows[0].status !== 'deprecated') {
+        throw new Error(
+          `rollback only allowed from 'deprecated', got '${t.rows[0].status}'`,
+        );
+      }
+      // Multi-active sanity check
+      const a = await pool.query(
+        `SELECT release_id, package_set FROM content_release WHERE status = 'active'`,
+      );
+      if (a.rows.length > 1) {
+        throw new Error(`multiple active releases (count=${a.rows.length})`);
+      }
+      // Demote current active (if any)
+      if (a.rows.length === 1) {
+        const current = a.rows[0];
+        await pool.query(
+          `UPDATE content_manifest SET is_active = false WHERE id = ANY($1::text[])`,
+          [current.package_set],
+        );
+        await transition(
+          current.release_id,
+          'active',
+          'deprecated',
+          `rollback to ${targetId}: ${reason}`,
+        );
+      }
+      // Promote target
+      await pool.query(
+        `UPDATE content_manifest SET is_active = true WHERE id = ANY($1::text[])`,
+        [t.rows[0].package_set],
+      );
+      await transition(targetId, 'deprecated', 'active', reason);
+    }
+
+    it('happy: deprecated v1 + active v2 → rollback v1 → v1 active, v2 deprecated', async () => {
+      const v1 = `${TEST_PREFIX}v1`;
+      const v2 = `${TEST_PREFIX}v2`;
+      const m1 = `${TEST_PREFIX}m1@v1`;
+      const m2 = `${TEST_PREFIX}m2@v2`;
+
+      await seedRelease(v1, 'deprecated', [m1]);
+      await seedRelease(v2, 'active', [m2]);
+      await seedManifest(v1, m1, `examples-${TEST_PREFIX}pkg`, false);
+      await seedManifest(v2, m2, `examples-${TEST_PREFIX}pkg`, true);
+
+      await simulateRollback(v1, 'critical bug in v2');
+
+      const pool = getPool();
+      const r = await pool.query(
+        `SELECT release_id, status FROM content_release
+          WHERE release_id IN ($1, $2) ORDER BY release_id`,
+        [v1, v2],
+      );
+      expect(r.rows[0]).toMatchObject({ release_id: v1, status: 'active' });
+      expect(r.rows[1]).toMatchObject({ release_id: v2, status: 'deprecated' });
+
+      const m = await pool.query(
+        `SELECT id, is_active FROM content_manifest
+          WHERE id IN ($1, $2) ORDER BY id`,
+        [m1, m2],
+      );
+      expect(m.rows[0]).toMatchObject({ id: m1, is_active: true });
+      expect(m.rows[1]).toMatchObject({ id: m2, is_active: false });
+    });
+
+    it('rollback to draft target rejected', async () => {
+      const v1 = `${TEST_PREFIX}draft`;
+      await seedRelease(v1, 'draft', []);
+      await expect(simulateRollback(v1, 'r')).rejects.toThrow(
+        /rollback only allowed from 'deprecated'/,
+      );
+    });
+
+    it('rollback to validated target rejected', async () => {
+      const v1 = `${TEST_PREFIX}validated`;
+      await seedRelease(v1, 'validated', []);
+      await expect(simulateRollback(v1, 'r')).rejects.toThrow(
+        /rollback only allowed from 'deprecated'/,
+      );
+    });
+
+    it('rollback to revoked target rejected (P2 关键 case: revoke 不可逆)', async () => {
+      const v1 = `${TEST_PREFIX}revoked`;
+      await seedRelease(v1, 'revoked', []);
+      await expect(simulateRollback(v1, 'r')).rejects.toThrow(
+        /rollback only allowed from 'deprecated'/,
+      );
+    });
+
+    it('rollback to active target rejected', async () => {
+      const v1 = `${TEST_PREFIX}active`;
+      await seedRelease(v1, 'active', []);
+      await expect(simulateRollback(v1, 'r')).rejects.toThrow(
+        /rollback only allowed from 'deprecated'/,
+      );
+    });
+
+    it('rollback when no active release exists: target promotes directly', async () => {
+      const v1 = `${TEST_PREFIX}only`;
+      const m1 = `${TEST_PREFIX}only@v1`;
+      await seedRelease(v1, 'deprecated', [m1]);
+      await seedManifest(v1, m1, `examples-${TEST_PREFIX}only`, false);
+
+      await simulateRollback(v1, 'restore from cold');
+
+      const pool = getPool();
+      const r = await pool.query(
+        `SELECT status FROM content_release WHERE release_id = $1`,
+        [v1],
+      );
+      expect(r.rows[0].status).toBe('active');
+      const m = await pool.query(
+        `SELECT is_active FROM content_manifest WHERE id = $1`,
+        [m1],
+      );
+      expect(m.rows[0].is_active).toBe(true);
+    });
+
+    it('multiple active releases → ReleaseError sanity check (R1#2)', async () => {
+      // Simulate the multi-active latent bug: PR-A's cmd_activate doesn't
+      // demote prior actives' status, only their manifests. So two releases
+      // can both be status='active'. rollback must refuse to silently pick.
+      const v1 = `${TEST_PREFIX}target`;
+      const va = `${TEST_PREFIX}activeA`;
+      const vb = `${TEST_PREFIX}activeB`;
+      await seedRelease(v1, 'deprecated', []);
+      await seedRelease(va, 'active', []);
+      await seedRelease(vb, 'active', []);
+
+      await expect(simulateRollback(v1, 'should fail')).rejects.toThrow(
+        /multiple active releases.*count=2/,
+      );
+    });
+
+    it('chained rollback: v1 → v2 → v3 → rollback v2 → rollback v1 健壮性', async () => {
+      const v1 = `${TEST_PREFIX}c1`;
+      const v2 = `${TEST_PREFIX}c2`;
+      const v3 = `${TEST_PREFIX}c3`;
+      const m1 = `${TEST_PREFIX}cm1@v1`;
+      const m2 = `${TEST_PREFIX}cm2@v2`;
+      const m3 = `${TEST_PREFIX}cm3@v3`;
+
+      // Initial: v1 deprecated, v2 deprecated, v3 active
+      await seedRelease(v1, 'deprecated', [m1]);
+      await seedRelease(v2, 'deprecated', [m2]);
+      await seedRelease(v3, 'active', [m3]);
+      await seedManifest(v1, m1, `examples-${TEST_PREFIX}chain`, false);
+      await seedManifest(v2, m2, `examples-${TEST_PREFIX}chain`, false);
+      await seedManifest(v3, m3, `examples-${TEST_PREFIX}chain`, true);
+
+      // rollback v2: v3 → deprecated, v2 → active
+      await simulateRollback(v2, 'first rollback');
+      const pool = getPool();
+      let r = await pool.query(
+        `SELECT release_id, status FROM content_release
+          WHERE release_id IN ($1, $2, $3) ORDER BY release_id`,
+        [v1, v2, v3],
+      );
+      expect(r.rows.find((x) => x.release_id === v1)?.status).toBe('deprecated');
+      expect(r.rows.find((x) => x.release_id === v2)?.status).toBe('active');
+      expect(r.rows.find((x) => x.release_id === v3)?.status).toBe('deprecated');
+
+      // rollback v1: v2 → deprecated, v1 → active
+      await simulateRollback(v1, 'second rollback');
+      r = await pool.query(
+        `SELECT release_id, status FROM content_release
+          WHERE release_id IN ($1, $2, $3) ORDER BY release_id`,
+        [v1, v2, v3],
+      );
+      expect(r.rows.find((x) => x.release_id === v1)?.status).toBe('active');
+      expect(r.rows.find((x) => x.release_id === v2)?.status).toBe('deprecated');
+      expect(r.rows.find((x) => x.release_id === v3)?.status).toBe('deprecated');
+
+      // activation_log on v3 should have entries from both rollback chains
+      const v3Log = await pool.query(
+        `SELECT activation_log FROM content_release WHERE release_id = $1`,
+        [v3],
+      );
+      const log = v3Log.rows[0].activation_log as Array<{ reason: string }>;
+      // v3 was demoted once (during rollback v2). The reason should be prefixed.
+      const v3DemoteReason = log.find((e) => e.reason.startsWith('rollback to'));
+      expect(v3DemoteReason?.reason).toBe(`rollback to ${v2}: first rollback`);
+    });
+  });
+
+  describe('approve subcommand contract (PR-B1 Day 3)', () => {
+    // approve sets content_release.approved_by + appends activation_log entry.
+    //
+    // Note (R1#3 review-adopted): activate's CONTENT_RELEASE_REQUIRE_APPROVAL
+    // gating is implemented in cmd_activate (Python). jest setting
+    // `process.env` only affects the Node test process, not Python subprocess,
+    // so we can't truly test that gating here. Gating end-to-end is verified
+    // by the mandatory PowerShell smoke (Day 3 plan Step 4 fixtures
+    // `zk-day3-approve` for env=true paths and `zk-day3-compat` for env=false
+    // PR-A back-compat).
+    //
+    // The 3 cases below verify approve_release's SQL contract:
+    //   - happy: validated → approved_by + audit log entry
+    //   - status guard: non-validated states reject (parametrized 4 states)
+    //   - re-approval: overwrites approved_by; log preserves prior entries
+    const TEST_PREFIX = 'test-approve-';
+
+    async function cleanup() {
+      const pool = getPool();
+      await pool.query(
+        `DELETE FROM content_release WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+    }
+
+    beforeEach(cleanup);
+    afterEach(cleanup);
+
+    /** Insert a release in given state (no manifests needed for approve tests). */
+    async function seedRelease(releaseId: string, status: string) {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO content_release
+           (release_id, status, package_set, generated_by,
+            activated_at, revoked_at)
+         VALUES ($1, $2::text, '[]'::jsonb, 'e2e-day3-approve',
+                 CASE WHEN $2::text = 'active' THEN NOW() ELSE NULL END,
+                 CASE WHEN $2::text = 'revoked' THEN NOW() ELSE NULL END)`,
+        [releaseId, status],
+      );
+    }
+
+    /** Mirrors approve_release helper SQL. Used to verify PG-side contract. */
+    async function simulateApprove(
+      releaseId: string,
+      approver: string,
+      note: string | null = null,
+    ) {
+      const pool = getPool();
+      const approverClean = approver.trim();
+      if (!approverClean) {
+        throw new Error('approver must be non-empty / non-whitespace');
+      }
+      if (approverClean.length > 64) {
+        throw new Error(`approver too long (${approverClean.length} > 64)`);
+      }
+      // Status guard: only validated allowed
+      const r = await pool.query(
+        `SELECT status FROM content_release WHERE release_id = $1::text`,
+        [releaseId],
+      );
+      if (r.rows.length === 0) {
+        throw new Error(`release ${releaseId} not found`);
+      }
+      if (r.rows[0].status !== 'validated') {
+        throw new Error(
+          `approve only allowed in 'validated' state, got '${r.rows[0].status}'`,
+        );
+      }
+      const logReason =
+        `approved by ${approverClean}` + (note ? `: ${note}` : '');
+      const result = await pool.query(
+        `UPDATE content_release
+            SET approved_by = $1::text,
+                activation_log = activation_log || jsonb_build_array(
+                  jsonb_build_object(
+                    'from', 'validated',
+                    'to', 'validated',
+                    'at', to_char(NOW() AT TIME ZONE 'UTC',
+                                  'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                    'reason', $2::text
+                  )
+                )
+          WHERE release_id = $3::text AND status = 'validated'`,
+        [approverClean, logReason, releaseId],
+      );
+      if (result.rowCount !== 1) {
+        throw new Error(`approve race: ${releaseId} status moved during update`);
+      }
+    }
+
+    it('happy: approve validated → approved_by set + audit log entry shape', async () => {
+      const rid = `${TEST_PREFIX}happy`;
+      await seedRelease(rid, 'validated');
+      await simulateApprove(rid, 'wsyjh8', 'first approval');
+
+      const pool = getPool();
+      const r = await pool.query(
+        `SELECT approved_by, activation_log FROM content_release WHERE release_id = $1`,
+        [rid],
+      );
+      expect(r.rows[0].approved_by).toBe('wsyjh8');
+      const log = r.rows[0].activation_log as Array<{
+        from: string;
+        to: string;
+        at: string;
+        reason: string;
+      }>;
+      expect(log).toHaveLength(1);
+      expect(log[0]).toMatchObject({
+        from: 'validated',
+        to: 'validated',
+        reason: 'approved by wsyjh8: first approval',
+      });
+      // ISO 8601 UTC milliseconds shape
+      expect(log[0].at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    });
+
+    it('approve in non-validated state rejected (draft / active / deprecated / revoked)', async () => {
+      const states = ['draft', 'active', 'deprecated', 'revoked'];
+      for (const state of states) {
+        const rid = `${TEST_PREFIX}state-${state}`;
+        await seedRelease(rid, state);
+        await expect(simulateApprove(rid, 'wsyjh8')).rejects.toThrow(
+          /approve only allowed in 'validated' state/,
+        );
+      }
+    });
+
+    it('re-approval overwrites approved_by but preserves prior log entries (R1#7)', async () => {
+      const rid = `${TEST_PREFIX}reapp`;
+      await seedRelease(rid, 'validated');
+
+      await simulateApprove(rid, 'editor-A', 'first');
+      await simulateApprove(rid, 'editor-B', 'second');
+
+      const pool = getPool();
+      const r = await pool.query(
+        `SELECT approved_by, activation_log FROM content_release WHERE release_id = $1`,
+        [rid],
+      );
+      // Latest approver wins
+      expect(r.rows[0].approved_by).toBe('editor-B');
+      // Both audit entries preserved in order
+      const log = r.rows[0].activation_log as Array<{ reason: string }>;
+      expect(log).toHaveLength(2);
+      expect(log[0].reason).toBe('approved by editor-A: first');
+      expect(log[1].reason).toBe('approved by editor-B: second');
+    });
+  });
 });

@@ -10,8 +10,11 @@ Subcommands:
   deprecate <release_id> --reason TXT     # PR-A Day 5 (active → deprecated 软下线)
   revoke <release_id> [--reason TXT]      # PR-A Day 3
                                           #   注意: revoke 是撤销/下线，不是 rollback
+  rollback <release_id> --reason TXT      # PR-B1 Day 2 (deprecated → active)
+  approve <release_id> --approver <id>    # PR-B1 Day 3 (validated 阶段审批)
   list-releases [--status S] [--limit N]  # PR-A Day 5 (治理可视化)
   gc-stale [--dry-run|--gc]               # PR-A Day 4
+  orphan-scan [--dry-run|--clean]         # PR-B1 Day 1 (FS 物理孤儿，两根目录)
 
 Usage (run from apps/api directory):
 
@@ -46,10 +49,12 @@ sys.path.insert(0, str(HERE))
 from build_examples_package import file_sha256, run as run_build_examples_package  # noqa: E402
 from content_release_repo import (  # noqa: E402
     ReleaseError,
+    approve_release,
     create_release,
     deprecate_release,
     get_release,
     list_releases,
+    rollback_release,
     transition_status,
 )
 
@@ -376,6 +381,20 @@ def cmd_activate(args: argparse.Namespace) -> int:
         if not package_set:
             raise ReleaseError(f"release {rid!r} has empty package_set")
 
+        # PR-B1 Day 3: optional approval gate (env-controlled, default off).
+        # CONTENT_RELEASE_REQUIRE_APPROVAL forces approve before activate.
+        # Truthy aliases (R1#9): "true", "1", "yes", "on" — case-insensitive,
+        # whitespace-tolerant.
+        require_approval = os.environ.get(
+            "CONTENT_RELEASE_REQUIRE_APPROVAL", ""
+        ).strip().lower() in ("true", "1", "yes", "on")
+        if require_approval and not release["approved_by"]:
+            raise ReleaseError(
+                f"activate requires prior approval (env "
+                f"CONTENT_RELEASE_REQUIRE_APPROVAL is set): run "
+                f"'pipeline.py approve {rid} --approver <id>' first"
+            )
+
         with conn:
             with conn.cursor() as cur:
                 # 1. Activate this release's manifests
@@ -451,6 +470,136 @@ def cmd_revoke(args: argparse.Namespace) -> int:
         print(f"  deactivated {deactivated} manifest(s)")
         print(f"  transition: {release['status']} → revoked")
         print(f"  reason: {reason}")
+        return 0
+    except ReleaseError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+
+def cmd_rollback(args: argparse.Namespace) -> int:
+    """PR-B1 Day 2 — rollback to a deprecated release.
+
+    Flow:
+      1. Validate target.status == 'deprecated'
+      2. Validate ALL target.package_set manifests' file_url:
+         - NULL/empty: ReleaseError (manifest API would skip; client gets nothing)
+         - http(s)://:  allow (real CDN, can't verify locally)
+         - file:// / local://: file MUST exist on FS
+      3. stdin confirm unless --yes
+      4. with conn: rollback_release()
+         (helper handles multi-active sanity, demote+promote atomically)
+
+    Exit codes (R1#4 review-adopted: business errors → 1):
+      0 = success
+      1 = ReleaseError (any business error including FS missing, NULL file_url)
+      2 = connection / programming errors
+    """
+    from gc_stale import _resolve_local_path
+
+    conn = _connect_or_die()
+    if conn is None:
+        return 2
+
+    rid = args.release_id
+    reason = args.reason
+
+    try:
+        target = get_release(conn, rid)
+        if target is None:
+            raise ReleaseError(f"target release {rid!r} not found")
+        if target["status"] != "deprecated":
+            raise ReleaseError(
+                f"rollback only allowed from 'deprecated', "
+                f"got {target['status']!r} for {rid!r}"
+            )
+
+        # FS pre-check on target's package_set
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, file_url FROM content_manifest "
+                "WHERE id = ANY(%s)",
+                (target["package_set"],),
+            )
+            rows = cur.fetchall()
+
+        for mid, url in rows:
+            if not url:
+                # NULL/empty: API would skip → reject (R2#3 review-adopted)
+                raise ReleaseError(
+                    f"manifest {mid!r} has NULL file_url; rollback would activate "
+                    f"a release whose package the API can't serve. Fix data or "
+                    f"create a fresh release."
+                )
+            if url.startswith("http://") or url.startswith("https://"):
+                continue  # real CDN: can't verify locally, allow
+            local = _resolve_local_path(url, Path.cwd())
+            if local is None:
+                raise ReleaseError(
+                    f"manifest {mid!r} has unresolvable file_url: {url!r}"
+                )
+            if not local.exists():
+                raise ReleaseError(
+                    f"manifest {mid!r} file missing on FS: {local} "
+                    f"(possibly removed by gc-stale; rollback aborted)"
+                )
+
+        if not args.yes:
+            sys.stderr.write(
+                f"About to rollback release {rid!r} (currently 'deprecated'):\n"
+                f"  - target {rid!r} → 'active' (manifests is_active=true)\n"
+                f"  - any current active release → 'deprecated' "
+                f"(manifests is_active=false)\n"
+                f"  reason: {reason}\n"
+                f"Type 'y' to confirm: "
+            )
+            sys.stderr.flush()
+            line = sys.stdin.readline().strip().lower()
+            if line != "y":
+                print("aborted", file=sys.stderr)
+                return 1
+
+        with conn:
+            rollback_release(conn, rid, reason)
+
+        print(f"  [OK] rollback to {rid!r}. reason: {reason}")
+        return 0
+    except ReleaseError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    """PR-B1 Day 3 — set approved_by on a validated release.
+
+    Approve is purely an audit annotation: it records who signed off on
+    the release without changing its status. The CONTENT_RELEASE_REQUIRE_APPROVAL
+    env var gates whether activate later requires approved_by to be non-NULL.
+
+    Exit codes (PR-A 多数对齐):
+      0 = success
+      1 = ReleaseError (not found / not validated / approver invalid / race)
+      2 = connection error
+    """
+    conn = _connect_or_die()
+    if conn is None:
+        return 2
+
+    rid = args.release_id
+    approver = args.approver
+    note = args.note
+
+    try:
+        with conn:
+            approve_release(conn, rid, approver, note)
+        approver_clean = (approver or "").strip()
+        msg = f"  [OK] release {rid!r} approved by {approver_clean!r}"
+        if note:
+            msg += f". note: {note}"
+        print(msg)
         return 0
     except ReleaseError as e:
         print(f"ERROR: {e}", file=sys.stderr)
@@ -570,6 +719,29 @@ def cmd_gc_stale(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_orphan_scan(args: argparse.Namespace) -> int:
+    """PR-B1 Day 1 — FS orphan scan.
+
+    Two-root: cdn-mock (audio_assets.url) + audio-pipeline-staging
+    (content_manifest.file_url). Default --dry-run; --clean to delete.
+    """
+    if args.dry_run and args.clean:
+        print(
+            "ERROR: --dry-run and --clean are mutually exclusive",
+            file=sys.stderr,
+        )
+        return 2
+    from orphan_scan import run as run_orphan_scan
+
+    return run_orphan_scan(
+        cdn_mock_dir=Path(args.cdn_mock_dir).resolve(),
+        staging_dir=Path(args.staging_dir).resolve(),
+        dry_run=not args.clean,  # clean reverses default
+        clean=args.clean,
+        scope=args.scope,
+    )
+
+
 # =============================================================================
 # Argument parser
 # =============================================================================
@@ -657,6 +829,41 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Audit log reason (default 'revoke cmd')")
     p_revoke.set_defaults(func=cmd_revoke)
 
+    # ── rollback (PR-B1 Day 2) ────────────────────────────────────────────
+    p_rollback = sub.add_parser(
+        "rollback",
+        help="Rollback to a deprecated release (deprecated → active; "
+             "current active → deprecated)",
+    )
+    p_rollback.add_argument("release_id")  # positional, matches validate/activate/revoke/deprecate
+    p_rollback.add_argument(
+        "--reason", required=True,
+        help="Audit log reason (required for governance trail)",
+    )
+    p_rollback.add_argument(
+        "--yes", action="store_true",
+        help="Skip stdin confirmation (CI use)",
+    )
+    p_rollback.set_defaults(func=cmd_rollback)
+
+    # ── approve (PR-B1 Day 3) ─────────────────────────────────────────────
+    p_approve = sub.add_parser(
+        "approve",
+        help="Mark a validated release as approved (gates activate when "
+             "CONTENT_RELEASE_REQUIRE_APPROVAL is set)",
+    )
+    p_approve.add_argument("release_id")  # positional
+    p_approve.add_argument(
+        "--approver", required=True,
+        help="Approver identifier (free-form string, max 64 chars; future "
+             "PR-B3 may bind to a user table)",
+    )
+    p_approve.add_argument(
+        "--note", default=None,
+        help="Optional approval note (audit log)",
+    )
+    p_approve.set_defaults(func=cmd_approve)
+
     # ── deprecate (Day 5) ─────────────────────────────────────────────────
     p_deprecate = sub.add_parser(
         "deprecate",
@@ -715,6 +922,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="CDN mock root (relative to cwd, default 'cdn-mock')",
     )
     p_gc.set_defaults(func=cmd_gc_stale)
+
+    # ── orphan-scan (PR-B1 Day 1) ─────────────────────────────────────────
+    p_orphan = sub.add_parser(
+        "orphan-scan",
+        help="Scan FS for files not referenced by PG (filesystem orphan, two-root)",
+    )
+    p_orphan.add_argument(
+        "--dry-run", action="store_true",
+        help="(default) print orphan candidates only",
+    )
+    p_orphan.add_argument(
+        "--clean", action="store_true",
+        help="Actually delete orphans (mutually exclusive with --dry-run)",
+    )
+    p_orphan.add_argument(
+        "--cdn-mock-dir", default="cdn-mock",
+        help="CDN mock root for audio_assets URLs (default cdn-mock)",
+    )
+    p_orphan.add_argument(
+        "--staging-dir", default="audio-pipeline-staging",
+        help="Staging dir for content_manifest URLs (default audio-pipeline-staging)",
+    )
+    p_orphan.add_argument(
+        "--scope", default="all",
+        choices=["audio", "packages", "all"],
+        help="Limit scan target (default 'all')",
+    )
+    p_orphan.set_defaults(func=cmd_orphan_scan)
 
     return parser
 

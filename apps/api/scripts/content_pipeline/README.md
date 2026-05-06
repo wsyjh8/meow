@@ -12,19 +12,22 @@ PR-A 期间 4 个旧脚本保留为 wrapper / 兼容层，PR-D 之后再删。
 
 | 子命令 | 阶段 | 写? | 描述 |
 |---|---|---|---|
-| `build-examples-package` | 准备 | 写 FS | 生成 `examples-{book}@vN` package + checksum |
+| `build-examples-package` | 准备 | 写 FS | 生成 `examples-{book}` package + checksum |
 | `create-release` | 治理 | 写 PG | INSERT content_release status='draft' |
 | `publish-manifest` | 治理 | 写 PG | UPSERT content_manifest，关联 release（**仅 draft state**） |
 | `validate` | 治理 | 写 PG | draft → validated（强制 package_set ↔ manifest.release_id 对齐） |
-| `activate` | 治理 | 写 PG | validated → active + cascade 旧 manifest is_active |
+| `approve` ⭐ B1 Day 3 | 治理 | 写 PG | 写 approved_by + audit log（**仅 env CONTENT_RELEASE_REQUIRE_APPROVAL=true 时为 activate 前置；默认可跳过**） |
+| `activate` | 治理 | 写 PG | validated → active + cascade 旧 manifest is_active；env truthy 时校验 approved_by |
 | `deprecate` ⭐ Day 5 | 治理 | 写 PG | active → deprecated（软下线，不动 manifest.is_active） |
-| `revoke` | 治理 | 写 PG | active/deprecated → revoked（硬撤回，cascade is_active=false） |
+| `rollback` ⭐ B1 Day 2 | 治理 | 写 PG | deprecated → active（同时把当前 active demote 回 deprecated；revoked 不可恢复） |
+| `revoke` | 治理 | 写 PG | active/deprecated → revoked（硬撤回，cascade is_active=false，不可逆） |
 | `list-releases` ⭐ Day 5 | 可视化 | 只读 | 表格输出 release 列表 |
-| `gc-stale` | 运维 | 写 PG + FS | 两阶段 best-effort GC（superseded → eligible_for_gc → deleted） |
+| `gc-stale` | 运维 | 写 PG + FS | PG 状态机驱动 GC（cdn-mock 范围；superseded → eligible_for_gc → deleted） |
+| `orphan-scan` ⭐ B1 Day 1 | 运维 | 写 FS | FS 物理孤儿扫描（cdn-mock + audio-pipeline-staging 双根 + 白名单） |
 
 ## State machines
 
-### content_release
+### content_release（基础流）
 
 ```
    create-release
@@ -34,15 +37,36 @@ PR-A 期间 4 个旧脚本保留为 wrapper / 兼容层，PR-D 之后再删。
         │                                  validated 后 package_set 冻结)
         │ validate
         ▼
-   [validated]
-        │ activate ─────▶ (cascade: 同 package_name 旧 manifest is_active=false)
+   [validated]            ←── (approve 写 approved_by 字段；非状态转换)
+        │
+        │ activate (env CONTENT_RELEASE_REQUIRE_APPROVAL truthy 时校验 approved_by)
+        │ + cascade 同 package_name 旧 manifest is_active=false
         ▼
-     [active] ──── deprecate ────▶ [deprecated]   (软下线；manifest.is_active 不变)
-        │                                │
-        │ revoke                         │ revoke
-        ▼                                ▼
-    [revoked]                        [revoked]   (硬撤回；cascade is_active=false；不可逆)
+     [active]
+        │
+        ├─── deprecate ──▶ [deprecated]
+        │                       │
+        │                       │ revoke
+        │ revoke                ▼
+        ▼                   [revoked]
+    [revoked]
 ```
+
+### content_release（rollback 旁注）
+
+```
+                           rollback
+   [deprecated] ──────────────────────────▶ [active]   ✅ 唯一允许
+        ▲                                        │
+        │ (同时 demote 当前 active)              │
+        └────────────────────────────────────────┘
+
+   [revoked] ─────╳─────▶ [active]   ❌ 永远不允许（revoke 是不可逆硬撤回）
+```
+
+注：
+- `approve` 不是状态转换，仅写 `approved_by` 字段 + audit log entry（form `from=to=validated`）
+- `rollback` 仅 deprecated → active；revoked 永远不能恢复（操作员要恢复需 `create-release` 起新 release）
 
 ### audio_assets GC
 
@@ -51,6 +75,10 @@ PR-A 期间 4 个旧脚本保留为 wrapper / 兼容层，PR-D 之后再删。
                                                                        │
                                                                        └─ FS 删除失败 → 留 eligible_for_gc，下次重试
 ```
+
+`orphan-scan` 与 `gc-stale` 互补：`gc-stale` 由 PG 状态机驱动（PG 有行 + status='eligible_for_gc' → 删 FS），
+`orphan-scan` 由 FS 驱动（FS 有文件 + PG 无引用 → 删 FS）。两者目录不同：
+`gc-stale` 仅扫 cdn-mock；`orphan-scan` 同时扫 cdn-mock 和 audio-pipeline-staging。
 
 参考 v0.3 §B.4.5（release 状态机）/ §B.7.3（不可逆原则）
 
@@ -437,6 +465,27 @@ en 变动通常应生成新 stable_id。
 处置：重跑 `build-examples-package`；如真要变动 stable_id 集合，遵循 "老 release deprecate +
 新 release active" 流程。
 
+### activate 报 "activate requires prior approval (env CONTENT_RELEASE_REQUIRE_APPROVAL is set)"
+
+含义：环境变量 `CONTENT_RELEASE_REQUIRE_APPROVAL` 为 truthy（true/1/yes/on，大小写不敏感、空格容忍），
+但 release 的 `approved_by` 字段为空。
+
+处置：先 `pipeline.py approve <release_id> --approver <id>` 写入 approver，再 activate。
+临时关闭审批（不推荐）：`unset CONTENT_RELEASE_REQUIRE_APPROVAL` 或设为 false。
+
+### approve 报 "approver must be non-empty / non-whitespace"
+
+含义：CLI 收到 `--approver ""` 或 `"   "`（纯空格）。
+
+处置：传非空字符串，长度 ≤ 64（与 schema VARCHAR(64) 对齐）。
+
+### rollback 报 "manifest ... file missing on FS"
+
+含义：rollback target release 的某个 manifest 文件已被 gc-stale 或手动删除。
+
+处置：要么找回文件（从备份），要么放弃此次 rollback，用 `create-release` 起新 release 重发布。
+**不要**手动 INSERT 假文件——content_hash 校验在 manifest API 路径里依赖文件真实性。
+
 ## 设计要点
 
 1. **content_release 是治理 SSOT**（v0.3 §B.4.5）。`package_set` 是 denormalized
@@ -467,6 +516,20 @@ en 变动通常应生成新 stable_id。
 
 6. **file_url 占位**: Day 3 仅支持 `file://` 本地路径。真 CDN 上传 + https URL
    留 Day 5 / PR-B。
+
+## v0.3 PR-B1 实装总览
+
+PR-B1 "发布侧补全" 4 天交付，基于 PR-A 已建立的 release 状态机基座扩展：
+
+| Day | 子命令 / 改动 | 影响 |
+|---|---|---|
+| 1 | `orphan-scan` | 双根 FS 扫描（cdn-mock + audio-pipeline-staging）+ 白名单 4 条防误删 |
+| 2 | `rollback` | 状态机加 deprecated → active 一条；不允许 revoked → active |
+| 3 | `approve` + activate gating | 治理审批（默认 false 向后兼容；approved_by 字段已在 PR-A 留位） |
+| 4 | README + PR 描述 + smoke | 文档收尾 + 拆分 sub-smoke 验证 |
+
+详见 `docs/design/v0.3_PR-B_scope_v0.1.md` / `docs/design/pr-b1.md` /
+`docs/design/pr-b1-day{1,2,3,4}-*.md`。
 
 ## Reference
 
