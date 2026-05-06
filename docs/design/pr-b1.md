@@ -70,7 +70,7 @@ CLI 入口、所有运维场景都有工具支持。
   4. target → `active` + cascade is_active=true
   5. 写双方 activation_log
   6. 整个 with conn: 包事务
-- `pipeline.py rollback --to <id> [--reason] [--yes]`
+- `pipeline.py rollback <release_id> --reason TXT [--yes]` (positional, 与 validate/activate/revoke/deprecate 一致)
 - e2e（6+ cases）：
   - 完整 rollback 链：active(v2) + deprecated(v1) → rollback v1 → v2 deprecated, v1 active → API 反查
   - rollback 到 draft 拒绝
@@ -114,7 +114,7 @@ CLI 入口、所有运维场景都有工具支持。
 - PR_DESCRIPTION.md 写到 `C:\Users\lenovo\.claude\PR_DESCRIPTION_PR-B1.md`
 - 总 commit + push
 
-期望 e2e 总数：34 (PR-A baseline) + Day1(2) + Day2(8) + Day3(5) = **49 cases**（v0.2 评审采纳 R1#6 修正）。
+期望 e2e 总数：34 (PR-A baseline) + Day1(2) + Day2(8) + Day3(3) = **47 cases**（v0.3 评审采纳 R1#10 修正：Day 3 e2e 从 +5 收紧到 +3，gating 由 CLI smoke 兜底）。
 
 ## 关键文件
 
@@ -128,7 +128,7 @@ CLI 入口、所有运维场景都有工具支持。
 - `apps/api/scripts/content_pipeline/pipeline.py` (+3 子命令)
 - `apps/api/scripts/content_pipeline/content_release_repo.py` (+1 VALID_TRANSITIONS 条目 / +2 helper)
 - `apps/api/scripts/content_pipeline/README.md` (子命令表 / 状态机图 / troubleshooting)
-- `apps/api/test/pg-regression.e2e-spec.ts` (+15 cases: Day1=2 / Day2=8 / Day3=5)
+- `apps/api/test/pg-regression.e2e-spec.ts` (+13 cases: Day1=2 / Day2=8 / Day3=3)
 
 ### 不动
 - `apps/api/src/controllers/content-manifest.controller.ts`（PR-A 已稳定）
@@ -172,9 +172,9 @@ CLI 入口、所有运维场景都有工具支持。
 - [ ] 状态机扩展（**仅 deprecated → active** 一条）e2e 完整覆盖
 - [ ] **revoked → active rollback 被拒绝**（关键 case，防退化）
 - [ ] orphan-scan 两根目录都覆盖（audio + package）
-- [ ] activate gating 双路径（env on/off）e2e 覆盖
+- [ ] activate gating 双路径（env on/off）**CLI smoke 覆盖**（e2e 不能跨进程测 Python gating，方案 A）
 - [ ] README 9 → 12 子命令表 + rollback 状态机图
-- [ ] e2e 49/50 通过（pre-existing /me/today 仍 1 个不阻塞）
+- [ ] e2e **47 cases，46 pass + 1 pre-existing /me/today drift**（不阻塞）
 - [ ] 端到端 CLI smoke 全过（在 Day 4 列详细命令）
 - [ ] PR 描述 ready，可手工开 PR
 - [ ] PR-A 既有契约零破坏（dual-condition / canonical_json / publish-manifest draft-only / repo helper 不 commit）
