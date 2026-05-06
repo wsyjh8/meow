@@ -22,8 +22,11 @@ import {
   BadRequestException,
   Controller,
   Get,
+  InternalServerErrorException,
   Query,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { getPool } from '../infrastructure/postgres/client';
 
 interface ManifestPackage {
@@ -95,15 +98,61 @@ function deriveCompression(fileUrl: string): string | null {
   return null;
 }
 
+/**
+ * PR-B3 Day 1 (D3) — Dev/local mode only. Transforms `file://...` URLs
+ * into `http://...` URLs the Flutter client can fetch via HTTP GET.
+ *
+ * Maps:
+ *   file:///*\/audio-pipeline-staging/{file}    → http://{host}/cdn/staging/{file}
+ *   file:///*\/cdn-mock/{rel}                   → http://{host}/cdn/{rel}
+ *
+ * Other file:// shapes are returned unchanged so the client throws
+ * "URL not resolvable" — easier to spot a server-side path drift than
+ * silently masking it.
+ *
+ * Production calls this with `isProd=true` short-circuited at the call
+ * site, so this function is never invoked there.
+ *
+ * Note: '@' in URL path is RFC 3986-legal (e.g. examples-zk@v1.jsonl.gz);
+ * express serve-static handles it correctly — no encoding needed.
+ */
+function transformFileUrlForDev(fileUrl: string, host: string): string {
+  if (!fileUrl.startsWith('file://')) return fileUrl;
+  if (fileUrl.includes('/audio-pipeline-staging/')) {
+    const fileName = fileUrl.split('/audio-pipeline-staging/').pop();
+    return `http://${host}/cdn/staging/${fileName}`;
+  }
+  if (fileUrl.includes('/cdn-mock/')) {
+    const rel = fileUrl.split('/cdn-mock/').pop();
+    return `http://${host}/cdn/${rel}`;
+  }
+  return fileUrl;
+}
+
 @Controller('content')
 export class ContentManifestController {
   @Get('manifest')
   async getManifest(
     @Query('since_release') sinceRelease?: string,
     @Query('app_version') appVersion?: string,
+    @Req() req?: Request,
   ): Promise<ManifestResponse> {
     const pool = getPool();
     const isProd = process.env.NODE_ENV === 'production';
+
+    // PR-B3 Day 1 (D3): in dev/local mode we transform file:// URLs to
+    // http:// URLs the Flutter client can fetch. Strict host check —
+    // HTTP/1.1 mandates a Host header; missing it is an abnormal request,
+    // and we throw 500 rather than fall back to a hard-coded host:port
+    // (which would be wrong for clients on other network segments).
+    let devHost: string | null = null;
+    if (!isProd) {
+      const h = req?.get('host');
+      if (!h) {
+        throw new InternalServerErrorException('Host header missing');
+      }
+      devHost = h;
+    }
 
     // Strict app_version validation (review-driven)
     let parsedAppVersion: [number, number, number] | null = null;
@@ -192,13 +241,21 @@ export class ContentManifestController {
         }
       }
 
+      // PR-B3 Day 1 (D3): dev/local mode transforms file:// → http://;
+      // production short-circuits to row.file_url (production already
+      // skipped file:// rows above, so this is non-file:// http(s) URLs).
+      const outFileUrl =
+        isProd || devHost === null
+          ? row.file_url
+          : transformFileUrlForDev(row.file_url, devHost);
+
       packages.push({
         package_id: row.package_id,
         package_kind: row.package_kind,
         package_name: row.package_name,
         book_id: deriveBookId(row.package_name, row.package_kind),
         content_version: row.content_version,
-        file_url: row.file_url,
+        file_url: outFileUrl,
         checksum_sha256: row.checksum_sha256,
         // BIGINT in PG → string in node-pg by default; explicit Number()
         // is safe for our range (manifest sizes well under 2^53).

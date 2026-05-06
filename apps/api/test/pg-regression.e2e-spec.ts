@@ -866,6 +866,226 @@ describeIfPg('PG Backend Regression (e2e)', () => {
     });
   });
 
+  // ─── PR-B3 Day 1 ─────────────────────────────────────────────────────
+  // D3 收口: dev mode transforms file:/// URLs to http:// so the Flutter
+  // client can fetch via HTTP GET. These cases test only the controller
+  // string-output behavior. The actual /cdn/staging static route lives in
+  // main.ts useStaticAssets, which is NOT exercised by Test.createTestingModule
+  // — that path is covered by manual smoke step 3 (curl + md5sum).
+  describe('GET /api/v1/content/manifest — PR-B3 dev URL transform', () => {
+    const TEST_PREFIX = 'test-prb3-d1-';
+
+    async function cleanup() {
+      const pool = getPool();
+      await pool.query(
+        `DELETE FROM content_manifest WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+      await pool.query(
+        `DELETE FROM content_release WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+    }
+
+    beforeEach(cleanup);
+    afterEach(cleanup);
+
+    async function seedRelease(
+      releaseId: string,
+      status: string,
+      activatedAt: string | null,
+      packageSet: string[],
+    ) {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO content_release
+           (release_id, status, activated_at, revoked_at, package_set, generated_by)
+         VALUES ($1, $2, $3, NULL, $4::jsonb, 'e2e-prb3-d1')`,
+        [releaseId, status, activatedAt, JSON.stringify(packageSet)],
+      );
+    }
+
+    async function seedManifest(
+      manifestId: string,
+      packageName: string,
+      packageKind: string,
+      contentVersion: string,
+      fileUrl: string,
+      checksum: string,
+      sizeBytes: number,
+      isActive: boolean,
+      releaseId: string,
+    ) {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO content_manifest
+           (id, package_name, package_kind, content_version, file_url,
+            checksum_sha256, size_bytes, min_app_version, is_active, release_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, '0.0.0', $8, $9)`,
+        [
+          manifestId,
+          packageName,
+          packageKind,
+          contentVersion,
+          fileUrl,
+          checksum,
+          sizeBytes,
+          isActive,
+          releaseId,
+        ],
+      );
+    }
+
+    it('dev mode: file:///audio-pipeline-staging/ → http://host/cdn/staging/', async () => {
+      const releaseId = `${TEST_PREFIX}active`;
+      const packageName = `${TEST_PREFIX}examples`;
+      const manifestId = `${packageName}@v1`;
+
+      await seedRelease(
+        releaseId,
+        'active',
+        new Date(Date.now() - 3600 * 1000).toISOString(),
+        [manifestId],
+      );
+      await seedManifest(
+        manifestId,
+        packageName,
+        'examples',
+        'v1',
+        // Windows-shaped file:// — controller's transform splits on
+        // '/audio-pipeline-staging/' so the leading drive letter is fine.
+        'file:///D:/test/audio-pipeline-staging/test-prb3-d1-examples@v1.jsonl.gz',
+        'sha256:dev-transform',
+        12345,
+        true,
+        releaseId,
+      );
+
+      // Default NODE_ENV != 'production' → dev mode
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/content/manifest')
+        .expect(200);
+
+      const found = res.body.packages.find(
+        (p: { package_id: string }) => p.package_id === manifestId,
+      );
+      expect(found).toBeDefined();
+      // '@' in URL path is RFC 3986-legal; not encoded.
+      expect(found.file_url).toMatch(
+        /^http:\/\/[^/]+\/cdn\/staging\/test-prb3-d1-examples@v1\.jsonl\.gz$/,
+      );
+    });
+
+    it('dev mode: file:///cdn-mock/ → http://host/cdn/', async () => {
+      const releaseId = `${TEST_PREFIX}cdn-mock`;
+      const packageName = `${TEST_PREFIX}cdnmock`;
+      const manifestId = `${packageName}@v1`;
+
+      await seedRelease(
+        releaseId,
+        'active',
+        new Date(Date.now() - 3600 * 1000).toISOString(),
+        [manifestId],
+      );
+      await seedManifest(
+        manifestId,
+        packageName,
+        'examples',
+        'v1',
+        'file:///D:/test/cdn-mock/audio/v1/test-prb3-d1-cdnmock@v1.jsonl.gz',
+        'sha256:dev-cdn-mock',
+        67890,
+        true,
+        releaseId,
+      );
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/content/manifest')
+        .expect(200);
+
+      const found = res.body.packages.find(
+        (p: { package_id: string }) => p.package_id === manifestId,
+      );
+      expect(found).toBeDefined();
+      expect(found.file_url).toMatch(
+        /^http:\/\/[^/]+\/cdn\/audio\/v1\/test-prb3-d1-cdnmock@v1\.jsonl\.gz$/,
+      );
+    });
+  });
+
+  describe('GET /api/v1/content/manifest — PR-B3 production guard', () => {
+    // v0.2 #8 (R1#5) review-adopted: NODE_ENV override is wrapped in a
+    // dedicated describe + beforeEach/afterEach to avoid cross-pollination
+    // with the dev-transform describe above (jest does not guarantee ordering
+    // of describe-internal it() blocks across files but we still want this
+    // self-contained).
+    const TEST_PREFIX = 'test-prb3-d1-prod-';
+    let oldEnv: string | undefined;
+
+    async function cleanup() {
+      const pool = getPool();
+      await pool.query(
+        `DELETE FROM content_manifest WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+      await pool.query(
+        `DELETE FROM content_release WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+    }
+
+    beforeEach(async () => {
+      oldEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      await cleanup();
+    });
+    afterEach(async () => {
+      await cleanup();
+      if (oldEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = oldEnv;
+      }
+    });
+
+    it('production mode still skips file:// (PR-A behavior unchanged)', async () => {
+      const releaseId = `${TEST_PREFIX}guard`;
+      const packageName = `${TEST_PREFIX}examples`;
+      const manifestId = `${packageName}@v1`;
+
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO content_release
+           (release_id, status, activated_at, revoked_at, package_set, generated_by)
+         VALUES ($1, 'active', $2, NULL, $3::jsonb, 'e2e-prb3-d1-prod')`,
+        [
+          releaseId,
+          new Date(Date.now() - 3600 * 1000).toISOString(),
+          JSON.stringify([manifestId]),
+        ],
+      );
+      await pool.query(
+        `INSERT INTO content_manifest
+           (id, package_name, package_kind, content_version, file_url,
+            checksum_sha256, size_bytes, min_app_version, is_active, release_id)
+         VALUES ($1, $2, 'examples', 'v1', $3, 'sha256:prod-skip', 999, '0.0.0', true, $4)`,
+        [
+          manifestId,
+          packageName,
+          'file:///D:/test/audio-pipeline-staging/test-prb3-d1-prod-examples@v1.jsonl.gz',
+          releaseId,
+        ],
+      );
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/content/manifest')
+        .expect(200);
+
+      const found = res.body.packages.find(
+        (p: { package_id: string }) => p.package_id === manifestId,
+      );
+      // production: file:// rows are skipped (PR-A既有行为) — must NOT be
+      // returned via http:// transform either.
+      expect(found).toBeUndefined();
+    });
+  });
+
   describe('Release state-machine & API contract (PR-A Day 5)', () => {
     // SQL-driven state changes; CLI subcommand chain is covered by Step 6
     // PowerShell smoke (plan 验收强制必跑). Naming follows R1.1 review note —
