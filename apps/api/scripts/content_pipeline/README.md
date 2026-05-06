@@ -8,6 +8,52 @@
 
 PR-A 期间 4 个旧脚本保留为 wrapper / 兼容层，PR-D 之后再删。
 
+## Subcommand reference
+
+| 子命令 | 阶段 | 写? | 描述 |
+|---|---|---|---|
+| `build-examples-package` | 准备 | 写 FS | 生成 `examples-{book}@vN` package + checksum |
+| `create-release` | 治理 | 写 PG | INSERT content_release status='draft' |
+| `publish-manifest` | 治理 | 写 PG | UPSERT content_manifest，关联 release（**仅 draft state**） |
+| `validate` | 治理 | 写 PG | draft → validated（强制 package_set ↔ manifest.release_id 对齐） |
+| `activate` | 治理 | 写 PG | validated → active + cascade 旧 manifest is_active |
+| `deprecate` ⭐ Day 5 | 治理 | 写 PG | active → deprecated（软下线，不动 manifest.is_active） |
+| `revoke` | 治理 | 写 PG | active/deprecated → revoked（硬撤回，cascade is_active=false） |
+| `list-releases` ⭐ Day 5 | 可视化 | 只读 | 表格输出 release 列表 |
+| `gc-stale` | 运维 | 写 PG + FS | 两阶段 best-effort GC（superseded → eligible_for_gc → deleted） |
+
+## State machines
+
+### content_release
+
+```
+   create-release
+        │
+        ▼
+     [draft] ──────publish-manifest──────▶ (在 draft 时 UPSERT manifest，
+        │                                  validated 后 package_set 冻结)
+        │ validate
+        ▼
+   [validated]
+        │ activate ─────▶ (cascade: 同 package_name 旧 manifest is_active=false)
+        ▼
+     [active] ──── deprecate ────▶ [deprecated]   (软下线；manifest.is_active 不变)
+        │                                │
+        │ revoke                         │ revoke
+        ▼                                ▼
+    [revoked]                        [revoked]   (硬撤回；cascade is_active=false；不可逆)
+```
+
+### audio_assets GC
+
+```
+[ready] ──新版 publish──▶ [superseded] ──grace_days_promote──▶ [eligible_for_gc] ──grace_days_delete──▶ [deleted]
+                                                                       │
+                                                                       └─ FS 删除失败 → 留 eligible_for_gc，下次重试
+```
+
+参考 v0.3 §B.4.5（release 状态机）/ §B.7.3（不可逆原则）
+
 ## Setup
 
 ```bash
@@ -174,9 +220,54 @@ python scripts/content_pipeline/pipeline.py gc-stale --gc \
 - ❌ **不处理 filesystem orphan**（cdn-mock 里有文件但 PG audio_assets 没行
   对应它）—— 这类需要单独的 `orphan-scan` 子命令，留 Day 5 / PR-B
 
-### Day 5 (stub)
+### Day 5 实装
 
-- 完整 release 流程 e2e + filesystem orphan-scan
+#### `deprecate` ✅ （**软下线**，不是 revoke）
+
+active release 的软下线入口。state 变为 `deprecated` 后 manifest API 不再返回该
+release 下的包，但 `content_manifest.is_active` 保留为 true，方便未来 PR-B
+`rollback --to <release>` 重新激活。
+
+```bash
+python scripts/content_pipeline/pipeline.py deprecate rel-2026-05-05-001 \
+  --reason "下个版本即将上线，先做软切" \
+  --yes
+```
+
+参数：
+- `release_id` 必填
+- `--reason <txt>` **必填**（写入 activation_log，治理审计）
+- `--yes` 跳过 stdin 二次确认（CI 用）
+
+**副作用契约**（v0.3 PR-A Day 5 评审采纳 R2.3）：
+- 仅改 `content_release.status` + 写 activation_log entry
+- **不动** `content_manifest.is_active`
+- manifest API 自然不返回（dual-condition 卡 status='active'）
+
+`deprecate` vs `revoke` 区别：
+- `deprecate`：软下线，manifest 行保留 active；可被 PR-B rollback 重新激活
+- `revoke`：硬撤回，manifest 行 cascade `is_active=false`，不可逆
+
+#### `list-releases` ✅
+
+治理可视化：表格列出 release 概览。只读。
+
+```bash
+\ 全部
+python scripts/content_pipeline/pipeline.py list-releases
+
+\ 仅 active
+python scripts/content_pipeline/pipeline.py list-releases --status active
+
+\ 限制 10 行
+python scripts/content_pipeline/pipeline.py list-releases --limit 10
+```
+
+参数：
+- `--status {draft|validated|active|deprecated|revoked}` 可选过滤
+- `--limit N` 范围 [1, 500]，默认 50；越界报错退出码 2
+
+排序：`created_at DESC, release_id DESC`（二级键防同秒抖动 R2.11）。
 
 ## API: `GET /api/v1/content/manifest` ✅ Day 4 实装
 
@@ -284,11 +375,67 @@ python scripts/content_pipeline/pipeline.py validate rel-001
 # 5. activate (validated → active)
 python scripts/content_pipeline/pipeline.py activate rel-001
 
+# 6. 治理可视化
+python scripts/content_pipeline/pipeline.py list-releases --status active
+
 # 后续如要替换:
-# 6. 创建新 release，publish 新版本，validate，activate
-#    → 自动 cascade deactivate 旧版本
-# 7. 或紧急下线: revoke rel-001
+# 7. 创建新 release，publish 新版本，validate，activate
+#    → 自动 cascade deactivate 旧 manifest
+# 8a. 老 release 软下线（保留可 rollback）:
+#     python scripts/content_pipeline/pipeline.py deprecate rel-001 --reason "...
+" --yes
+# 8b. 或紧急硬撤回:
+#     python scripts/content_pipeline/pipeline.py revoke rel-001 --reason "...
+"
 ```
+
+## Troubleshooting
+
+### `validate` 报 "package_set ↔ release_id mismatch"
+
+含义：`content_release.package_set` 与 `content_manifest.release_id` 双向一致性失败。
+真实检查在 `pipeline.py cmd_validate()` Step 3-4（forward + reverse 双向 set diff）。
+
+原因：手动 SQL 改过其中一边、或 `publish-manifest` 用错 release_id。
+
+处置：跑 `list-releases` 找 release，SELECT `package_set` + 对应 manifest 行，手工 UPDATE 对齐后重跑 `validate`。
+
+### `publish-manifest` 报 "publish-manifest only allowed in 'draft' state"
+
+含义：尝试在 validated / active / deprecated / revoked release 上添加 manifest。
+
+原因：validated 后 package_set 冻结（治理硬约束，pipeline.py:168 状态守卫）。
+
+处置：要么改加到新 release（create-release + publish + validate），要么 revoke
+老 release 后从头来过。
+
+### `gc-stale` 总是报 "skipped {n}: file not resolvable"
+
+原因：`file_url` 是 `http://...//cdn/` 形式但 `cdn-mock` 路径不对，或 `file:///`
+在 Windows 下 drive letter 没正确剥离。
+
+处置：检查 `--cdn-mock-dir` 参数；`--dry-run` 模式下完整列出每个 url 的 resolved path。
+
+### 完整 publish 流程被 stdin 卡住
+
+原因：`activate` / `deprecate` 默认 stdin 二次确认；`gc-stale` 默认 `--dry-run`，
+需 `--gc` 显式开。
+
+处置：CI 加 `--yes` / `--gc`。
+
+### `content_hash` mismatch
+
+含义：`build-examples-package` 算出的 hash 与 PG 中持久值不一致。
+
+真实算法位置：`apps/api/scripts/audio_pipeline/reference.py`
+- `canonical_json_bytes()` line 74-97
+- `compute_example_content_hash()` line 176-230
+
+原因：cn / difficulty / ordinal / status 等 package-visible 字段变动会让 content_hash 变；
+en 变动通常应生成新 stable_id。
+
+处置：重跑 `build-examples-package`；如真要变动 stable_id 集合，遵循 "老 release deprecate +
+新 release active" 流程。
 
 ## 设计要点
 
@@ -296,11 +443,11 @@ python scripts/content_pipeline/pipeline.py activate rel-001
    snapshot，事实源是 `content_manifest.release_id`。validate 阶段强制双向对齐。
 
 2. **状态机**: draft → validated → active → deprecated/revoked
-   - draft：可改 package_set
+   - draft：可改 package_set（publish-manifest 唯一允许阶段）
    - validated：冻结，不可改 package_set；只能 activate 或重新 create
-   - active：包正在生效
-   - deprecated：保留状态机入口（active→deprecated），Day 3 无 CLI 入口（PR-B+）
-   - revoked：下线终态
+   - active：包正在生效（manifest API 仅返回此状态）
+   - deprecated：软下线（Day 5 加 CLI 入口）；manifest.is_active 保留 true 留 PR-B rollback 余地
+   - revoked：硬撤回终态；cascade is_active=false，不可逆
 
 3. **content_hash 算法**（reference.py `compute_example_content_hash`）覆盖
    所有 package-visible 字段：

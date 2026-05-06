@@ -2,14 +2,16 @@
 v0.3 PR-A 内容发布 pipeline 单一 entry。
 
 Subcommands:
-  create-release <release_id>             # PR-A Day 3 (implemented)
-  build-examples-package --book <slug>    # PR-A Day 2 (implemented)
-  publish-manifest --release ... --file ... # PR-A Day 3 (implemented)
-  validate <release_id>                   # PR-A Day 3 (implemented)
-  activate <release_id>                   # PR-A Day 3 (implemented)
-  revoke <release_id> [--reason TXT]      # PR-A Day 3 (implemented)
+  create-release <release_id>             # PR-A Day 3
+  build-examples-package --book <slug>    # PR-A Day 2
+  publish-manifest --release ... --file ... # PR-A Day 3
+  validate <release_id>                   # PR-A Day 3
+  activate <release_id>                   # PR-A Day 3
+  deprecate <release_id> --reason TXT     # PR-A Day 5 (active → deprecated 软下线)
+  revoke <release_id> [--reason TXT]      # PR-A Day 3
                                           #   注意: revoke 是撤销/下线，不是 rollback
-  gc-stale [--dry-run|--gc]               # PR-A Day 4 (stub)
+  list-releases [--status S] [--limit N]  # PR-A Day 5 (治理可视化)
+  gc-stale [--dry-run|--gc]               # PR-A Day 4
 
 Usage (run from apps/api directory):
 
@@ -45,7 +47,9 @@ from build_examples_package import file_sha256, run as run_build_examples_packag
 from content_release_repo import (  # noqa: E402
     ReleaseError,
     create_release,
+    deprecate_release,
     get_release,
+    list_releases,
     transition_status,
 )
 
@@ -455,6 +459,101 @@ def cmd_revoke(args: argparse.Namespace) -> int:
         conn.close()
 
 
+def cmd_list_releases(args: argparse.Namespace) -> int:
+    """Read-only governance overview (PR-A Day 5).
+
+    --limit clamped to [1, 500] (R2.12 review-adopted).
+    """
+    if args.limit < 1 or args.limit > 500:
+        print(
+            f"ERROR: --limit must be in [1, 500], got {args.limit}",
+            file=sys.stderr,
+        )
+        return 2
+
+    conn = _connect_or_die()
+    if conn is None:
+        return 2
+
+    try:
+        rows = list_releases(conn, status=args.status, limit=args.limit)
+    except ReleaseError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    if not rows:
+        filter_desc = f" (status={args.status!r})" if args.status else ""
+        print(f"  no releases found{filter_desc}")
+        return 0
+
+    # Plain-text table; columns sized for typical data + truncation
+    def _fmt_ts(ts) -> str:
+        return ts.strftime("%Y-%m-%d %H:%M:%S") if ts else "—"
+
+    def _trunc(s, n):
+        if s is None:
+            return ""
+        return s if len(s) <= n else s[: n - 1] + "…"
+
+    print(
+        f"{'release_id':<32}  {'status':<10}  "
+        f"{'created_at':<19}  {'activated_at':<19}  title"
+    )
+    print("-" * 100)
+    for r in rows:
+        print(
+            f"{_trunc(r['release_id'], 32):<32}  "
+            f"{r['status']:<10}  "
+            f"{_fmt_ts(r['created_at']):<19}  "
+            f"{_fmt_ts(r['activated_at']):<19}  "
+            f"{_trunc(r['title'], 40)}"
+        )
+    print(f"  ({len(rows)} row(s))")
+    return 0
+
+
+def cmd_deprecate(args: argparse.Namespace) -> int:
+    """active → deprecated 软下线 (PR-A Day 5).
+
+    副作用契约:
+      - 仅改 release.status，不动 content_manifest.is_active
+      - manifest API 自然不返回（dual-condition 卡 status='active'）
+    """
+    rid = args.release_id
+    reason = args.reason
+
+    if not args.yes:
+        sys.stderr.write(
+            f"About to deprecate release {rid!r}.\n"
+            f"  reason: {reason}\n"
+            f"  effect: release.status → 'deprecated'; "
+            f"content_manifest.is_active 不变\n"
+            f"Type 'y' to confirm: "
+        )
+        sys.stderr.flush()
+        line = sys.stdin.readline().strip().lower()
+        if line != "y":
+            print("aborted", file=sys.stderr)
+            return 1
+
+    conn = _connect_or_die()
+    if conn is None:
+        return 2
+
+    try:
+        with conn:
+            deprecate_release(conn, rid, reason)
+        print(f"  [OK] release {rid!r} deprecated. reason: {reason}")
+        return 0
+    except ReleaseError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    finally:
+        conn.close()
+
+
 def cmd_gc_stale(args: argparse.Namespace) -> int:
     # Negative grace days early fail (review-driven safety)
     if args.grace_days_promote < 0 or args.grace_days_delete < 0:
@@ -557,6 +656,38 @@ def _build_parser() -> argparse.ArgumentParser:
     p_revoke.add_argument("--reason", default=None,
                           help="Audit log reason (default 'revoke cmd')")
     p_revoke.set_defaults(func=cmd_revoke)
+
+    # ── deprecate (Day 5) ─────────────────────────────────────────────────
+    p_deprecate = sub.add_parser(
+        "deprecate",
+        help="Soft-retire an active release (active → deprecated; manifests untouched)",
+    )
+    p_deprecate.add_argument("release_id")
+    p_deprecate.add_argument(
+        "--reason", required=True,
+        help="Audit log reason (required for governance trail)",
+    )
+    p_deprecate.add_argument(
+        "--yes", action="store_true",
+        help="Skip stdin confirmation (CI use)",
+    )
+    p_deprecate.set_defaults(func=cmd_deprecate)
+
+    # ── list-releases (Day 5) ─────────────────────────────────────────────
+    p_list = sub.add_parser(
+        "list-releases",
+        help="Governance overview — table of releases (read-only)",
+    )
+    p_list.add_argument(
+        "--status", default=None,
+        choices=["draft", "validated", "active", "deprecated", "revoked"],
+        help="Filter by status; default returns all",
+    )
+    p_list.add_argument(
+        "--limit", type=int, default=50,
+        help="Max rows to return; clamped to [1, 500] (default 50)",
+    )
+    p_list.set_defaults(func=cmd_list_releases)
 
     # ── gc-stale (Day 4) ──────────────────────────────────────────────────
     p_gc = sub.add_parser(

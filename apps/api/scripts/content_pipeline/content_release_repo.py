@@ -129,3 +129,50 @@ def transition_status(
             raise ReleaseError(
                 f"transition_status race: {release_id!r} status moved during update"
             )
+
+
+def list_releases(
+    conn,
+    *,
+    status: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Governance overview list — release_id, title, status, key timestamps.
+
+    Sorted by created_at DESC, release_id DESC (二级键防同秒抖动 R2.11).
+    --limit clamping responsibility lives at the CLI layer (pipeline.py).
+
+    Returns: list of dict rows; empty list if none match.
+    """
+    if status is not None and status not in VALID_STATUSES:
+        raise ReleaseError(f"invalid status filter: {status!r}")
+
+    sql = """
+        SELECT release_id, title, status, created_at, activated_at, revoked_at
+          FROM content_release
+    """
+    params: list = []
+    if status is not None:
+        sql += " WHERE status = %s"
+        params.append(status)
+    sql += " ORDER BY created_at DESC, release_id DESC LIMIT %s"
+    params.append(limit)
+
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def deprecate_release(conn, release_id: str, reason: str) -> None:
+    """active → deprecated 软下线（评审采纳 R2.3 副作用契约写死）.
+
+    NOT commit'd — caller controls transaction.
+
+    Side-effect contract:
+      - 仅 UPDATE content_release.status (+ activation_log entry)
+      - **不动 content_manifest.is_active** —— 留给 PR-B rollback 余地
+      - manifest API 自然不返回（dual-condition 卡 release.status='active'）
+
+    Use revoke if you want hard takedown.
+    """
+    transition_status(conn, release_id, "deprecated", reason=reason)
