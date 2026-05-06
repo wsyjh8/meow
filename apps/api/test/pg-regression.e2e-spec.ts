@@ -1568,4 +1568,154 @@ describeIfPg('PG Backend Regression (e2e)', () => {
       expect(v3DemoteReason?.reason).toBe(`rollback to ${v2}: first rollback`);
     });
   });
+
+  describe('approve subcommand contract (PR-B1 Day 3)', () => {
+    // approve sets content_release.approved_by + appends activation_log entry.
+    //
+    // Note (R1#3 review-adopted): activate's CONTENT_RELEASE_REQUIRE_APPROVAL
+    // gating is implemented in cmd_activate (Python). jest setting
+    // `process.env` only affects the Node test process, not Python subprocess,
+    // so we can't truly test that gating here. Gating end-to-end is verified
+    // by the mandatory PowerShell smoke (Day 3 plan Step 4 fixtures
+    // `zk-day3-approve` for env=true paths and `zk-day3-compat` for env=false
+    // PR-A back-compat).
+    //
+    // The 3 cases below verify approve_release's SQL contract:
+    //   - happy: validated → approved_by + audit log entry
+    //   - status guard: non-validated states reject (parametrized 4 states)
+    //   - re-approval: overwrites approved_by; log preserves prior entries
+    const TEST_PREFIX = 'test-approve-';
+
+    async function cleanup() {
+      const pool = getPool();
+      await pool.query(
+        `DELETE FROM content_release WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+    }
+
+    beforeEach(cleanup);
+    afterEach(cleanup);
+
+    /** Insert a release in given state (no manifests needed for approve tests). */
+    async function seedRelease(releaseId: string, status: string) {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO content_release
+           (release_id, status, package_set, generated_by,
+            activated_at, revoked_at)
+         VALUES ($1, $2::text, '[]'::jsonb, 'e2e-day3-approve',
+                 CASE WHEN $2::text = 'active' THEN NOW() ELSE NULL END,
+                 CASE WHEN $2::text = 'revoked' THEN NOW() ELSE NULL END)`,
+        [releaseId, status],
+      );
+    }
+
+    /** Mirrors approve_release helper SQL. Used to verify PG-side contract. */
+    async function simulateApprove(
+      releaseId: string,
+      approver: string,
+      note: string | null = null,
+    ) {
+      const pool = getPool();
+      const approverClean = approver.trim();
+      if (!approverClean) {
+        throw new Error('approver must be non-empty / non-whitespace');
+      }
+      if (approverClean.length > 64) {
+        throw new Error(`approver too long (${approverClean.length} > 64)`);
+      }
+      // Status guard: only validated allowed
+      const r = await pool.query(
+        `SELECT status FROM content_release WHERE release_id = $1::text`,
+        [releaseId],
+      );
+      if (r.rows.length === 0) {
+        throw new Error(`release ${releaseId} not found`);
+      }
+      if (r.rows[0].status !== 'validated') {
+        throw new Error(
+          `approve only allowed in 'validated' state, got '${r.rows[0].status}'`,
+        );
+      }
+      const logReason =
+        `approved by ${approverClean}` + (note ? `: ${note}` : '');
+      const result = await pool.query(
+        `UPDATE content_release
+            SET approved_by = $1::text,
+                activation_log = activation_log || jsonb_build_array(
+                  jsonb_build_object(
+                    'from', 'validated',
+                    'to', 'validated',
+                    'at', to_char(NOW() AT TIME ZONE 'UTC',
+                                  'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                    'reason', $2::text
+                  )
+                )
+          WHERE release_id = $3::text AND status = 'validated'`,
+        [approverClean, logReason, releaseId],
+      );
+      if (result.rowCount !== 1) {
+        throw new Error(`approve race: ${releaseId} status moved during update`);
+      }
+    }
+
+    it('happy: approve validated → approved_by set + audit log entry shape', async () => {
+      const rid = `${TEST_PREFIX}happy`;
+      await seedRelease(rid, 'validated');
+      await simulateApprove(rid, 'wsyjh8', 'first approval');
+
+      const pool = getPool();
+      const r = await pool.query(
+        `SELECT approved_by, activation_log FROM content_release WHERE release_id = $1`,
+        [rid],
+      );
+      expect(r.rows[0].approved_by).toBe('wsyjh8');
+      const log = r.rows[0].activation_log as Array<{
+        from: string;
+        to: string;
+        at: string;
+        reason: string;
+      }>;
+      expect(log).toHaveLength(1);
+      expect(log[0]).toMatchObject({
+        from: 'validated',
+        to: 'validated',
+        reason: 'approved by wsyjh8: first approval',
+      });
+      // ISO 8601 UTC milliseconds shape
+      expect(log[0].at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    });
+
+    it('approve in non-validated state rejected (draft / active / deprecated / revoked)', async () => {
+      const states = ['draft', 'active', 'deprecated', 'revoked'];
+      for (const state of states) {
+        const rid = `${TEST_PREFIX}state-${state}`;
+        await seedRelease(rid, state);
+        await expect(simulateApprove(rid, 'wsyjh8')).rejects.toThrow(
+          /approve only allowed in 'validated' state/,
+        );
+      }
+    });
+
+    it('re-approval overwrites approved_by but preserves prior log entries (R1#7)', async () => {
+      const rid = `${TEST_PREFIX}reapp`;
+      await seedRelease(rid, 'validated');
+
+      await simulateApprove(rid, 'editor-A', 'first');
+      await simulateApprove(rid, 'editor-B', 'second');
+
+      const pool = getPool();
+      const r = await pool.query(
+        `SELECT approved_by, activation_log FROM content_release WHERE release_id = $1`,
+        [rid],
+      );
+      // Latest approver wins
+      expect(r.rows[0].approved_by).toBe('editor-B');
+      // Both audit entries preserved in order
+      const log = r.rows[0].activation_log as Array<{ reason: string }>;
+      expect(log).toHaveLength(2);
+      expect(log[0].reason).toBe('approved by editor-A: first');
+      expect(log[1].reason).toBe('approved by editor-B: second');
+    });
+  });
 });

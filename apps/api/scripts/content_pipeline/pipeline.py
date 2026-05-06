@@ -11,6 +11,7 @@ Subcommands:
   revoke <release_id> [--reason TXT]      # PR-A Day 3
                                           #   注意: revoke 是撤销/下线，不是 rollback
   rollback <release_id> --reason TXT      # PR-B1 Day 2 (deprecated → active)
+  approve <release_id> --approver <id>    # PR-B1 Day 3 (validated 阶段审批)
   list-releases [--status S] [--limit N]  # PR-A Day 5 (治理可视化)
   gc-stale [--dry-run|--gc]               # PR-A Day 4
   orphan-scan [--dry-run|--clean]         # PR-B1 Day 1 (FS 物理孤儿，两根目录)
@@ -48,6 +49,7 @@ sys.path.insert(0, str(HERE))
 from build_examples_package import file_sha256, run as run_build_examples_package  # noqa: E402
 from content_release_repo import (  # noqa: E402
     ReleaseError,
+    approve_release,
     create_release,
     deprecate_release,
     get_release,
@@ -379,6 +381,20 @@ def cmd_activate(args: argparse.Namespace) -> int:
         if not package_set:
             raise ReleaseError(f"release {rid!r} has empty package_set")
 
+        # PR-B1 Day 3: optional approval gate (env-controlled, default off).
+        # CONTENT_RELEASE_REQUIRE_APPROVAL forces approve before activate.
+        # Truthy aliases (R1#9): "true", "1", "yes", "on" — case-insensitive,
+        # whitespace-tolerant.
+        require_approval = os.environ.get(
+            "CONTENT_RELEASE_REQUIRE_APPROVAL", ""
+        ).strip().lower() in ("true", "1", "yes", "on")
+        if require_approval and not release["approved_by"]:
+            raise ReleaseError(
+                f"activate requires prior approval (env "
+                f"CONTENT_RELEASE_REQUIRE_APPROVAL is set): run "
+                f"'pipeline.py approve {rid} --approver <id>' first"
+            )
+
         with conn:
             with conn.cursor() as cur:
                 # 1. Activate this release's manifests
@@ -548,6 +564,42 @@ def cmd_rollback(args: argparse.Namespace) -> int:
             rollback_release(conn, rid, reason)
 
         print(f"  [OK] rollback to {rid!r}. reason: {reason}")
+        return 0
+    except ReleaseError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    """PR-B1 Day 3 — set approved_by on a validated release.
+
+    Approve is purely an audit annotation: it records who signed off on
+    the release without changing its status. The CONTENT_RELEASE_REQUIRE_APPROVAL
+    env var gates whether activate later requires approved_by to be non-NULL.
+
+    Exit codes (PR-A 多数对齐):
+      0 = success
+      1 = ReleaseError (not found / not validated / approver invalid / race)
+      2 = connection error
+    """
+    conn = _connect_or_die()
+    if conn is None:
+        return 2
+
+    rid = args.release_id
+    approver = args.approver
+    note = args.note
+
+    try:
+        with conn:
+            approve_release(conn, rid, approver, note)
+        approver_clean = (approver or "").strip()
+        msg = f"  [OK] release {rid!r} approved by {approver_clean!r}"
+        if note:
+            msg += f". note: {note}"
+        print(msg)
         return 0
     except ReleaseError as e:
         print(f"ERROR: {e}", file=sys.stderr)
@@ -793,6 +845,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip stdin confirmation (CI use)",
     )
     p_rollback.set_defaults(func=cmd_rollback)
+
+    # ── approve (PR-B1 Day 3) ─────────────────────────────────────────────
+    p_approve = sub.add_parser(
+        "approve",
+        help="Mark a validated release as approved (gates activate when "
+             "CONTENT_RELEASE_REQUIRE_APPROVAL is set)",
+    )
+    p_approve.add_argument("release_id")  # positional
+    p_approve.add_argument(
+        "--approver", required=True,
+        help="Approver identifier (free-form string, max 64 chars; future "
+             "PR-B3 may bind to a user table)",
+    )
+    p_approve.add_argument(
+        "--note", default=None,
+        help="Optional approval note (audit log)",
+    )
+    p_approve.set_defaults(func=cmd_approve)
 
     # ── deprecate (Day 5) ─────────────────────────────────────────────────
     p_deprecate = sub.add_parser(

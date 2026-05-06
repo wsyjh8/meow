@@ -181,6 +181,89 @@ def deprecate_release(conn, release_id: str, reason: str) -> None:
     transition_status(conn, release_id, "deprecated", reason=reason)
 
 
+def approve_release(
+    conn,
+    release_id: str,
+    approver: str,
+    note: str | None = None,
+) -> None:
+    """Mark a validated release as approved by a named approver.
+
+    PR-B1 Day 3. NOT commit'd — caller controls transaction.
+
+    activation_log entry format (R1#6 review-adopted convention):
+      This helper appends an entry with `from == to == 'validated'`.
+      That shape signals "audit annotation, NOT a status transition".
+      Consumers (list-releases / future PR-B3 UI / PR-C observability)
+      should treat such entries differently from real transitions —
+      the convention is: `reason.startswith("approved by ")` indicates
+      an approval audit entry. Future schema may add a `kind` field.
+
+    Side-effects (atomic within caller's transaction):
+      - UPDATE content_release.approved_by = approver
+      - Append activation_log entry:
+          { "from": "validated", "to": "validated",
+            "at": ISO8601_UTC,
+            "reason": "approved by {approver}" + (": {note}" if note else "") }
+
+    Sanity guards (raise ReleaseError):
+      - approver is empty / whitespace-only after strip (R2#4)
+      - approver length > 64 (matches schema VARCHAR(64))
+      - release not found
+      - release.status != 'validated'
+
+    Re-approval semantics:
+      Allowed (overwrites approved_by). Caller should be aware approved_by
+      reflects the most recent approver; activation_log preserves the full
+      sequence for audit. e2e covers this with explicit log-tail assertions.
+    """
+    # Approver validation (R2#4 review-adopted)
+    approver_clean = (approver or "").strip()
+    if not approver_clean:
+        raise ReleaseError("approver must be non-empty / non-whitespace")
+    if len(approver_clean) > 64:
+        raise ReleaseError(
+            f"approver too long ({len(approver_clean)} > 64); "
+            f"matches schema VARCHAR(64) limit"
+        )
+
+    release = get_release(conn, release_id)
+    if release is None:
+        raise ReleaseError(f"release {release_id!r} not found")
+    if release["status"] != "validated":
+        raise ReleaseError(
+            f"approve only allowed in 'validated' state, "
+            f"got {release['status']!r} for {release_id!r}"
+        )
+
+    log_reason = f"approved by {approver_clean}"
+    if note:
+        log_reason += f": {note}"
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE content_release
+               SET approved_by = %s,
+                   activation_log = activation_log || jsonb_build_array(
+                     jsonb_build_object(
+                       'from', 'validated',
+                       'to', 'validated',
+                       'at', to_char(NOW() AT TIME ZONE 'UTC',
+                                     'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                       'reason', %s
+                     )
+                   )
+             WHERE release_id = %s AND status = 'validated'
+            """,
+            (approver_clean, log_reason, release_id),
+        )
+        if cur.rowcount != 1:
+            raise ReleaseError(
+                f"approve_release race: {release_id!r} status moved during update"
+            )
+
+
 def rollback_release(conn, target_id: str, reason: str) -> None:
     """Reactivate a deprecated release; demote current active to deprecated.
 
