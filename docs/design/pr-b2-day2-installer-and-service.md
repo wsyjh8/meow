@@ -1,124 +1,58 @@
-# v0.3 PR-B2 · Day 2 plan — PackageInstaller + ContentPackageService + 集成测
+# v0.3 PR-B2 · Day 2 plan v0.2 — PackageInstaller + ContentPackageService + 集成测
 
 ## Context
 
-PR-B2 Day 1 已 merge `6557fb4`：drift v12 + ManifestClient + DownloadManager 全部就位 + 12 单测全过 + App 默认行为不变。
-
-Day 2 完成 PR-B2 闭环（master plan v0.4 §Day 2）：
-1. PackageInstaller（gzip 解压 → drift 写入；仅 examples kind）
-2. ContentPackageService（组合 ManifestClient/DownloadManager/PackageInstaller，编排 sync）
-3. 集成测（manifest_sync_test：mock CDN 全 flow）
-4. App 默认行为依然不变（不接入启动；零 grep 命中）
+PR-B2 Day 1 已 merge `6557fb4`。Day 2 plan v0.1 收到两份外部评审，去重后 **16 处真改进**。本 v0.2 全部吸收。
 
 工作分支：`feat/v0.3-pr-b2-app-manifest-consumption` @ `6557fb4`
 worktree：`D:\code\AI\startUp\meow\.claude\worktrees\v0.3-pr-b2`
+对照基线 commit：`b26bff7`（PR-B1 merge 点）
 
-## 核实事实（recon 后）
+## v0.1 → v0.2 修订（吸收两份评审 16 处）
 
-### example_sentences drift schema（fsrs_tables.dart:197-221）
+### 🔴 P1 必修（功能性 bug）
 
-```
-id           IntColumn AUTO_INCREMENT (PK)
-wordId       TextColumn       (FK → word_entries.word_id)
-stableId     TextColumn nullable
-sense        TextColumn       (义项标签)
-en           TextColumn       (英文例句)
-cn           TextColumn       (中文翻译)
-sortOrder    IntColumn nullable default 0
-```
-
-**关键观察**：
-- 无 `source_package` / `source_release` 字段——manifest 数据与 bundle 数据混在同表。
-  D1（PR-B3 改 WordbookLoader）靠 `content_package_state` 行存在性区分，**不**需要扩 example_sentences schema
-- UNIQUE INDEX on `(wordId, sortOrder)` + `(stableId)`
-- 主键 id 是 autoIncrement，但**冲突解决靠 stableId 唯一索引**
-
-### WordbookLoader batch insert 模式（wordbook_loader.dart:185-197）
-
-```dart
-batch.insert(
-  _db.exampleSentences,
-  ExampleSentencesCompanion.insert(
-    wordId: wordId,
-    sense: ...,
-    en: ...,
-    cn: ...,
-    sortOrder: Value(...),
-    stableId: Value(resolvedStableId),
-  ),
-  mode: InsertMode.insertOrIgnore,  // bundle 模板用 ignore
-);
-```
-
-**PR-B2 PackageInstaller 用 `InsertMode.insertOrReplace`**——manifest 是权威，覆盖 bundle 数据（变体 C §1.2 语义）。
-
-### build_examples_package 输出 jsonl 格式（build_examples_package.py:144-154）
-
-每行 JSON 9 字段：
-```json
-{
-  "stable_id": "abc123",
-  "word_id": "abandon",
-  "sense_label": "v. 放弃",
-  "en": "Don't [abandon] your dreams",
-  "cn": "不要[放弃]你的梦想",
-  "difficulty": 2.5,
-  "ordinal": 1,
-  "status": "active",
-  "content_hash": "sha256-hex"
-}
-```
-
-**字段映射到 drift（仅 5 个，其他暂忽略）**：
-| jsonl 字段 | drift 字段 | 备注 |
+| # | 来源 | 修订 |
 |---|---|---|
-| stable_id | stableId | 主匹配 key（unique index）|
-| word_id | wordId | |
-| sense_label | sense | |
-| en | en | |
-| cn | cn | |
-| ordinal | sortOrder | |
-| difficulty / status / content_hash | — | drift 表无对应字段，PR-C/D 决定是否扩 |
+| 1 | R1#1 / R2#1 | **`_upsertPackageState` 改 DELETE WHERE packageName + INSERT**：避免升级后留旧 packageId 行污染 state 表，破坏 packageName-索引 race |
+| 2 | R2#2 | **ContentPackageService 共享 effective db**：default installer 不再独立 new AppDatabase()，避免注入 db 后写到另一套 |
+| 3 | R2#3 | **空 examples 包 throw InstallFailedError**：≥ 1 行有效 jsonl 才视为成功，否则 transaction 回滚 state |
+| 4 | R2#4 | **stable_id 缺/空 throw**：null 不被 SQLite unique index 约束，会破坏 InsertOrReplace 覆盖语义 |
 
-文件压缩：`gzip` (compresslevel=6)，无 brotli 路径。
+### 🟡 P2 应修
 
-### 集成测基础设施（recon 确认）
+| # | 来源 | 修订 |
+|---|---|---|
+| 5 | R1#2 | 注释删"行级 stream"，与 `.toList()` 实装一致（drift batch callback 必须 sync）|
+| 6 | R1#3 | 单测加 "install ok but state UPSERT fails → example_sentences 也 rollback" |
+| 7 | R1#4 | plan 加注：双 unique index + InsertOrReplace + server 包内 dedup 责任 |
+| 8 | R1#5 / R1#12 | **cacheDir + db 都改 required**：删 systemTemp / AppDatabase() 默认值 |
+| 9 | R1#6 | `upgraded` → `replaced`（含 rollback downgrade 场景）|
+| 10 | R1#7 | baseline 6 failures 验证命令具体化（diff 失败列表）|
+| 11 | R1#8 | git diff 用 `b26bff7` 精确 hash 对照 |
+| 12 | R2#5 | SyncResult 加 `manifestError` 顶层字段，调用方区分 sync 失败 vs 无变化 |
 
-- **无现成 shelf / shelf_test_handler**——继续用 Day 1 的 `_FakeHttpClient extends http.BaseClient`
-- `sqflite_common_ffi NativeDatabase.memory()` 已确认能跑（migration_test 在用）
-- `Directory.systemTemp.createTemp()` 临时目录模式（audio_cache_repository_test 在用）
-- 集成测组合：drift in-memory + _FakeHttpClient + 临时 cacheDir
+### 🟢 Nit
 
-### ContentPackageService 架构（参考既有 service）
-
-ApiClient / AudioCacheRepository 模式：
-- 构造函数 optional DI（test 注入）
-- 每次 new（不是 singleton）
-- 由上层（main / 测试）管理生命周期
-
-**ContentPackageService 沿用此模式**：
-```dart
-ContentPackageService({
-  ManifestClient? manifestClient,
-  DownloadManager? downloadManager,
-  PackageInstaller? installer,
-  AppDatabase? db,
-})
-```
+| # | 来源 | 修订 |
+|---|---|---|
+| 13 | R1#9 | `catch (e, st)` 保 stack trace（`Error.throwWithStackTrace`）|
+| 14 | R1#10 | 集成测 `_FakeManifestCdnServer` helper 减重复 |
+| 15 | R1#11 | 风险表降级优先级写清（doc → 单测 → 集成测，集成测底线）|
+| 16 | R1#12 | PackageInstaller `required AppDatabase db`（同 #8）|
 
 ## 实施
 
-### Step 1：PackageInstaller
+### Step 1：PackageInstaller v0.2
 
-文件：`apps/mobile/lib/core/manifest/package_installer.dart`（新建，~280 行）
+文件：`apps/mobile/lib/core/manifest/package_installer.dart`（~310 行）
 
-#### 1a. 错误类
+#### 1a. 错误类（不变）
 
 ```dart
 class UnsupportedKindError implements Exception {
   final String packageKind;
   UnsupportedKindError(this.packageKind);
-
   @override
   String toString() =>
       'UnsupportedKindError($packageKind): only "examples" implemented in PR-B2';
@@ -128,30 +62,20 @@ class InstallFailedError implements Exception {
   final String packageId;
   final String message;
   InstallFailedError(this.packageId, this.message);
-
   @override
   String toString() => 'InstallFailedError($packageId, $message)';
 }
 ```
 
-#### 1b. 主类
+#### 1b. 主类（v0.2 关键修订）
 
 ```dart
 class PackageInstaller {
   final AppDatabase _db;
 
-  PackageInstaller({AppDatabase? db}) : _db = db ?? AppDatabase();
+  /// #16 review-adopted: db 改 required（避免测试漏传时 new 真 AppDatabase）。
+  PackageInstaller({required AppDatabase db}) : _db = db;
 
-  /// 安装一个已下载验证的 .gz 包。
-  ///
-  /// 流程（drift transaction wrap）：
-  ///   1. 按 package_kind 分发（PR-B2 仅 examples）
-  ///   2. gzip 解压 + jsonl 行解析
-  ///   3. drift batch upsert（InsertMode.insertOrReplace；manifest 覆盖 bundle）
-  ///   4. UPSERT content_package_state（同 transaction，install + state 原子）
-  ///
-  /// 失败：drift transaction 自动 rollback；throw InstallFailedError。
-  /// 不会留 partial state。
   Future<void> install(File gzFile, ManifestPackage pkg) async {
     if (pkg.packageKind != 'examples') {
       throw UnsupportedKindError(pkg.packageKind);
@@ -162,20 +86,36 @@ class PackageInstaller {
 
     await _db.transaction(() async {
       try {
-        await _installExamples(gzFile, pkg);
+        final rowsInstalled = await _installExamples(gzFile, pkg);
+        // #3 review-adopted: 空包不算成功（防止 server 出 0-row 包导致客户端
+        // 误以为已安装，跳过后续 sync）
+        if (rowsInstalled == 0) {
+          throw InstallFailedError(
+            pkg.packageId,
+            'installed 0 rows from gz; package is empty or all rows invalid',
+          );
+        }
         await _upsertPackageState(pkg);
-      } catch (e) {
-        // drift 自动 rollback；包装错误
-        throw InstallFailedError(pkg.packageId, e.toString());
+      } on InstallFailedError {
+        rethrow;  // 已是 InstallFailedError，直接重抛保留 packageId
+      } on UnsupportedKindError {
+        rethrow;
+      } on Object catch (e, st) {
+        // #13 review-adopted: 保 stack trace
+        Error.throwWithStackTrace(
+          InstallFailedError(pkg.packageId, '$e'),
+          st,
+        );
       }
     });
   }
 
-  /// gzip 解压 + jsonl 解析 + drift batch insertOrReplace。
+  /// 注释 #5 修订：drift batch callback 必须 sync，所以 .toList() 强制 buffer
+  /// 全部行。单包 gzip 后 ≤ 2MB，解压后 ~5-10MB；buffer 内存可接受。
+  /// （行级 stream + 单 INSERT 是另一种实现，但放弃 batch 优化的批量提交。）
   ///
-  /// 内存峰值：单包 gzip 后 ≤ 2MB，解压后 ~5-10MB。dart:io GZipCodec.decoder
-  /// + LineSplitter 行级 stream，避免一次性加载全文件。
-  Future<void> _installExamples(File gzFile, ManifestPackage pkg) async {
+  /// Returns: 实际 insert 的有效 jsonl 行数。
+  Future<int> _installExamples(File gzFile, ManifestPackage pkg) async {
     final lines = await gzFile
         .openRead()
         .transform(gzip.decoder)
@@ -183,12 +123,22 @@ class PackageInstaller {
         .transform(const LineSplitter())
         .toList();
 
-    if (lines.isEmpty) return;
-
+    var inserted = 0;
     await _db.batch((batch) {
       for (final line in lines) {
         if (line.trim().isEmpty) continue;
         final j = jsonDecode(line) as Map<String, dynamic>;
+
+        // #4 review-adopted: stable_id 必须非空非 null
+        final stableId = j['stable_id'] as String?;
+        if (stableId == null || stableId.isEmpty) {
+          throw InstallFailedError(
+            pkg.packageId,
+            'jsonl line missing stable_id; manifest covering semantics '
+            'depend on it (SQLite unique index does not constrain NULL)',
+          );
+        }
+
         batch.insert(
           _db.exampleSentences,
           ExampleSentencesCompanion.insert(
@@ -197,15 +147,23 @@ class PackageInstaller {
             en: j['en'] as String,
             cn: j['cn'] as String,
             sortOrder: Value((j['ordinal'] as int?) ?? 0),
-            stableId: Value(j['stable_id'] as String?),
+            stableId: Value(stableId),
           ),
-          mode: InsertMode.insertOrReplace,  // manifest 覆盖 bundle
+          mode: InsertMode.insertOrReplace,
         );
+        inserted++;
       }
     });
+    return inserted;
   }
 
+  /// #1 review-adopted: DELETE WHERE packageName + INSERT。
+  /// 升级 examples-zk@v3 → examples-zk@v5 时，先删 v3 row 再插 v5；
+  /// 同 transaction 内 atomic，保证 state 表 "每个 packageName ≤ 1 行"。
   Future<void> _upsertPackageState(ManifestPackage pkg) async {
+    await (_db.delete(_db.contentPackageStates)
+          ..where((t) => t.packageName.equals(pkg.packageName)))
+        .go();
     await _db.into(_db.contentPackageStates).insert(
           ContentPackageStatesCompanion.insert(
             packageId: pkg.packageId,
@@ -221,86 +179,107 @@ class PackageInstaller {
             minAppVersion: Value(pkg.minAppVersion),
             fileUrl: Value(pkg.fileUrl),
           ),
-          mode: InsertMode.insertOrReplace,
         );
   }
 }
 ```
 
-**关键决策**：
-- drift transaction wrap install + state 写入 → 原子（install 失败时 state 也回滚，避免脏 state）
-- `gzip.decoder` 来自 `dart:io`（GZipCodec），零新依赖
-- `LineSplitter` 来自 `dart:convert`
-- `InsertMode.insertOrReplace` 对应变体 C "manifest 覆盖 bundle" 语义
-- 非 examples kind throw UnsupportedKindError（让 ContentPackageService skip 它，不进 retry）
+#### 1c. 设计注释 #7（双 unique index + server 责任）
 
-#### 1c. 单测 `test/core/manifest/package_installer_test.dart`（5 cases）
+加在 install 方法 docstring：
+
+> **example_sentences 双 unique index 语义**（#7 review-adopted）：
+> 表上有 `(stableId)` + `(wordId, sortOrder)` 两个 unique index。
+> InsertOrReplace 触发任一冲突都会 DELETE 旧行 + INSERT 新行。
+> **本设计依赖 server `build_examples_package` 在单包内保证 (wordId,
+> sortOrder) 唯一**（PR-A README §6 设计要点 5 "Full snapshot"）。
+> 若未来发现包内重复，先排查 server build 而非 client side（client 会
+> 静默 dedup 让最后一行赢，难以察觉）。
+
+#### 1d. 单测 v0.2（7 cases，加 4 个评审 case）
+
+文件：`apps/mobile/test/core/manifest/package_installer_test.dart`
 
 ```dart
-void main() {
-  late AppDatabase db;
-  late Directory tmp;
+test('happy: install examples package writes drift + state', ...);
+test('insertOrReplace: existing stable_id row replaced (manifest > bundle)',
+    ...);
+test('non-examples kind → UnsupportedKindError, no drift writes', ...);
+test('file missing → InstallFailedError', ...);
+test('drift transaction rollback on bad jsonl line: state not written', ...);
 
-  setUp(() async {
-    db = AppDatabase.forTesting(NativeDatabase.memory());
-    tmp = await Directory.systemTemp.createTemp('installer_test_');
-  });
-  tearDown(() async {
-    await db.close();
-    await tmp.delete(recursive: true);
-  });
+// #1 review-adopted (state 表不膨胀)
+test('upgrade does not leave stale row of old contentVersion in state table',
+    () async {
+  // 1. install examples-zk@v3 → state 1 行
+  // 2. install examples-zk@v5 → state 仍 1 行 (v3 row 已删)
+  // 3. 验证 state 表 size == 1, contentVersion == 'v5'
+});
 
-  Future<File> _writeGz(List<Map<String, dynamic>> rows) async {
-    final lines = rows.map(jsonEncode).join('\n');
-    final gzBytes = gzip.encode(utf8.encode(lines));
-    final f = File('${tmp.path}/test.gz');
-    await f.writeAsBytes(gzBytes);
-    return f;
-  }
+// #3 review-adopted (空包不算成功)
+test('empty examples package → InstallFailedError, state not written',
+    () async {
+  // gz 解压后 0 行 → throw InstallFailedError
+  // state 表 0 行（transaction rollback）
+});
 
-  test('happy: install examples package writes drift + state', ...);
-  test('insertOrReplace: existing stable_id row replaced (manifest > bundle)',
-      ...);
-  test('non-examples kind → UnsupportedKindError, no drift writes', ...);
-  test('file missing → InstallFailedError', ...);
-  test('drift transaction rollback on bad jsonl line: state not written', ...);
-}
+// #4 review-adopted (stable_id 必须非空)
+test('jsonl missing stable_id → InstallFailedError, transaction rollback',
+    () async {
+  // 1 行有效 + 1 行 stable_id=null → throw
+  // example_sentences 0 行 (rollback), state 0 行
+});
+
+// #6 review-adopted (transaction 嵌套真测)
+test('install ok but state UPSERT fails: example_sentences also rolled back',
+    () async {
+  // mock _upsertPackageState 抛错（如 mock db.into() throw）
+  // 验证 example_sentences 0 行 + state 0 行
+});
 ```
 
-**Day 2 期望增量（Step 1）**：~280 行新代码 + ~250 行测试。
+**Day 2 期望增量（Step 1）**：~310 行新代码 + ~350 行测试（9 cases）。
 
-### Step 2：ContentPackageService
+### Step 2：ContentPackageService v0.2
 
-文件：`apps/mobile/lib/core/manifest/content_package_service.dart`（新建，~220 行）
+文件：`apps/mobile/lib/core/manifest/content_package_service.dart`（~250 行）
 
-#### 2a. SyncResult DTO
+#### 2a. SyncResult v0.2（加 manifestError 顶层字段，#12）
 
 ```dart
 class SyncResult {
-  final List<String> installed;   // 新装的 packageId
-  final List<String> upgraded;    // 升级的 packageId
-  final List<String> skipped;     // 已是最新 / 非 examples kind
-  final List<String> failed;      // download / install 失败
-  final Map<String, String> failureReasons;  // packageId → error str
+  final List<String> installed;
+  /// #9 review-adopted: 改名 `replaced`（含 rollback downgrade 场景，
+  /// 不止单调升级）。
+  final List<String> replaced;
+  final List<String> skipped;
+  final List<String> failed;
+  final Map<String, String> failureReasons;
+  /// #12 review-adopted: 顶层 manifestError 字段；fetch 失败时填充，
+  /// 调用方易区分 "sync 失败" vs "无变化"。null = fetch 成功。
+  final String? manifestError;
 
   const SyncResult({
     required this.installed,
-    required this.upgraded,
+    required this.replaced,
     required this.skipped,
     required this.failed,
     required this.failureReasons,
+    this.manifestError,
   });
 
-  bool get hasChanges => installed.isNotEmpty || upgraded.isNotEmpty;
+  bool get hasChanges => installed.isNotEmpty || replaced.isNotEmpty;
+  bool get hasFailure => failed.isNotEmpty || manifestError != null;
 
   @override
   String toString() => 'SyncResult(installed=${installed.length}, '
-      'upgraded=${upgraded.length}, skipped=${skipped.length}, '
-      'failed=${failed.length})';
+      'replaced=${replaced.length}, skipped=${skipped.length}, '
+      'failed=${failed.length}, '
+      'manifestError=${manifestError != null ? "yes" : "no"})';
 }
 ```
 
-#### 2b. 主类
+#### 2b. 主类（#2 + #8 + #16 收口）
 
 ```dart
 class ContentPackageService {
@@ -309,62 +288,52 @@ class ContentPackageService {
   final PackageInstaller _installer;
   final AppDatabase _db;
 
+  /// #2 + #8 + #16 review-adopted:
+  ///   - cacheDir + db **required**（删 systemTemp / AppDatabase() 默认）
+  ///   - default installer 共享传入的 `db`（不再独立 new 真 AppDatabase）
   ContentPackageService({
+    required Directory cacheDir,
+    required AppDatabase db,
     ManifestClient? manifestClient,
     DownloadManager? downloadManager,
     PackageInstaller? installer,
-    AppDatabase? db,
-    Directory? cacheDir,
   })  : _client = manifestClient ?? ManifestClient(),
         _downloader = downloadManager ??
-            DownloadManager(
-              cacheDir: cacheDir ?? Directory.systemTemp,  // 仅作 test default
-            ),
-        _installer = installer ?? PackageInstaller(),
-        _db = db ?? AppDatabase();
+            DownloadManager(cacheDir: cacheDir),
+        _installer = installer ?? PackageInstaller(db: db),  // ← 共享 db
+        _db = db;
 
-  /// 同步 server manifest 到本地 drift。
-  ///
-  /// 算法（D4 决策：每次拉全量，不传 since_release）：
-  ///   1. fetchManifest()
-  ///   2. **kind filter**（R1#5）：package_kind != 'examples' → skipped[]
-  ///   3. 对每个 examples package：
-  ///      - 本地无 packageId → 新装 (download → install) → installed[]
-  ///      - 本地有但 contentVersion 不同 → 升级 → upgraded[]
-  ///      - 本地有且版本一致 → skipped[]
-  ///   4. download/install 失败 → failed[] + failureReasons
-  ///
-  /// 失败不写 content_package_state（PackageInstaller 责任），下次 sync 重试。
   Future<SyncResult> syncIfNeeded({String? appVersion}) async {
     // Step 1: fetch
     final ManifestResponse manifest;
     try {
       manifest = await _client.fetchManifest(appVersion: appVersion);
     } catch (e) {
-      // network / parse 失败：返空结果，调用方决定是否 retry
+      // #12 review-adopted: 顶层 manifestError，调用方易判断
       return SyncResult(
         installed: const [],
-        upgraded: const [],
+        replaced: const [],
         skipped: const [],
         failed: const [],
-        failureReasons: {'_manifest_fetch': e.toString()},
+        failureReasons: const {},
+        manifestError: e.toString(),
       );
     }
 
     final installed = <String>[];
-    final upgraded = <String>[];
+    final replaced = <String>[];
     final skipped = <String>[];
     final failed = <String>[];
     final reasons = <String, String>{};
 
-    // Step 2 + 3: kind filter + state diff
+    // 读本地 state，按 packageName 索引
     final localStates = <String, ContentPackageState>{};
     for (final s in await _db.select(_db.contentPackageStates).get()) {
       localStates[s.packageName] = s;
     }
 
     for (final pkg in manifest.packages) {
-      // R1#5: kind filter 在 download 之前
+      // R1#5 (Day 1 review): kind filter 在 download 之前
       if (pkg.packageKind != 'examples') {
         skipped.add(pkg.packageId);
         reasons[pkg.packageId] =
@@ -374,7 +343,7 @@ class ContentPackageService {
 
       final local = localStates[pkg.packageName];
       final isNew = local == null;
-      final isUpgrade =
+      final isReplace =
           local != null && local.contentVersion != pkg.contentVersion;
       final isSame =
           local != null && local.contentVersion == pkg.contentVersion;
@@ -384,12 +353,11 @@ class ContentPackageService {
         continue;
       }
 
-      // download + install
       try {
         final gzFile = await _downloader.downloadPackage(pkg);
         await _installer.install(gzFile, pkg);
         if (isNew) installed.add(pkg.packageId);
-        if (isUpgrade) upgraded.add(pkg.packageId);
+        if (isReplace) replaced.add(pkg.packageId);
       } catch (e) {
         failed.add(pkg.packageId);
         reasons[pkg.packageId] = e.toString();
@@ -398,7 +366,7 @@ class ContentPackageService {
 
     return SyncResult(
       installed: installed,
-      upgraded: upgraded,
+      replaced: replaced,
       skipped: skipped,
       failed: failed,
       failureReasons: reasons,
@@ -407,188 +375,216 @@ class ContentPackageService {
 }
 ```
 
-#### 2c. 单测 `test/core/manifest/content_package_service_test.dart`（5 cases）
+#### 2c. 单测 v0.2（6 cases，#12 加一个 manifest fetch 失败 case）
 
 ```dart
-void main() {
-  // 用 fake ManifestClient / DownloadManager / PackageInstaller 实现
-  // _FakeManifestClient(返 ManifestResponse fixture)
-  // _FakeDownloadManager(返 File 或 throw)
-  // _FakeInstaller(record install calls 或 throw)
+test('happy: 1 examples package, fresh install', ...);
+test('kind filter: audio_meta package skipped, not downloaded', ...);
+test('replace: server v5 vs local v3 → replaced (rollback / upgrade 共用)',
+    ...);
+test('skip: server v3 == local v3 → skipped, no download', ...);
+test('download fails: package in failed[], reason recorded', ...);
 
-  test('happy: 1 examples package, fresh install', ...);
-  test('kind filter: audio_meta package skipped, not downloaded', ...);
-  test('upgrade: server v5 vs local v3 → upgraded', ...);
-  test('skip: server v3 == local v3 → skipped, no download', ...);
-  test('download fails: package in failed[], reason recorded', ...);
+// #12 review-adopted
+test('manifest fetch fails: result.manifestError populated, hasFailure=true',
+    () async {
+  // mock client throw ManifestNetworkError
+  // 验证 result.manifestError != null && result.installed.isEmpty
+});
+```
+
+**Day 2 期望增量（Step 2）**：~250 行新代码 + ~280 行测试。
+
+### Step 3：集成测 v0.2（5 cases + helper #14）
+
+文件：`apps/mobile/test/integration/manifest_sync_test.dart`（~250 行）
+
+#### 3a. _FakeManifestCdnServer helper（#14 review-adopted）
+
+```dart
+/// 同时 serve manifest API + CDN 下载的 fake server，供 5 个集成测复用。
+class _FakeManifestCdnServer extends http.BaseClient {
+  Map<String, dynamic>? manifestJson;
+  final Map<String, List<int>> _files = {};
+  final Map<String, int> _statusCodes = {};
+
+  /// 注册 fake CDN 文件。
+  void registerPackage({required String url, required List<int> bytes}) {
+    _files[url] = bytes;
+  }
+
+  /// 注入特定 URL 的非 200 响应（测试错误路径）。
+  void registerStatus(String url, int statusCode) {
+    _statusCodes[url] = statusCode;
+  }
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest req) async {
+    final url = req.url.toString();
+    if (req.url.path.endsWith('/content/manifest')) {
+      if (manifestJson == null) {
+        throw Exception('manifestJson not set');
+      }
+      return http.StreamedResponse(
+        Stream.value(utf8.encode(jsonEncode(manifestJson!))),
+        200,
+      );
+    }
+    final status = _statusCodes[url] ?? 200;
+    if (status != 200) {
+      return http.StreamedResponse(Stream.empty(), status);
+    }
+    final bytes = _files[url];
+    if (bytes != null) {
+      return http.StreamedResponse(Stream.value(bytes), 200);
+    }
+    throw Exception('unexpected URL: $url');
+  }
 }
 ```
 
-**Day 2 期望增量（Step 2）**：~220 行新代码 + ~250 行测试。
-
-### Step 3：集成测
-
-文件：`apps/mobile/test/integration/manifest_sync_test.dart`（新建，~200 行）
+#### 3b. 5 个集成测（用 helper 简化）
 
 ```dart
-// 集成测：drift in-memory + _FakeHttpClient 模拟 manifest API + CDN
-//
-// 不可砍超时项（master plan v0.4 R2#5）——是 fetch → download → checksum →
-// install → drift 反查整条链路的回归保险。
+test('full flow: fetch → download → checksum → install → drift 反查',
+    () async {
+  final server = _FakeManifestCdnServer();
+  final exampleRows = [/* fixture 含 stable_id */];
+  final gzBytes = gzip.encode(utf8.encode(exampleRows.map(jsonEncode).join('\n')));
+  final hash = sha256.convert(gzBytes).toString();
 
-void main() {
-  late AppDatabase db;
-  late Directory tmpCache;
+  server.manifestJson = {
+    'release_ids': ['rel-1'],
+    'packages': [{/* manifest 12 字段, checksum=hash */}],
+  };
+  server.registerPackage(
+    url: 'http://cdn.test/examples-zk@v1.gz',
+    bytes: gzBytes,
+  );
 
-  setUp(() async {
-    db = AppDatabase.forTesting(NativeDatabase.memory());
-    tmpCache = await Directory.systemTemp.createTemp('integ_');
-  });
-  tearDown(() async {
-    await db.close();
-    await tmpCache.delete(recursive: true);
-  });
+  final service = ContentPackageService(
+    db: db,
+    cacheDir: tmpCache,
+    manifestClient: ManifestClient(client: server),
+    downloadManager: DownloadManager(client: server, cacheDir: tmpCache),
+    installer: PackageInstaller(db: db),
+  );
+  final result = await service.syncIfNeeded();
 
-  test('full flow: fetch → download → checksum → install → drift 反查',
-      () async {
-    // 1. 准备 fixture
-    final exampleRows = [
-      {'stable_id': 'sa1', 'word_id': 'apple', 'sense_label': '苹果',
-       'en': 'an apple', 'cn': '一个苹果', 'difficulty': 1.0,
-       'ordinal': 1, 'status': 'active', 'content_hash': '...'},
-    ];
-    final gzBytes = gzip.encode(utf8.encode(exampleRows.map(jsonEncode).join('\n')));
-    final hash = sha256.convert(gzBytes).toString();
+  expect(result.installed, ['examples-zk@v1']);
+  expect(result.failed, isEmpty);
+  expect(result.manifestError, isNull);
 
-    // 2. 准备 mock client (同时 serve manifest API + CDN)
-    final fakeClient = _FakeHttpClient((req) async {
-      if (req.url.path.endsWith('/content/manifest')) {
-        return _streamResp(200, jsonEncode({
-          'release_ids': ['rel-1'],
-          'packages': [{
-            'package_id': 'examples-zk@v1', 'package_name': 'examples-zk',
-            'package_kind': 'examples', 'book_id': 'zk', 'content_version': 'v1',
-            'file_url': 'http://cdn.test/examples-zk@v1.gz',
-            'checksum_sha256': hash, 'size_bytes': gzBytes.length,
-            'compression': 'gzip', 'min_app_version': '0.0.0',
-            'release_id': 'rel-1',
-          }],
-        }));
-      }
-      if (req.url.path.endsWith('examples-zk@v1.gz')) {
-        return _stream(200, gzBytes);
-      }
-      throw Exception('unexpected URL: ${req.url}');
-    });
+  final exRows = await db.select(db.exampleSentences).get();
+  expect(exRows, isNotEmpty);
 
-    // 3. 跑 service
-    final service = ContentPackageService(
-      manifestClient: ManifestClient(client: fakeClient),
-      downloadManager: DownloadManager(client: fakeClient, cacheDir: tmpCache),
-      installer: PackageInstaller(db: db),
-      db: db,
-    );
-    final result = await service.syncIfNeeded();
+  final stateRows = await db.select(db.contentPackageStates).get();
+  expect(stateRows, hasLength(1));  // #1 关键：state 表 1 行
+});
 
-    // 4. 反查
-    expect(result.installed, ['examples-zk@v1']);
-    expect(result.failed, isEmpty);
-    final exRows = await db.select(db.exampleSentences).get();
-    expect(exRows, hasLength(1));
-    expect(exRows.first.stableId, 'sa1');
-    expect(exRows.first.en, 'an apple');
-    final stateRows = await db.select(db.contentPackageStates).get();
-    expect(stateRows, hasLength(1));
-    expect(stateRows.first.packageId, 'examples-zk@v1');
-  });
-
-  test('checksum mismatch: not installed, failed[], state not written', ...);
-  test('non-examples kind: skipped, not downloaded', ...);
-  test('partial failure: 2 packages, 1 install ok, 1 download fails', ...);
-  test('upgrade: pre-existing v1 in drift, server v2 → drift updated', ...);
-}
+test('checksum mismatch: not installed, failed[], state not written', ...);
+test('non-examples kind: skipped, not downloaded', ...);
+test('partial failure: 2 packages, 1 install ok, 1 download fails', ...);
+test('replace: pre-existing v1 in drift, server v2 → drift updated, '
+     'state 仍 1 行 (v1 row 已删)', () async {
+  // #1 关键 case：升级后 state 表不膨胀
+  // 1. seed db with examples-zk@v1 in state
+  // 2. server returns examples-zk@v2
+  // 3. sync
+  // 4. 验证 state 1 行, contentVersion='v2', packageId='examples-zk@v2'
+});
 ```
 
-**Day 2 期望增量（Step 3）**：~200 行集成测。
+**Day 2 期望增量（Step 3）**：~250 行集成测。
 
-### Step 4：App 默认行为不变验证
+### Step 4：App 默认行为不变验证（v0.2 修订命令）
 
 ```powershell
 # 1. main.dart 无 ContentPackageService 调用
 Select-String -Path apps\mobile\lib\main.dart -Pattern "ContentPackageService|PackageInstaller"
 # 期望: 无匹配
 
-# 2. WordbookLoader 未改
-git diff origin/main -- apps/mobile/lib/core/memory/wordbook_loader.dart
+# 2. WordbookLoader 未改（#11: 用精确 PR-B1 merge hash b26bff7 对照，抗 main 噪声）
+git diff b26bff7 -- apps/mobile/lib/core/memory/wordbook_loader.dart
 # 期望: 0 lines
 
 # 3. AudioCacheRepository 未改
-git diff origin/main -- apps/mobile/lib/core/audio/audio_cache_repository.dart
+git diff b26bff7 -- apps/mobile/lib/core/audio/audio_cache_repository.dart
 # 期望: 0 lines
 
 # 4. assets/words bundle 大小不变
 (Get-ChildItem apps\mobile\assets\words\ -File -Recurse | Measure-Object Length -Sum).Sum
-# 期望: ~5400000
+# 期望: ~5400000 ± 5%
 
 # 5. flutter analyze 新文件 0 issue
 flutter analyze 2>&1 | Select-String "manifest|content_package|package_installer"
 # 期望: 无 error/warning
+
+# 6. baseline 6 failures 不增（#10 review-adopted 具体命令）
+flutter test 2>&1 | Out-File flutter_test_day2.log
+$failureLines = Select-String -Path flutter_test_day2.log -Pattern "TestFailure was thrown"
+# 期望: failureLines.Count == 6（与 Day 1 commit 6557fb4 baseline 一致）
+# 失败的 test names 与 Day 1 baseline 集合相同（study_sections / audio_cache_repository LRU）
 ```
 
 ## 关键文件
 
 ### 新建
-- `apps/mobile/lib/core/manifest/package_installer.dart`（~280 行）
-- `apps/mobile/lib/core/manifest/content_package_service.dart`（~220 行）
-- `apps/mobile/test/core/manifest/package_installer_test.dart`（~250 行，5 cases）
-- `apps/mobile/test/core/manifest/content_package_service_test.dart`（~250 行，5 cases）
-- `apps/mobile/test/integration/manifest_sync_test.dart`（~200 行，5 cases）
+- `apps/mobile/lib/core/manifest/package_installer.dart`（~310 行）
+- `apps/mobile/lib/core/manifest/content_package_service.dart`（~250 行）
+- `apps/mobile/test/core/manifest/package_installer_test.dart`（~350 行，9 cases）
+- `apps/mobile/test/core/manifest/content_package_service_test.dart`（~280 行，6 cases）
+- `apps/mobile/test/integration/manifest_sync_test.dart`（~250 行，5 cases + helper）
 
 ### 修改
-- 无（Day 2 仅新增文件，不动既有）
+- 无（Day 2 仅新增文件）
 
-### 不动（关键）
+### 不动（关键，#11 用精确 hash）
 - `apps/mobile/lib/main.dart`
 - `apps/mobile/lib/core/memory/wordbook_loader.dart`
 - `apps/mobile/lib/core/audio/audio_cache_repository.dart`
-- `apps/mobile/lib/core/storage/drift/app_database.dart`（Day 1 改完后稳定）
+- `apps/mobile/lib/core/storage/drift/app_database.dart`
 - `apps/mobile/pubspec.yaml`（零新依赖）
 - 任何 server / migration / pipeline.py
-- assets/words bundle
+- `apps/mobile/assets/words/*.json`
 
-## 风险
+## 风险（#15 加降级优先级）
 
 | 风险 | 缓解 |
 |---|---|
-| 大 gz 解压内存峰值 | 行级 stream（gzip.decoder + LineSplitter）；单包解压后 ~5-10MB 可接受 |
-| InsertOrReplace 把 bundle 数据完全覆盖 → bundle 中独有的 stable_id 数据丢？| 设计如此 — manifest 是 server 权威（变体 C §1.2）；server 端 build_examples_package 包含**全量 active examples**（PR-A README §6 设计要点 5："Full snapshot"）|
-| drift transaction wrap install + state 失败 | 测试覆盖 rollback case；事务边界明确 |
-| 集成测复杂（mock client + drift + tmpdir）| 按 Day 1 _FakeHttpClient 模板抄；fixture 集中在 setUp 减重复 |
-| Day 2 工作量超 1 天 | **超时砍单测**（5 → 3 cases 各模块）；集成测**不砍**（master plan v0.4 R2#5）|
-| ContentPackageService 默认 cacheDir 是 systemTemp 不合产线 | 仅作 test default；PR-B4 接入启动时通过 main 注入 path_provider 拿 ApplicationDocumentsDirectory |
+| 大 gz 解压内存峰值 | 单包解压后 ~5-10MB 可接受；buffer 全部行（drift batch 必须 sync）|
+| InsertOrReplace 把 bundle 数据完全覆盖 | 设计如此（变体 C §1.2）|
+| **server 单包内 (wordId, sortOrder) 重复 → 静默吞数据** | #7 注释明示 server 责任；如发现先排查 server build_examples_package |
+| drift transaction wrap install + state 失败 | #6 单测覆盖（install ok + state fails → 全 rollback）|
+| 集成测 mock 复杂 | #14 _FakeManifestCdnServer helper 减重复 |
+| **Day 2 工作量超 1 天** | #15 review-adopted 降级优先级（从最低风险砍）：<br>1. 文档舒适项（重申注释段）<br>2. 单测 9 → 5 cases（保留 happy / kind filter / state 不膨胀 / drift rollback / file missing）<br>3. 集成测 5 → 1（仅 full flow happy；R2#5 底线，**不再砍**）|
 
-## 评审 pre-set（猜可能被提的）
+## 评审 pre-set（v0.2 后猜可能再被提的）
 
-1. PackageInstaller 不去重 jsonl 行：✅ stable_id 是 unique index，drift 自然去重
-2. SyncResult 没区分 "网络断" vs "manifest 解析失败"：🟡 failureReasons map 提供详情；调用方按需查
-3. ContentPackageService 默认 cacheDir = systemTemp 是否危险：🟡 测试 only；PR-B4 必须显式传 ApplicationDocumentsDirectory
-4. 集成测 mock 同一 client serve manifest + CDN：✅ 简化，realistic（dev 环境真共用 baseUrl）
-5. drift transaction 嵌套（_db.transaction → _db.batch）：🟡 drift 支持嵌套；测试覆盖
-6. UnsupportedKindError vs UnsupportedCompressionError：✅ 不同维度（kind = 包类型 / compression = 压缩格式）
-7. ContentPackageService 没接 isolate：🟡 PR-C 候选；当前同进程异步够用
+1. `_upsertPackageState` DELETE-INSERT 是否 race：✅ 同 transaction 内 atomic
+2. SyncResult `replaced` 含 rollback：✅ 文档 + 字段名说清
+3. PackageInstaller required db 改后既有调用方的影响：🟡 仅 ContentPackageService default + 未来 PR-B4 main.dart；都需显式传
+4. ContentPackageService cacheDir required + PR-B4 main 配置：🟡 PR-B4 plan 必须在 main.dart 显式 `getApplicationDocumentsDirectory()` 后才传给 service
+5. transaction 嵌套（_db.transaction → _db.batch）兼容性：✅ drift 文档支持；#6 单测验证
 
-## 验收清单
+## 验收清单 v0.2
 
-- [ ] PackageInstaller 实装：gzip 解压 + drift batch insertOrReplace + content_package_state UPSERT
-- [ ] PackageInstaller 单测 5 cases：happy / replace 覆盖 / 非 examples kind reject / 文件丢失 / drift rollback
-- [ ] ContentPackageService 实装：D4 不传 since_release + R1#5 kind filter + state diff
-- [ ] ContentPackageService 单测 5 cases：happy / kind filter / upgrade / skip / download fail
-- [ ] 集成测 5 cases：full flow / checksum mismatch / non-examples skip / partial failure / upgrade
+- [ ] PackageInstaller `db` required（无 AppDatabase() default）
+- [ ] PackageInstaller `_upsertPackageState` 用 DELETE WHERE packageName + INSERT（state 表不膨胀）
+- [ ] PackageInstaller `_installExamples` 空包 / stable_id 缺失 throw InstallFailedError
+- [ ] PackageInstaller `catch (e, st)` 保 stack trace
+- [ ] PackageInstaller 9 cases 单测全过（含 #1 / #3 / #4 / #6 关键 cases）
+- [ ] ContentPackageService `cacheDir` + `db` required（无 systemTemp / AppDatabase 默认）
+- [ ] ContentPackageService default installer 共享传入 db（不再独立 new）
+- [ ] SyncResult 字段：installed / **replaced**（不是 upgraded） / skipped / failed / failureReasons / **manifestError**
+- [ ] ContentPackageService 6 cases 单测全过（含 #12 manifest fetch 失败 case）
+- [ ] 集成测 5 cases 全过 + 用 _FakeManifestCdnServer helper
+- [ ] 集成测含 #1 关键 case："replace 后 state 表仍 1 行"
 - [ ] `flutter analyze` 0 error in new files
-- [ ] `flutter test` 全过 + baseline 6 个 pre-existing 失败保持（不引入新失败）
-- [ ] 启动行为不变：5 步 PowerShell 命令全过
+- [ ] `flutter test` baseline 6 failures 数+名字与 Day 1 一致（具体命令验证）
+- [ ] 启动行为不变 6 步（用 b26bff7 hash 对照）
 - [ ] assets/words bundle 5.4MB 不变
-- [ ] pubspec.yaml 不改（零新依赖）
+- [ ] pubspec.yaml 不改
 
 ## 不做（Day 3+ / PR-B3+）
 
@@ -596,7 +592,7 @@ flutter analyze 2>&1 | Select-String "manifest|content_package|package_installer
 - ❌ feature flag（PR-B3）
 - ❌ 启动序列接入（PR-B4）
 - ❌ server staging serve route（PR-B3）
-- ❌ audio_meta / wordbook / dictionary kind 实装（PR-B3+ 视需要）
+- ❌ audio_meta / wordbook / dictionary kind 实装（PR-B3+）
 - ❌ tombstone（v0.3 不做）
 - ❌ ETag 缓存 / Range resume / brotli 支持（PR-C）
 
@@ -605,26 +601,23 @@ flutter analyze 2>&1 | Select-String "manifest|content_package|package_installer
 Day 2 工作完成后单 commit：
 
 ```
-feat(v0.3-pr-b2): Day 2 — PackageInstaller + ContentPackageService + 集成测
+feat(v0.3-pr-b2): Day 2 — PackageInstaller + ContentPackageService + 集成测 (v0.2)
 
-- PackageInstaller (~280 行): gzip 解压 + drift batch insertOrReplace
-  + content_package_state UPSERT (单 transaction 原子);
-  仅 examples kind, 其他 throw UnsupportedKindError
-- ContentPackageService (~220 行): 编排 ManifestClient/DownloadManager/
-  PackageInstaller; D4 全量拉; R1#5 kind filter; state diff 决策
-- 单测 +10 cases: PackageInstaller 5 + ContentPackageService 5
-- 集成测 +5 cases: drift in-memory + _FakeHttpClient 全 flow
-- App 默认行为完全不变 (5 步 PowerShell 验证)
-- 零新依赖 (pubspec 不改)
-- baseline 6 个 pre-existing failures 保持 (不引入新失败)
+吸收两份外部评审 16 处 (Day 2 plan v0.1 → v0.2):
+P1: state 表 packageName 维度清理 / installer 共享 db / 空包拒绝 /
+    stable_id 必须非空
+P2: 注释行级 stream 删 / transaction 嵌套测试 / 双 unique index server
+    责任注释 / cacheDir+db required / replaced 命名 / baseline 验证 /
+    精确 hash 对照 / SyncResult.manifestError
+Nit: stack trace 保留 / mock helper / 降级优先级 / installer db required
+
+新增 (~810 行代码 + ~880 行测试):
+- PackageInstaller (~310 行): drift transaction wrap 原子 install + state;
+  仅 examples kind, 空包/stable_id 缺失 throw
+- ContentPackageService (~250 行): cacheDir+db required; default installer
+  共享 db; SyncResult 加 manifestError 顶层; replaced 含 rollback
+- 单测 +15 cases (PackageInstaller 9 + ContentPackageService 6)
+- 集成测 +5 cases + _FakeManifestCdnServer helper
+- App 默认行为不变 (6 步 PowerShell + b26bff7 精确 hash 对照)
+- 零新依赖
 ```
-
-## Day 2 完成后状态
-
-- PR-B2 收口（mobile 基建完整 + 不切流量验证）
-- 5 模块全部就绪：drift / ManifestClient / DownloadManager / PackageInstaller / ContentPackageService
-- 单测 22 cases + 集成测 5 cases + migration 1 case 全过
-- App 默认行为完全不变（4 个不动文件 + assets 不变 + 无启动调用）
-- 准备进 PR-B3：feature flag + WordbookLoader 改 + server staging serve route
-
-详见 `docs/design/pr-b2_v0.4.md` §Day 2 完成条件。
