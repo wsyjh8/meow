@@ -1,4 +1,20 @@
-# v0.3 PR-B3 · feature flag + WordbookLoader 改 + server staging serve（3 天工作分解）
+# v0.3 PR-B3 · feature flag + WordbookLoader 改 + server staging serve（3 天工作分解，v0.2）
+
+> **v0.1 → v0.2**：吸收两份外部评审共 16 处去重修订。关键修正：
+> - useStaticAssets 注册顺序：staging **必须先于** cdn-mock + `if (!isProdEnv)` 守卫（v0.2 #1）
+> - 注册优先级机制：**注册顺序 + next() fallthrough**（不是 prefix 长度，v0.2 #16）
+> - LocalSettingsService 实际路径 `core/storage/`（不是 core/services/，v0.2 #3）
+> - `unawaited()` 来自 `dart:async`（不是 flutter/foundation，v0.2 #5）
+> - main.dart 首次引入 path_provider 须显式 import（v0.2 #6）
+> - LocalSettingsService DI 模式：MeowApp 顶层 InheritedWidget（v0.2 #7）
+> - host 严格守卫：无 Host header 抛 500（v0.2 #9）
+> - e2e production override 用独立 describe + beforeEach（v0.2 #8）
+> - e2e 不能覆盖 main.ts useStaticAssets，靠 manual smoke 兜底（v0.2 R2#4）
+> - smoke 删除所有 `--yes`（pipeline.py activate/revoke 无此参数，v0.2 #2）
+> - 测试 prefix `test-prb3-d1-`（v0.2 #10）
+> - sub-smoke E 详细命令：flutter run + adb logcat + drift sqlite（v0.2 #11）
+> - settings 页不可砍（sub-smoke A-E 强依赖；v0.2 #12）
+> - Day 3 起手 grep PR-B2 SyncResult.manifestError 字段签名（v0.2 #14）
 
 ## Context
 
@@ -50,20 +66,32 @@ worktree：`D:\code\AI\startUp\meow\.claude\worktrees\v0.3-pr-b3`
 
 主要工作（单 commit）：
 
-#### 1. NestJS main.ts 加第二个 useStaticAssets
+#### 1. NestJS main.ts 加 staging useStaticAssets（v0.2 #1 + #16 关键修订）
 
 ```typescript
-// main.ts, after existing useStaticAssets(cdn-mock):
-const stagingDir = path.resolve(__dirname, '..', 'audio-pipeline-staging');
-app.useStaticAssets(stagingDir, {
-  prefix: '/cdn/staging',
-  setHeaders: (res) => {
-    res.set('Cache-Control', 'no-cache');  // dev only; production 真 CDN 才有 cache
-  },
-});
+// PR-B3 Day 1 (D3) — staging serve route。两条关键约束:
+//   v0.2 #1 (R1#1): staging 必须注册在 cdn-mock 之前。NestJS/express
+//     useStaticAssets 是按**注册顺序 + next() fallthrough**匹配，**不是**
+//     按 prefix 长度优先。如果 cdn-mock 注册在前，请求 /cdn/staging/foo
+//     会先进 /cdn 中间件查 cdn-mock/staging/foo，next() 才落到 staging
+//     route——若 cdn-mock 误有 staging/ 子目录会被错截。
+//   v0.2 #1 (R2#1): 仅 dev/local 模式注册；production 不暴露 staging。
+//     即使 manifest API 在 prod 已 skip file://, static route 仍会暴露
+//     部署目录文件，安全风险。
+const isProdEnv = process.env.NODE_ENV === 'production';
+if (!isProdEnv) {
+  app.useStaticAssets(join(__dirname, '..', 'audio-pipeline-staging'), {
+    prefix: '/cdn/staging',
+    setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+  });
+}
+
+// 现有 cdn-mock 注册（PR-A，**保留不动**，必须放在 staging 注册之后）
+// app.useStaticAssets(join(__dirname, '..', 'cdn-mock'), { ... });
 ```
 
-**注意**：`/cdn` 已被 PR-A 占用（cdn-mock 下的 audio 文件）；新前缀 `/cdn/staging` 与之并行。
+**注意**：useStaticAssets 是**按注册顺序 + next() fallthrough**匹配（v0.2 #16
+review-adopted），不是 prefix 长度优先；staging 必须先注册。
 
 #### 2. content-manifest.controller.ts 加 dev URL transform
 
@@ -96,9 +124,13 @@ if (isProd && row.file_url.startsWith('file://')) {
 }
 
 // dev: file:// → http:// transform（PR-B3 新加）
+// v0.2 #9 (R1#7) review-adopted: 严格 host 取值。HTTP/1.1 必带 Host
+// header；缺失视为异常请求，throw 让排查更直接（不再 fallback 硬编码端口）。
+const host = req.get('host');
+if (!host) throw new InternalServerErrorException('Host header missing');
 const transformedUrl = isProd
   ? row.file_url
-  : transformFileUrlForDev(row.file_url, req.get('host') ?? 'localhost:3000');
+  : transformFileUrlForDev(row.file_url, host);
 ```
 
 注入 `@Req() req: Request`（NestJS 标准用法）。
@@ -142,6 +174,12 @@ Future<void> setManifestSyncEnabled(bool value) =>
 final prefs = await SharedPreferences.getInstance();
 final settings = LocalSettingsService(prefs);
 ```
+
+**DI 模式（v0.2 #7 R1#4 review-adopted）**：mobile 无 Riverpod / Provider /
+bloc，沿用现有 StatefulWidget 风格——把 `settings` 实例存到 `MeowApp` 顶层
+**InheritedWidget**（同 `appDb` 一起持有），子 widget（settings_page 的
+SwitchListTile）通过 `MeowApp.of(context).settings` 取。Day 2 plan 起手前
+确认实装具体形态（如 mobile 已有别的 InheritedWidget 模板可复用）。
 
 Day 2 起手前需确认这一步是否已挂。如已挂，仅加 manifestSyncEnabled 字段；如没挂，顺手加。
 
@@ -214,6 +252,13 @@ Future<bool> _hasManifestPackageFor(String bookSlug) async {
 
 **目标**：把 ContentPackageService 接入启动序列（flag=true 时），写 sub-smokes 验证 D1 + D3 收口实际有效，更新 README。
 
+**Day 3 起手准备**（v0.2 #14 R1#10 review-adopted）：
+```
+grep -n "manifestError" apps/mobile/lib/core/manifest/content_package_service.dart
+```
+确认 PR-B2 实装的 `SyncResult.manifestError` 字段精确签名（String? 或 Exception?
+或 dynamic），plan 内伪代码与实际签名对齐再下笔。
+
 主要工作：
 
 #### 1. main.dart 加启动异步 sync hook（~15 行）
@@ -244,7 +289,7 @@ runApp(const MeowApp());
 **关键**：
 - flag=false（默认） → 这段代码不执行 → 启动行为完全等同 PR-B2 之前
 - flag=true → 异步触发，不阻塞 UI；失败静默
-- `unawaited()` 来自 `package:flutter/foundation.dart` 或 `package:meta`
+- `unawaited()` 来自 `dart:async`（v0.2 #5 R1#2 review-adopted；仓内 `audio_cache_repository.dart:1` 已有用法可参照）
 
 #### 2. 设置页 debug 开关（~30 行）
 
@@ -271,8 +316,25 @@ B. flag=true + dev API 跑 → manifest sync 触发，drift 看到 manifest 数�
 C. flag=true + 离线 → 启动正常（bundle 路径走通），sync 失败静默
 D. **D1 关键**：flag=true 装 bundle v3 → sync 拉 v8 manifest 写 drift →
    修改 assets bundle 模拟 v4 升级 → 重启 → 验证 manifest 数据保留
-E. **D3 关键**：dev API 调 manifest API → 收到 http://localhost:3000/cdn/staging/...
-   URL（不是 file://），DownloadManager 真能下载
+E. **D3 关键 — DownloadManager 真能下载**（v0.2 #11 R1#9 review-adopted；
+   不再只口头"调 API 看 URL"，给具体命令）：
+     1. `cd apps/api && npm run start:dev`（确认 dev server 起在 :3000）
+     2. `cd apps/mobile && flutter run -d <device>`（debug build；adb
+        usb 已连）
+     3. App 启动后进入设置页 → 开 "Manifest sync (PR-B3 dev)" 开关
+     4. 杀 App → 重启（触发 main.dart 启动 hook）
+     5. `adb logcat | grep -E "manifest|ContentPackageService"`，期望:
+        - `ContentPackageService.syncIfNeeded` 进入
+        - `DownloadManager.downloadPackage` 200 OK from
+          `http://10.0.2.2:3000/cdn/staging/...`（emulator）或
+          `http://<host-ip>:3000/cdn/staging/...`（real device）
+        - **不应** 看到 `Unsupported scheme: file://` 之类报错
+     6. 反查 drift 数据库（adb shell + sqlite3 或 drift_dev inspector）:
+        ```
+        SELECT package_id, content_version, release_id FROM content_package_state;
+        SELECT COUNT(*) FROM example_sentences WHERE stable_id IS NOT NULL;
+        ```
+        期望: state 表 ≥1 行；example_sentences 含 manifest 来源行
 ```
 
 #### 4. README 更新（~30 行）
@@ -297,8 +359,8 @@ E. **D3 关键**：dev API 调 manifest API → 收到 http://localhost:3000/cdn
 - `apps/api/test/pg-regression.e2e-spec.ts`（+2 cases，~80 行）
 
 ### 修改（mobile）
-- `apps/mobile/lib/core/services/local_settings_service.dart`（+20 行，flag getter/setter）
-- `apps/mobile/lib/main.dart`（+25 行，settings init + 启动 sync hook）
+- `apps/mobile/lib/core/storage/local_settings_service.dart`（+20 行，flag getter/setter）
+- `apps/mobile/lib/main.dart`（+25 行，settings init + 启动 sync hook + **import `package:path_provider/path_provider.dart`**——v0.2 #6 R1#3，main.dart 首次引入；`getApplicationDocumentsDirectory()` 不能凭空可用）
 - `apps/mobile/lib/core/memory/wordbook_loader.dart`（+30 行，D1 收口）
 - `apps/mobile/lib/features/settings/settings_page.dart`（+30 行，debug 开关）
 - `apps/mobile/test/core/memory/wordbook_loader_test.dart`（+150 行，D1 case）
@@ -324,8 +386,8 @@ E. **D3 关键**：dev API 调 manifest API → 收到 http://localhost:3000/cdn
 | WordbookLoader 改后老用户升级丢数据 | D1 关键测试覆盖；保留"无 manifest 记录 → 清表"老路径 |
 | 启动序列改后崩溃 | flag 默认关 → 改动代码路径不执行；regression test 覆盖 flag=false 路径 |
 | settings 页 SwitchListTile 误开 | 仅 debug build 显示（kDebugMode）；release 用户看不到 |
-| Day 2 工作量超 1 天（WordbookLoader 改 + 单测）| 降级优先级：砍 settings 页（移到 Day 3）；保留 D1 单测 |
-| Day 3 启动 sync + sub-smokes 难手测 | 文档化 5 步流程；本机能完成；CI 不上 |
+| Day 2 工作量超 1 天（WordbookLoader 改 + 单测）| 降级优先级（v0.2 #12 R1#11 修订）：(1) 单测从 5 → 3 cases；(2) sub-smoke 缩到 3 步；**settings 页不可砍**（Day 3 sub-smoke A-E 强依赖 flag 开关）|
+| Day 3 启动 sync + sub-smokes 难手测 | sub-smoke E 详细命令（flutter run + adb logcat + drift sqlite 反查）已固化在 §"Sub-smokes 5 步"；本机能完成；CI 不上 |
 | ContentPackageService cacheDir 来源 | main.dart 用 `await getApplicationDocumentsDirectory()` (path_provider)；与 AudioCacheRepository 一致 |
 | 启动 sync 失败 log 噪声 | 仅在 hasFailure 时 debugPrint；release build 默认压制 |
 
@@ -382,4 +444,4 @@ PR-B4 详细 plan 见 master plan v0.4 §5。
 - PR-A `apps/api/src/main.ts:19-25`（useStaticAssets 模板）
 - PR-A `apps/api/src/controllers/content-manifest.controller.ts:160-177`（file_url 处理位置）
 - mobile `apps/mobile/lib/core/memory/wordbook_loader.dart:47-72`（loadIfNeeded 算法）
-- mobile `apps/mobile/lib/core/services/local_settings_service.dart`（flag 持久化模板）
+- mobile `apps/mobile/lib/core/storage/local_settings_service.dart`（flag 持久化模板）
