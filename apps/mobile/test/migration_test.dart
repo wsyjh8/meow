@@ -414,5 +414,59 @@ void main() {
 
       await db.close();
     });
+
+    test(
+        'upgrade from v11: content_package_states table created (v12, PR-B2 Day 1)',
+        () async {
+      // R1#5 + R2#5 review: simulate a v11 device with audio_file_cache
+      // already in place (v11 created it), verify v12 onUpgrade adds
+      // content_package_states. PRAGMA user_version=11 forces drift to
+      // run the `if (from < 12)` branch.
+      final nativeDb = NativeDatabase.memory(
+        setup: (rawDb) {
+          rawDb.execute('PRAGMA user_version = 11');
+          // Minimal schema needed for AppDatabase to open without
+          // "table not found" errors on tables that exist at v11 already.
+          // We only need legacy + sessions + audio_file_cache here; drift
+          // creates the rest via createAll if missing.
+          rawDb.execute(
+              'CREATE TABLE word_records (id INTEGER PRIMARY KEY AUTOINCREMENT, word_id TEXT NOT NULL, book_id TEXT NOT NULL, study_type TEXT NOT NULL DEFAULT \'new\', action_result TEXT NOT NULL, created_at TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0, session_id TEXT)');
+          rawDb.execute(
+              'CREATE TABLE audio_file_cache (audio_id TEXT NOT NULL PRIMARY KEY, local_path TEXT NOT NULL, bytes INTEGER NOT NULL, cached_at INTEGER NOT NULL, last_played_at INTEGER, cached_checksum TEXT, cached_content_version TEXT)');
+        },
+      );
+      final db = AppDatabase.forTesting(nativeDb);
+
+      // The new content_package_states table exists + is empty.
+      expect(await db.select(db.contentPackageStates).get(), isEmpty);
+
+      // Insert + read end-to-end (verifies all 12 columns are mapped).
+      await db.into(db.contentPackageStates).insert(
+            ContentPackageStatesCompanion.insert(
+              packageId: 'examples-zk@v1',
+              packageName: 'examples-zk',
+              packageKind: 'examples',
+              contentVersion: 'v1',
+              releaseId: 'rel-test-001',
+              checksumSha256: 'abc123',
+              installedAt: DateTime.now().millisecondsSinceEpoch,
+              bookId: const Value('zk'),
+              sizeBytes: const Value(102400),
+              compression: const Value('gzip'),
+              minAppVersion: const Value('0.0.0'),
+              fileUrl: const Value('http://localhost/cdn/examples-zk@v1.gz'),
+            ),
+          );
+      final rows = await db.select(db.contentPackageStates).get();
+      expect(rows.length, 1);
+      expect(rows.first.packageId, 'examples-zk@v1');
+      expect(rows.first.bookId, 'zk');
+      expect(rows.first.compression, 'gzip');
+
+      // Audio file cache (created at v11) survives the upgrade.
+      expect(await db.select(db.audioFileCache).get(), isEmpty);
+
+      await db.close();
+    });
   });
 }

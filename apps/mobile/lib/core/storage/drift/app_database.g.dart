@@ -7555,6 +7555,663 @@ class AudioFileCacheCompanion extends UpdateCompanion<AudioFileCacheData> {
   }
 }
 
+class $ContentPackageStatesTable extends ContentPackageStates
+    with TableInfo<$ContentPackageStatesTable, ContentPackageState> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ContentPackageStatesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _packageIdMeta =
+      const VerificationMeta('packageId');
+  @override
+  late final GeneratedColumn<String> packageId = GeneratedColumn<String>(
+      'package_id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _packageNameMeta =
+      const VerificationMeta('packageName');
+  @override
+  late final GeneratedColumn<String> packageName = GeneratedColumn<String>(
+      'package_name', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _packageKindMeta =
+      const VerificationMeta('packageKind');
+  @override
+  late final GeneratedColumn<String> packageKind = GeneratedColumn<String>(
+      'package_kind', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _contentVersionMeta =
+      const VerificationMeta('contentVersion');
+  @override
+  late final GeneratedColumn<String> contentVersion = GeneratedColumn<String>(
+      'content_version', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _releaseIdMeta =
+      const VerificationMeta('releaseId');
+  @override
+  late final GeneratedColumn<String> releaseId = GeneratedColumn<String>(
+      'release_id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _bookIdMeta = const VerificationMeta('bookId');
+  @override
+  late final GeneratedColumn<String> bookId = GeneratedColumn<String>(
+      'book_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _checksumSha256Meta =
+      const VerificationMeta('checksumSha256');
+  @override
+  late final GeneratedColumn<String> checksumSha256 = GeneratedColumn<String>(
+      'checksum_sha256', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _sizeBytesMeta =
+      const VerificationMeta('sizeBytes');
+  @override
+  late final GeneratedColumn<int> sizeBytes = GeneratedColumn<int>(
+      'size_bytes', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _compressionMeta =
+      const VerificationMeta('compression');
+  @override
+  late final GeneratedColumn<String> compression = GeneratedColumn<String>(
+      'compression', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _minAppVersionMeta =
+      const VerificationMeta('minAppVersion');
+  @override
+  late final GeneratedColumn<String> minAppVersion = GeneratedColumn<String>(
+      'min_app_version', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _installedAtMeta =
+      const VerificationMeta('installedAt');
+  @override
+  late final GeneratedColumn<int> installedAt = GeneratedColumn<int>(
+      'installed_at', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _fileUrlMeta =
+      const VerificationMeta('fileUrl');
+  @override
+  late final GeneratedColumn<String> fileUrl = GeneratedColumn<String>(
+      'file_url', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        packageId,
+        packageName,
+        packageKind,
+        contentVersion,
+        releaseId,
+        bookId,
+        checksumSha256,
+        sizeBytes,
+        compression,
+        minAppVersion,
+        installedAt,
+        fileUrl
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'content_package_states';
+  @override
+  VerificationContext validateIntegrity(
+      Insertable<ContentPackageState> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('package_id')) {
+      context.handle(_packageIdMeta,
+          packageId.isAcceptableOrUnknown(data['package_id']!, _packageIdMeta));
+    } else if (isInserting) {
+      context.missing(_packageIdMeta);
+    }
+    if (data.containsKey('package_name')) {
+      context.handle(
+          _packageNameMeta,
+          packageName.isAcceptableOrUnknown(
+              data['package_name']!, _packageNameMeta));
+    } else if (isInserting) {
+      context.missing(_packageNameMeta);
+    }
+    if (data.containsKey('package_kind')) {
+      context.handle(
+          _packageKindMeta,
+          packageKind.isAcceptableOrUnknown(
+              data['package_kind']!, _packageKindMeta));
+    } else if (isInserting) {
+      context.missing(_packageKindMeta);
+    }
+    if (data.containsKey('content_version')) {
+      context.handle(
+          _contentVersionMeta,
+          contentVersion.isAcceptableOrUnknown(
+              data['content_version']!, _contentVersionMeta));
+    } else if (isInserting) {
+      context.missing(_contentVersionMeta);
+    }
+    if (data.containsKey('release_id')) {
+      context.handle(_releaseIdMeta,
+          releaseId.isAcceptableOrUnknown(data['release_id']!, _releaseIdMeta));
+    } else if (isInserting) {
+      context.missing(_releaseIdMeta);
+    }
+    if (data.containsKey('book_id')) {
+      context.handle(_bookIdMeta,
+          bookId.isAcceptableOrUnknown(data['book_id']!, _bookIdMeta));
+    }
+    if (data.containsKey('checksum_sha256')) {
+      context.handle(
+          _checksumSha256Meta,
+          checksumSha256.isAcceptableOrUnknown(
+              data['checksum_sha256']!, _checksumSha256Meta));
+    } else if (isInserting) {
+      context.missing(_checksumSha256Meta);
+    }
+    if (data.containsKey('size_bytes')) {
+      context.handle(_sizeBytesMeta,
+          sizeBytes.isAcceptableOrUnknown(data['size_bytes']!, _sizeBytesMeta));
+    }
+    if (data.containsKey('compression')) {
+      context.handle(
+          _compressionMeta,
+          compression.isAcceptableOrUnknown(
+              data['compression']!, _compressionMeta));
+    }
+    if (data.containsKey('min_app_version')) {
+      context.handle(
+          _minAppVersionMeta,
+          minAppVersion.isAcceptableOrUnknown(
+              data['min_app_version']!, _minAppVersionMeta));
+    }
+    if (data.containsKey('installed_at')) {
+      context.handle(
+          _installedAtMeta,
+          installedAt.isAcceptableOrUnknown(
+              data['installed_at']!, _installedAtMeta));
+    } else if (isInserting) {
+      context.missing(_installedAtMeta);
+    }
+    if (data.containsKey('file_url')) {
+      context.handle(_fileUrlMeta,
+          fileUrl.isAcceptableOrUnknown(data['file_url']!, _fileUrlMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {packageId};
+  @override
+  ContentPackageState map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ContentPackageState(
+      packageId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}package_id'])!,
+      packageName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}package_name'])!,
+      packageKind: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}package_kind'])!,
+      contentVersion: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}content_version'])!,
+      releaseId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}release_id'])!,
+      bookId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}book_id']),
+      checksumSha256: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}checksum_sha256'])!,
+      sizeBytes: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}size_bytes']),
+      compression: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}compression']),
+      minAppVersion: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}min_app_version']),
+      installedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}installed_at'])!,
+      fileUrl: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}file_url']),
+    );
+  }
+
+  @override
+  $ContentPackageStatesTable createAlias(String alias) {
+    return $ContentPackageStatesTable(attachedDatabase, alias);
+  }
+}
+
+class ContentPackageState extends DataClass
+    implements Insertable<ContentPackageState> {
+  /// Composite manifest id, e.g. "examples-zk@v5".
+  /// Matches server `content_manifest.id` exactly.
+  final String packageId;
+
+  /// Logical package name without version, e.g. "examples-zk".
+  final String packageName;
+
+  /// One of: "examples" / "audio_meta" / "wordbook" / "dictionary".
+  /// PR-B2 only fully implements `examples`; others rejected upstream
+  /// in ContentPackageService kind filter (R1#5 review-adopted).
+  final String packageKind;
+
+  /// e.g. "v5". Used by ContentPackageService to decide upgrade vs skip.
+  final String contentVersion;
+
+  /// release_id of the manifest response that brought this package most
+  /// recently. Audit / debug aid only — rollback decisions live server-side.
+  final String releaseId;
+
+  /// "zk" / "cet4" / "gk" / null when kind=dictionary. UI can group progress
+  /// by book; debug-friendly. nullable per server contract (controller.ts:33).
+  final String? bookId;
+
+  /// SHA-256 of the .gz package binary at install time. Detects server-side
+  /// replacements; never recomputed at runtime (DB v0.3.0 §7.4.1 rule).
+  final String checksumSha256;
+
+  /// Compressed package size in bytes. Optional; used for download progress
+  /// bars and future cache budget calculations.
+  final int? sizeBytes;
+
+  /// "gzip" / "brotli" / null. PR-B2 v1 only supports gzip; brotli rejected
+  /// at DownloadManager level. Stored for future PR-B3+ multi-codec support.
+  final String? compression;
+
+  /// Minimum app version required to use this package. Nullable; client-side
+  /// guard only (server already filters min_app_version vs request app_version).
+  final String? minAppVersion;
+
+  /// UTC epoch ms when this row was last written.
+  final int installedAt;
+
+  /// Source URL (file:// dev / http:// prod). Debug + manual re-download.
+  final String? fileUrl;
+  const ContentPackageState(
+      {required this.packageId,
+      required this.packageName,
+      required this.packageKind,
+      required this.contentVersion,
+      required this.releaseId,
+      this.bookId,
+      required this.checksumSha256,
+      this.sizeBytes,
+      this.compression,
+      this.minAppVersion,
+      required this.installedAt,
+      this.fileUrl});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['package_id'] = Variable<String>(packageId);
+    map['package_name'] = Variable<String>(packageName);
+    map['package_kind'] = Variable<String>(packageKind);
+    map['content_version'] = Variable<String>(contentVersion);
+    map['release_id'] = Variable<String>(releaseId);
+    if (!nullToAbsent || bookId != null) {
+      map['book_id'] = Variable<String>(bookId);
+    }
+    map['checksum_sha256'] = Variable<String>(checksumSha256);
+    if (!nullToAbsent || sizeBytes != null) {
+      map['size_bytes'] = Variable<int>(sizeBytes);
+    }
+    if (!nullToAbsent || compression != null) {
+      map['compression'] = Variable<String>(compression);
+    }
+    if (!nullToAbsent || minAppVersion != null) {
+      map['min_app_version'] = Variable<String>(minAppVersion);
+    }
+    map['installed_at'] = Variable<int>(installedAt);
+    if (!nullToAbsent || fileUrl != null) {
+      map['file_url'] = Variable<String>(fileUrl);
+    }
+    return map;
+  }
+
+  ContentPackageStatesCompanion toCompanion(bool nullToAbsent) {
+    return ContentPackageStatesCompanion(
+      packageId: Value(packageId),
+      packageName: Value(packageName),
+      packageKind: Value(packageKind),
+      contentVersion: Value(contentVersion),
+      releaseId: Value(releaseId),
+      bookId:
+          bookId == null && nullToAbsent ? const Value.absent() : Value(bookId),
+      checksumSha256: Value(checksumSha256),
+      sizeBytes: sizeBytes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sizeBytes),
+      compression: compression == null && nullToAbsent
+          ? const Value.absent()
+          : Value(compression),
+      minAppVersion: minAppVersion == null && nullToAbsent
+          ? const Value.absent()
+          : Value(minAppVersion),
+      installedAt: Value(installedAt),
+      fileUrl: fileUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(fileUrl),
+    );
+  }
+
+  factory ContentPackageState.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ContentPackageState(
+      packageId: serializer.fromJson<String>(json['packageId']),
+      packageName: serializer.fromJson<String>(json['packageName']),
+      packageKind: serializer.fromJson<String>(json['packageKind']),
+      contentVersion: serializer.fromJson<String>(json['contentVersion']),
+      releaseId: serializer.fromJson<String>(json['releaseId']),
+      bookId: serializer.fromJson<String?>(json['bookId']),
+      checksumSha256: serializer.fromJson<String>(json['checksumSha256']),
+      sizeBytes: serializer.fromJson<int?>(json['sizeBytes']),
+      compression: serializer.fromJson<String?>(json['compression']),
+      minAppVersion: serializer.fromJson<String?>(json['minAppVersion']),
+      installedAt: serializer.fromJson<int>(json['installedAt']),
+      fileUrl: serializer.fromJson<String?>(json['fileUrl']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'packageId': serializer.toJson<String>(packageId),
+      'packageName': serializer.toJson<String>(packageName),
+      'packageKind': serializer.toJson<String>(packageKind),
+      'contentVersion': serializer.toJson<String>(contentVersion),
+      'releaseId': serializer.toJson<String>(releaseId),
+      'bookId': serializer.toJson<String?>(bookId),
+      'checksumSha256': serializer.toJson<String>(checksumSha256),
+      'sizeBytes': serializer.toJson<int?>(sizeBytes),
+      'compression': serializer.toJson<String?>(compression),
+      'minAppVersion': serializer.toJson<String?>(minAppVersion),
+      'installedAt': serializer.toJson<int>(installedAt),
+      'fileUrl': serializer.toJson<String?>(fileUrl),
+    };
+  }
+
+  ContentPackageState copyWith(
+          {String? packageId,
+          String? packageName,
+          String? packageKind,
+          String? contentVersion,
+          String? releaseId,
+          Value<String?> bookId = const Value.absent(),
+          String? checksumSha256,
+          Value<int?> sizeBytes = const Value.absent(),
+          Value<String?> compression = const Value.absent(),
+          Value<String?> minAppVersion = const Value.absent(),
+          int? installedAt,
+          Value<String?> fileUrl = const Value.absent()}) =>
+      ContentPackageState(
+        packageId: packageId ?? this.packageId,
+        packageName: packageName ?? this.packageName,
+        packageKind: packageKind ?? this.packageKind,
+        contentVersion: contentVersion ?? this.contentVersion,
+        releaseId: releaseId ?? this.releaseId,
+        bookId: bookId.present ? bookId.value : this.bookId,
+        checksumSha256: checksumSha256 ?? this.checksumSha256,
+        sizeBytes: sizeBytes.present ? sizeBytes.value : this.sizeBytes,
+        compression: compression.present ? compression.value : this.compression,
+        minAppVersion:
+            minAppVersion.present ? minAppVersion.value : this.minAppVersion,
+        installedAt: installedAt ?? this.installedAt,
+        fileUrl: fileUrl.present ? fileUrl.value : this.fileUrl,
+      );
+  ContentPackageState copyWithCompanion(ContentPackageStatesCompanion data) {
+    return ContentPackageState(
+      packageId: data.packageId.present ? data.packageId.value : this.packageId,
+      packageName:
+          data.packageName.present ? data.packageName.value : this.packageName,
+      packageKind:
+          data.packageKind.present ? data.packageKind.value : this.packageKind,
+      contentVersion: data.contentVersion.present
+          ? data.contentVersion.value
+          : this.contentVersion,
+      releaseId: data.releaseId.present ? data.releaseId.value : this.releaseId,
+      bookId: data.bookId.present ? data.bookId.value : this.bookId,
+      checksumSha256: data.checksumSha256.present
+          ? data.checksumSha256.value
+          : this.checksumSha256,
+      sizeBytes: data.sizeBytes.present ? data.sizeBytes.value : this.sizeBytes,
+      compression:
+          data.compression.present ? data.compression.value : this.compression,
+      minAppVersion: data.minAppVersion.present
+          ? data.minAppVersion.value
+          : this.minAppVersion,
+      installedAt:
+          data.installedAt.present ? data.installedAt.value : this.installedAt,
+      fileUrl: data.fileUrl.present ? data.fileUrl.value : this.fileUrl,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ContentPackageState(')
+          ..write('packageId: $packageId, ')
+          ..write('packageName: $packageName, ')
+          ..write('packageKind: $packageKind, ')
+          ..write('contentVersion: $contentVersion, ')
+          ..write('releaseId: $releaseId, ')
+          ..write('bookId: $bookId, ')
+          ..write('checksumSha256: $checksumSha256, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('compression: $compression, ')
+          ..write('minAppVersion: $minAppVersion, ')
+          ..write('installedAt: $installedAt, ')
+          ..write('fileUrl: $fileUrl')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      packageId,
+      packageName,
+      packageKind,
+      contentVersion,
+      releaseId,
+      bookId,
+      checksumSha256,
+      sizeBytes,
+      compression,
+      minAppVersion,
+      installedAt,
+      fileUrl);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ContentPackageState &&
+          other.packageId == this.packageId &&
+          other.packageName == this.packageName &&
+          other.packageKind == this.packageKind &&
+          other.contentVersion == this.contentVersion &&
+          other.releaseId == this.releaseId &&
+          other.bookId == this.bookId &&
+          other.checksumSha256 == this.checksumSha256 &&
+          other.sizeBytes == this.sizeBytes &&
+          other.compression == this.compression &&
+          other.minAppVersion == this.minAppVersion &&
+          other.installedAt == this.installedAt &&
+          other.fileUrl == this.fileUrl);
+}
+
+class ContentPackageStatesCompanion
+    extends UpdateCompanion<ContentPackageState> {
+  final Value<String> packageId;
+  final Value<String> packageName;
+  final Value<String> packageKind;
+  final Value<String> contentVersion;
+  final Value<String> releaseId;
+  final Value<String?> bookId;
+  final Value<String> checksumSha256;
+  final Value<int?> sizeBytes;
+  final Value<String?> compression;
+  final Value<String?> minAppVersion;
+  final Value<int> installedAt;
+  final Value<String?> fileUrl;
+  final Value<int> rowid;
+  const ContentPackageStatesCompanion({
+    this.packageId = const Value.absent(),
+    this.packageName = const Value.absent(),
+    this.packageKind = const Value.absent(),
+    this.contentVersion = const Value.absent(),
+    this.releaseId = const Value.absent(),
+    this.bookId = const Value.absent(),
+    this.checksumSha256 = const Value.absent(),
+    this.sizeBytes = const Value.absent(),
+    this.compression = const Value.absent(),
+    this.minAppVersion = const Value.absent(),
+    this.installedAt = const Value.absent(),
+    this.fileUrl = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ContentPackageStatesCompanion.insert({
+    required String packageId,
+    required String packageName,
+    required String packageKind,
+    required String contentVersion,
+    required String releaseId,
+    this.bookId = const Value.absent(),
+    required String checksumSha256,
+    this.sizeBytes = const Value.absent(),
+    this.compression = const Value.absent(),
+    this.minAppVersion = const Value.absent(),
+    required int installedAt,
+    this.fileUrl = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : packageId = Value(packageId),
+        packageName = Value(packageName),
+        packageKind = Value(packageKind),
+        contentVersion = Value(contentVersion),
+        releaseId = Value(releaseId),
+        checksumSha256 = Value(checksumSha256),
+        installedAt = Value(installedAt);
+  static Insertable<ContentPackageState> custom({
+    Expression<String>? packageId,
+    Expression<String>? packageName,
+    Expression<String>? packageKind,
+    Expression<String>? contentVersion,
+    Expression<String>? releaseId,
+    Expression<String>? bookId,
+    Expression<String>? checksumSha256,
+    Expression<int>? sizeBytes,
+    Expression<String>? compression,
+    Expression<String>? minAppVersion,
+    Expression<int>? installedAt,
+    Expression<String>? fileUrl,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (packageId != null) 'package_id': packageId,
+      if (packageName != null) 'package_name': packageName,
+      if (packageKind != null) 'package_kind': packageKind,
+      if (contentVersion != null) 'content_version': contentVersion,
+      if (releaseId != null) 'release_id': releaseId,
+      if (bookId != null) 'book_id': bookId,
+      if (checksumSha256 != null) 'checksum_sha256': checksumSha256,
+      if (sizeBytes != null) 'size_bytes': sizeBytes,
+      if (compression != null) 'compression': compression,
+      if (minAppVersion != null) 'min_app_version': minAppVersion,
+      if (installedAt != null) 'installed_at': installedAt,
+      if (fileUrl != null) 'file_url': fileUrl,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ContentPackageStatesCompanion copyWith(
+      {Value<String>? packageId,
+      Value<String>? packageName,
+      Value<String>? packageKind,
+      Value<String>? contentVersion,
+      Value<String>? releaseId,
+      Value<String?>? bookId,
+      Value<String>? checksumSha256,
+      Value<int?>? sizeBytes,
+      Value<String?>? compression,
+      Value<String?>? minAppVersion,
+      Value<int>? installedAt,
+      Value<String?>? fileUrl,
+      Value<int>? rowid}) {
+    return ContentPackageStatesCompanion(
+      packageId: packageId ?? this.packageId,
+      packageName: packageName ?? this.packageName,
+      packageKind: packageKind ?? this.packageKind,
+      contentVersion: contentVersion ?? this.contentVersion,
+      releaseId: releaseId ?? this.releaseId,
+      bookId: bookId ?? this.bookId,
+      checksumSha256: checksumSha256 ?? this.checksumSha256,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      compression: compression ?? this.compression,
+      minAppVersion: minAppVersion ?? this.minAppVersion,
+      installedAt: installedAt ?? this.installedAt,
+      fileUrl: fileUrl ?? this.fileUrl,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (packageId.present) {
+      map['package_id'] = Variable<String>(packageId.value);
+    }
+    if (packageName.present) {
+      map['package_name'] = Variable<String>(packageName.value);
+    }
+    if (packageKind.present) {
+      map['package_kind'] = Variable<String>(packageKind.value);
+    }
+    if (contentVersion.present) {
+      map['content_version'] = Variable<String>(contentVersion.value);
+    }
+    if (releaseId.present) {
+      map['release_id'] = Variable<String>(releaseId.value);
+    }
+    if (bookId.present) {
+      map['book_id'] = Variable<String>(bookId.value);
+    }
+    if (checksumSha256.present) {
+      map['checksum_sha256'] = Variable<String>(checksumSha256.value);
+    }
+    if (sizeBytes.present) {
+      map['size_bytes'] = Variable<int>(sizeBytes.value);
+    }
+    if (compression.present) {
+      map['compression'] = Variable<String>(compression.value);
+    }
+    if (minAppVersion.present) {
+      map['min_app_version'] = Variable<String>(minAppVersion.value);
+    }
+    if (installedAt.present) {
+      map['installed_at'] = Variable<int>(installedAt.value);
+    }
+    if (fileUrl.present) {
+      map['file_url'] = Variable<String>(fileUrl.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ContentPackageStatesCompanion(')
+          ..write('packageId: $packageId, ')
+          ..write('packageName: $packageName, ')
+          ..write('packageKind: $packageKind, ')
+          ..write('contentVersion: $contentVersion, ')
+          ..write('releaseId: $releaseId, ')
+          ..write('bookId: $bookId, ')
+          ..write('checksumSha256: $checksumSha256, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('compression: $compression, ')
+          ..write('minAppVersion: $minAppVersion, ')
+          ..write('installedAt: $installedAt, ')
+          ..write('fileUrl: $fileUrl, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -7585,6 +8242,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $WordMorphemeMatchesTable wordMorphemeMatches =
       $WordMorphemeMatchesTable(this);
   late final $AudioFileCacheTable audioFileCache = $AudioFileCacheTable(this);
+  late final $ContentPackageStatesTable contentPackageStates =
+      $ContentPackageStatesTable(this);
   late final Index idxCardStatesDue = Index('idx_card_states_due',
       'CREATE INDEX idx_card_states_due ON card_states (due)');
   late final Index idxCardStatesState = Index('idx_card_states_state',
@@ -7641,6 +8300,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         morphemeEntries,
         wordMorphemeMatches,
         audioFileCache,
+        contentPackageStates,
         idxCardStatesDue,
         idxCardStatesState,
         idxReviewLogsWordId,
@@ -11650,6 +12310,295 @@ typedef $$AudioFileCacheTableProcessedTableManager = ProcessedTableManager<
     ),
     AudioFileCacheData,
     PrefetchHooks Function()>;
+typedef $$ContentPackageStatesTableCreateCompanionBuilder
+    = ContentPackageStatesCompanion Function({
+  required String packageId,
+  required String packageName,
+  required String packageKind,
+  required String contentVersion,
+  required String releaseId,
+  Value<String?> bookId,
+  required String checksumSha256,
+  Value<int?> sizeBytes,
+  Value<String?> compression,
+  Value<String?> minAppVersion,
+  required int installedAt,
+  Value<String?> fileUrl,
+  Value<int> rowid,
+});
+typedef $$ContentPackageStatesTableUpdateCompanionBuilder
+    = ContentPackageStatesCompanion Function({
+  Value<String> packageId,
+  Value<String> packageName,
+  Value<String> packageKind,
+  Value<String> contentVersion,
+  Value<String> releaseId,
+  Value<String?> bookId,
+  Value<String> checksumSha256,
+  Value<int?> sizeBytes,
+  Value<String?> compression,
+  Value<String?> minAppVersion,
+  Value<int> installedAt,
+  Value<String?> fileUrl,
+  Value<int> rowid,
+});
+
+class $$ContentPackageStatesTableFilterComposer
+    extends Composer<_$AppDatabase, $ContentPackageStatesTable> {
+  $$ContentPackageStatesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get packageId => $composableBuilder(
+      column: $table.packageId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get packageName => $composableBuilder(
+      column: $table.packageName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get packageKind => $composableBuilder(
+      column: $table.packageKind, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get contentVersion => $composableBuilder(
+      column: $table.contentVersion,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get releaseId => $composableBuilder(
+      column: $table.releaseId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get bookId => $composableBuilder(
+      column: $table.bookId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get checksumSha256 => $composableBuilder(
+      column: $table.checksumSha256,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get sizeBytes => $composableBuilder(
+      column: $table.sizeBytes, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get compression => $composableBuilder(
+      column: $table.compression, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get minAppVersion => $composableBuilder(
+      column: $table.minAppVersion, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get installedAt => $composableBuilder(
+      column: $table.installedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get fileUrl => $composableBuilder(
+      column: $table.fileUrl, builder: (column) => ColumnFilters(column));
+}
+
+class $$ContentPackageStatesTableOrderingComposer
+    extends Composer<_$AppDatabase, $ContentPackageStatesTable> {
+  $$ContentPackageStatesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get packageId => $composableBuilder(
+      column: $table.packageId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get packageName => $composableBuilder(
+      column: $table.packageName, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get packageKind => $composableBuilder(
+      column: $table.packageKind, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get contentVersion => $composableBuilder(
+      column: $table.contentVersion,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get releaseId => $composableBuilder(
+      column: $table.releaseId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get bookId => $composableBuilder(
+      column: $table.bookId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get checksumSha256 => $composableBuilder(
+      column: $table.checksumSha256,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get sizeBytes => $composableBuilder(
+      column: $table.sizeBytes, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get compression => $composableBuilder(
+      column: $table.compression, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get minAppVersion => $composableBuilder(
+      column: $table.minAppVersion,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get installedAt => $composableBuilder(
+      column: $table.installedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get fileUrl => $composableBuilder(
+      column: $table.fileUrl, builder: (column) => ColumnOrderings(column));
+}
+
+class $$ContentPackageStatesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ContentPackageStatesTable> {
+  $$ContentPackageStatesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get packageId =>
+      $composableBuilder(column: $table.packageId, builder: (column) => column);
+
+  GeneratedColumn<String> get packageName => $composableBuilder(
+      column: $table.packageName, builder: (column) => column);
+
+  GeneratedColumn<String> get packageKind => $composableBuilder(
+      column: $table.packageKind, builder: (column) => column);
+
+  GeneratedColumn<String> get contentVersion => $composableBuilder(
+      column: $table.contentVersion, builder: (column) => column);
+
+  GeneratedColumn<String> get releaseId =>
+      $composableBuilder(column: $table.releaseId, builder: (column) => column);
+
+  GeneratedColumn<String> get bookId =>
+      $composableBuilder(column: $table.bookId, builder: (column) => column);
+
+  GeneratedColumn<String> get checksumSha256 => $composableBuilder(
+      column: $table.checksumSha256, builder: (column) => column);
+
+  GeneratedColumn<int> get sizeBytes =>
+      $composableBuilder(column: $table.sizeBytes, builder: (column) => column);
+
+  GeneratedColumn<String> get compression => $composableBuilder(
+      column: $table.compression, builder: (column) => column);
+
+  GeneratedColumn<String> get minAppVersion => $composableBuilder(
+      column: $table.minAppVersion, builder: (column) => column);
+
+  GeneratedColumn<int> get installedAt => $composableBuilder(
+      column: $table.installedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get fileUrl =>
+      $composableBuilder(column: $table.fileUrl, builder: (column) => column);
+}
+
+class $$ContentPackageStatesTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $ContentPackageStatesTable,
+    ContentPackageState,
+    $$ContentPackageStatesTableFilterComposer,
+    $$ContentPackageStatesTableOrderingComposer,
+    $$ContentPackageStatesTableAnnotationComposer,
+    $$ContentPackageStatesTableCreateCompanionBuilder,
+    $$ContentPackageStatesTableUpdateCompanionBuilder,
+    (
+      ContentPackageState,
+      BaseReferences<_$AppDatabase, $ContentPackageStatesTable,
+          ContentPackageState>
+    ),
+    ContentPackageState,
+    PrefetchHooks Function()> {
+  $$ContentPackageStatesTableTableManager(
+      _$AppDatabase db, $ContentPackageStatesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ContentPackageStatesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ContentPackageStatesTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ContentPackageStatesTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> packageId = const Value.absent(),
+            Value<String> packageName = const Value.absent(),
+            Value<String> packageKind = const Value.absent(),
+            Value<String> contentVersion = const Value.absent(),
+            Value<String> releaseId = const Value.absent(),
+            Value<String?> bookId = const Value.absent(),
+            Value<String> checksumSha256 = const Value.absent(),
+            Value<int?> sizeBytes = const Value.absent(),
+            Value<String?> compression = const Value.absent(),
+            Value<String?> minAppVersion = const Value.absent(),
+            Value<int> installedAt = const Value.absent(),
+            Value<String?> fileUrl = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ContentPackageStatesCompanion(
+            packageId: packageId,
+            packageName: packageName,
+            packageKind: packageKind,
+            contentVersion: contentVersion,
+            releaseId: releaseId,
+            bookId: bookId,
+            checksumSha256: checksumSha256,
+            sizeBytes: sizeBytes,
+            compression: compression,
+            minAppVersion: minAppVersion,
+            installedAt: installedAt,
+            fileUrl: fileUrl,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String packageId,
+            required String packageName,
+            required String packageKind,
+            required String contentVersion,
+            required String releaseId,
+            Value<String?> bookId = const Value.absent(),
+            required String checksumSha256,
+            Value<int?> sizeBytes = const Value.absent(),
+            Value<String?> compression = const Value.absent(),
+            Value<String?> minAppVersion = const Value.absent(),
+            required int installedAt,
+            Value<String?> fileUrl = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ContentPackageStatesCompanion.insert(
+            packageId: packageId,
+            packageName: packageName,
+            packageKind: packageKind,
+            contentVersion: contentVersion,
+            releaseId: releaseId,
+            bookId: bookId,
+            checksumSha256: checksumSha256,
+            sizeBytes: sizeBytes,
+            compression: compression,
+            minAppVersion: minAppVersion,
+            installedAt: installedAt,
+            fileUrl: fileUrl,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$ContentPackageStatesTableProcessedTableManager
+    = ProcessedTableManager<
+        _$AppDatabase,
+        $ContentPackageStatesTable,
+        ContentPackageState,
+        $$ContentPackageStatesTableFilterComposer,
+        $$ContentPackageStatesTableOrderingComposer,
+        $$ContentPackageStatesTableAnnotationComposer,
+        $$ContentPackageStatesTableCreateCompanionBuilder,
+        $$ContentPackageStatesTableUpdateCompanionBuilder,
+        (
+          ContentPackageState,
+          BaseReferences<_$AppDatabase, $ContentPackageStatesTable,
+              ContentPackageState>
+        ),
+        ContentPackageState,
+        PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -11692,4 +12641,6 @@ class $AppDatabaseManager {
       $$WordMorphemeMatchesTableTableManager(_db, _db.wordMorphemeMatches);
   $$AudioFileCacheTableTableManager get audioFileCache =>
       $$AudioFileCacheTableTableManager(_db, _db.audioFileCache);
+  $$ContentPackageStatesTableTableManager get contentPackageStates =>
+      $$ContentPackageStatesTableTableManager(_db, _db.contentPackageStates);
 }

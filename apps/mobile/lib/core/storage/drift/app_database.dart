@@ -5,6 +5,7 @@ import 'tables/legacy_tables.dart';
 import 'tables/fsrs_tables.dart';
 import 'tables/session_tables.dart';
 import 'tables/enrichment_tables.dart';
+import 'tables/content_package_state.dart';
 
 part 'app_database.g.dart';
 
@@ -54,6 +55,9 @@ part 'app_database.g.dart';
   WordMorphemeMatches,
   // Audio cache (v11, P2.1: device-local mp3 cache index, DB v0.3.0 §7.4)
   AudioFileCache,
+  // Content package state (v12, PR-B2 Day 1: track manifest-imported packages
+  // for sync state diff + WordbookLoader avoid-clear logic in PR-B3+)
+  ContentPackageStates,
 ])
 class AppDatabase extends _$AppDatabase {
   /// Production constructor — process-wide singleton.
@@ -81,7 +85,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -238,6 +242,15 @@ class AppDatabase extends _$AppDatabase {
             // Idempotent (safe-create) so partial-state dev devices can
             // re-run.
             await _safeCreateTable(m, audioFileCache);
+          }
+          if (from < 12) {
+            // v12 (PR-B2 Day 1): manifest-imported content package state.
+            // Pure ADD — zero data migration risk. WordbookLoader (PR-B3+)
+            // will query this table to skip bundle clear-on-version-change
+            // when manifest data is already present, avoiding the
+            // "manifest data wiped on app upgrade" failure mode (D1
+            // decision in master plan v0.4).
+            await _safeCreateTable(m, contentPackageStates);
           }
         },
       );
