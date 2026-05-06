@@ -5,13 +5,13 @@
   - 调用方用 `with conn:` 或显式 try/conn.commit/rollback 控制事务边界
   - raise ReleaseError 描述业务约束失败（与 psycopg2 异常区分）
 
-State machine (v0.3 §B.4.5):
+State machine (v0.3 §B.4.5 + PR-B1 Day 2 rollback):
   draft → validated → active → deprecated → revoked
-                              ↓
-                            revoked
+                              └─→ revoked
+                              ↑   (rollback)
+                              └── deprecated  ← PR-B1 Day 2
 
-Day 3 CLI 入口覆盖: draft / validated / active / revoked
-deprecated 状态保留在 VALID_TRANSITIONS 但 Day 3 无 CLI 入口（留 Day 5/PR-B）
+CLI 入口覆盖：draft / validated / active / deprecated / revoked / rollback
 """
 from __future__ import annotations
 
@@ -24,9 +24,12 @@ VALID_STATUSES = {"draft", "validated", "active", "deprecated", "revoked"}
 VALID_TRANSITIONS = {
     ("draft", "validated"),
     ("validated", "active"),
-    ("active", "deprecated"),  # Day 3 无 CLI 入口
+    ("active", "deprecated"),
     ("active", "revoked"),
     ("deprecated", "revoked"),
+    # PR-B1 Day 2: rollback 入口。**不加 ("revoked", "active")** —— revoke
+    # 是不可逆硬撤回（v0.3 PR-B scope 术语表 + e2e 反例 case 双重护栏）。
+    ("deprecated", "active"),
 }
 
 
@@ -176,3 +179,87 @@ def deprecate_release(conn, release_id: str, reason: str) -> None:
     Use revoke if you want hard takedown.
     """
     transition_status(conn, release_id, "deprecated", reason=reason)
+
+
+def rollback_release(conn, target_id: str, reason: str) -> None:
+    """Reactivate a deprecated release; demote current active to deprecated.
+
+    PR-B1 Day 2. NOT commit'd — caller controls transaction (use `with conn:`).
+
+    Side-effects (atomic within caller's transaction):
+      1. If exactly ONE other release is currently 'active':
+         - cascade is_active=false on its package_set
+         - transition that release to 'deprecated'
+           Note: its activation_log entry's reason is **prefixed** to
+           "rollback to {target_id}: {reason}" for audit traceability.
+      2. cascade is_active=true on target.package_set
+      3. transition target to 'active'
+         (target's reason is the unprefixed input reason.)
+
+    Sanity guards (raise ReleaseError):
+      - target not found
+      - target.status != 'deprecated'
+        (revoked → active is forbidden; revoke is irreversible)
+      - count(content_release WHERE status='active') > 1
+        (PR-A's cmd_activate doesn't demote prior actives' status,
+         only their manifests; multi-active state is a latent bug
+         that rollback refuses to silently pick a winner for —
+         operator must manually deprecate the unintended active(s)
+         to disambiguate)
+
+    Returns None — caller doesn't need the side-effect IDs.
+    """
+    target = get_release(conn, target_id)
+    if target is None:
+        raise ReleaseError(f"target release {target_id!r} not found")
+    if target["status"] != "deprecated":
+        raise ReleaseError(
+            f"rollback only allowed from 'deprecated', "
+            f"got {target['status']!r} for {target_id!r}"
+        )
+
+    # Multi-active sanity check (R1#2 review-adopted)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT release_id, package_set FROM content_release "
+            "WHERE status = 'active'"
+        )
+        actives = cur.fetchall()
+    if len(actives) > 1:
+        ids = ", ".join(repr(a["release_id"]) for a in actives)
+        raise ReleaseError(
+            f"multiple active releases (count={len(actives)}: {ids}); "
+            f"deprecate the unintended ones first then retry rollback"
+        )
+
+    # 1. demote current active (if exactly one and not the target itself)
+    if len(actives) == 1:
+        current = actives[0]
+        if current["release_id"] == target_id:
+            # target is somehow already active — shouldn't happen given
+            # status='deprecated' check above, but defensive
+            raise ReleaseError(
+                f"target {target_id!r} is currently the active release; "
+                f"nothing to rollback to"
+            )
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE content_manifest SET is_active = false "
+                "WHERE id = ANY(%s)",
+                (current["package_set"],),
+            )
+        transition_status(
+            conn,
+            current["release_id"],
+            "deprecated",
+            reason=f"rollback to {target_id}: {reason}",
+        )
+
+    # 2. promote target
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE content_manifest SET is_active = true "
+            "WHERE id = ANY(%s)",
+            (target["package_set"],),
+        )
+    transition_status(conn, target_id, "active", reason=reason)

@@ -10,6 +10,7 @@ Subcommands:
   deprecate <release_id> --reason TXT     # PR-A Day 5 (active → deprecated 软下线)
   revoke <release_id> [--reason TXT]      # PR-A Day 3
                                           #   注意: revoke 是撤销/下线，不是 rollback
+  rollback <release_id> --reason TXT      # PR-B1 Day 2 (deprecated → active)
   list-releases [--status S] [--limit N]  # PR-A Day 5 (治理可视化)
   gc-stale [--dry-run|--gc]               # PR-A Day 4
   orphan-scan [--dry-run|--clean]         # PR-B1 Day 1 (FS 物理孤儿，两根目录)
@@ -51,6 +52,7 @@ from content_release_repo import (  # noqa: E402
     deprecate_release,
     get_release,
     list_releases,
+    rollback_release,
     transition_status,
 )
 
@@ -460,6 +462,100 @@ def cmd_revoke(args: argparse.Namespace) -> int:
         conn.close()
 
 
+def cmd_rollback(args: argparse.Namespace) -> int:
+    """PR-B1 Day 2 — rollback to a deprecated release.
+
+    Flow:
+      1. Validate target.status == 'deprecated'
+      2. Validate ALL target.package_set manifests' file_url:
+         - NULL/empty: ReleaseError (manifest API would skip; client gets nothing)
+         - http(s)://:  allow (real CDN, can't verify locally)
+         - file:// / local://: file MUST exist on FS
+      3. stdin confirm unless --yes
+      4. with conn: rollback_release()
+         (helper handles multi-active sanity, demote+promote atomically)
+
+    Exit codes (R1#4 review-adopted: business errors → 1):
+      0 = success
+      1 = ReleaseError (any business error including FS missing, NULL file_url)
+      2 = connection / programming errors
+    """
+    from gc_stale import _resolve_local_path
+
+    conn = _connect_or_die()
+    if conn is None:
+        return 2
+
+    rid = args.release_id
+    reason = args.reason
+
+    try:
+        target = get_release(conn, rid)
+        if target is None:
+            raise ReleaseError(f"target release {rid!r} not found")
+        if target["status"] != "deprecated":
+            raise ReleaseError(
+                f"rollback only allowed from 'deprecated', "
+                f"got {target['status']!r} for {rid!r}"
+            )
+
+        # FS pre-check on target's package_set
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, file_url FROM content_manifest "
+                "WHERE id = ANY(%s)",
+                (target["package_set"],),
+            )
+            rows = cur.fetchall()
+
+        for mid, url in rows:
+            if not url:
+                # NULL/empty: API would skip → reject (R2#3 review-adopted)
+                raise ReleaseError(
+                    f"manifest {mid!r} has NULL file_url; rollback would activate "
+                    f"a release whose package the API can't serve. Fix data or "
+                    f"create a fresh release."
+                )
+            if url.startswith("http://") or url.startswith("https://"):
+                continue  # real CDN: can't verify locally, allow
+            local = _resolve_local_path(url, Path.cwd())
+            if local is None:
+                raise ReleaseError(
+                    f"manifest {mid!r} has unresolvable file_url: {url!r}"
+                )
+            if not local.exists():
+                raise ReleaseError(
+                    f"manifest {mid!r} file missing on FS: {local} "
+                    f"(possibly removed by gc-stale; rollback aborted)"
+                )
+
+        if not args.yes:
+            sys.stderr.write(
+                f"About to rollback release {rid!r} (currently 'deprecated'):\n"
+                f"  - target {rid!r} → 'active' (manifests is_active=true)\n"
+                f"  - any current active release → 'deprecated' "
+                f"(manifests is_active=false)\n"
+                f"  reason: {reason}\n"
+                f"Type 'y' to confirm: "
+            )
+            sys.stderr.flush()
+            line = sys.stdin.readline().strip().lower()
+            if line != "y":
+                print("aborted", file=sys.stderr)
+                return 1
+
+        with conn:
+            rollback_release(conn, rid, reason)
+
+        print(f"  [OK] rollback to {rid!r}. reason: {reason}")
+        return 0
+    except ReleaseError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+
 def cmd_list_releases(args: argparse.Namespace) -> int:
     """Read-only governance overview (PR-A Day 5).
 
@@ -680,6 +776,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p_revoke.add_argument("--reason", default=None,
                           help="Audit log reason (default 'revoke cmd')")
     p_revoke.set_defaults(func=cmd_revoke)
+
+    # ── rollback (PR-B1 Day 2) ────────────────────────────────────────────
+    p_rollback = sub.add_parser(
+        "rollback",
+        help="Rollback to a deprecated release (deprecated → active; "
+             "current active → deprecated)",
+    )
+    p_rollback.add_argument("release_id")  # positional, matches validate/activate/revoke/deprecate
+    p_rollback.add_argument(
+        "--reason", required=True,
+        help="Audit log reason (required for governance trail)",
+    )
+    p_rollback.add_argument(
+        "--yes", action="store_true",
+        help="Skip stdin confirmation (CI use)",
+    )
+    p_rollback.set_defaults(func=cmd_rollback)
 
     # ── deprecate (Day 5) ─────────────────────────────────────────────────
     p_deprecate = sub.add_parser(

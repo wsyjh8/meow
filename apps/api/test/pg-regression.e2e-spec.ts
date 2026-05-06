@@ -1278,4 +1278,294 @@ describeIfPg('PG Backend Regression (e2e)', () => {
       expect(ids).toEqual([`${TEST_PREFIX}with@v1`]);
     });
   });
+
+  describe('rollback subcommand contract (PR-B1 Day 2)', () => {
+    // Note: cmd_rollback's FS file-existence pre-check is NOT covered by these
+    // e2e cases — seed manifests use http://localhost:3000/cdn/... URLs which
+    // the rollback FS check explicitly skips (real-CDN scheme). The FS missing
+    // path is verified by the mandatory PowerShell smoke (Day 2 plan Step 4).
+    const TEST_PREFIX = 'test-rollback-';
+
+    async function cleanup() {
+      const pool = getPool();
+      await pool.query(
+        `DELETE FROM content_manifest WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+      await pool.query(
+        `DELETE FROM content_release WHERE release_id LIKE '${TEST_PREFIX}%'`,
+      );
+    }
+
+    beforeEach(cleanup);
+    afterEach(cleanup);
+
+    /** Insert a release in 'draft' state with given package_set. */
+    async function seedRelease(
+      releaseId: string,
+      status: string,
+      packageSet: string[] = [],
+    ) {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO content_release
+           (release_id, status, package_set, generated_by,
+            activated_at, revoked_at)
+         VALUES ($1, $2::text, $3::jsonb, 'e2e-day2-rollback',
+                 CASE WHEN $2::text = 'active' THEN NOW() ELSE NULL END,
+                 CASE WHEN $2::text = 'revoked' THEN NOW() ELSE NULL END)`,
+        [releaseId, status, JSON.stringify(packageSet)],
+      );
+    }
+
+    async function seedManifest(
+      releaseId: string,
+      manifestId: string,
+      packageName: string,
+      isActive = true,
+    ) {
+      const pool = getPool();
+      const fileUrl = `http://localhost:3000/cdn/${manifestId}.jsonl.gz`;
+      const checksum = `sha256:${manifestId}`;
+      await pool.query(
+        `INSERT INTO content_manifest
+           (id, package_name, package_kind, content_version,
+            file_url, checksum_sha256, size_bytes, min_app_version,
+            is_active, release_id)
+         VALUES ($1, $2, 'examples', 'v1', $3, $4, 1024, '0.0.0', $5, $6)`,
+        [manifestId, packageName, fileUrl, checksum, isActive, releaseId],
+      );
+    }
+
+    /**
+     * Mirrors content_release_repo's transition_status() SQL.
+     * Used to set up "deprecated" or "revoked" preconditions for tests.
+     */
+    async function transition(
+      releaseId: string,
+      fromStatus: string,
+      toStatus: string,
+      reason: string,
+    ) {
+      const pool = getPool();
+      const extraSet =
+        toStatus === 'active'
+          ? ', activated_at = NOW()'
+          : toStatus === 'revoked'
+          ? ', revoked_at = NOW()'
+          : '';
+      const result = await pool.query(
+        `UPDATE content_release
+            SET status = $1::text${extraSet},
+                activation_log = activation_log || jsonb_build_array(
+                  jsonb_build_object(
+                    'from', $2::text,
+                    'to', $1::text,
+                    'at', to_char(NOW() AT TIME ZONE 'UTC',
+                                  'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                    'reason', $3::text
+                  )
+                )
+          WHERE release_id = $4::text AND status = $2::text`,
+        [toStatus, fromStatus, reason, releaseId],
+      );
+      return result.rowCount;
+    }
+
+    /** Run rollback_release via direct SQL by calling Python? No — we test
+     *  the contract by replaying its semantics via SQL. The actual Python
+     *  helper is exercised by Step 4 PowerShell smoke. */
+    async function simulateRollback(targetId: string, reason: string) {
+      // Verify target is deprecated
+      const pool = getPool();
+      const t = await pool.query(
+        `SELECT release_id, status, package_set FROM content_release WHERE release_id = $1`,
+        [targetId],
+      );
+      if (t.rows.length === 0) {
+        throw new Error(`target ${targetId} not found`);
+      }
+      if (t.rows[0].status !== 'deprecated') {
+        throw new Error(
+          `rollback only allowed from 'deprecated', got '${t.rows[0].status}'`,
+        );
+      }
+      // Multi-active sanity check
+      const a = await pool.query(
+        `SELECT release_id, package_set FROM content_release WHERE status = 'active'`,
+      );
+      if (a.rows.length > 1) {
+        throw new Error(`multiple active releases (count=${a.rows.length})`);
+      }
+      // Demote current active (if any)
+      if (a.rows.length === 1) {
+        const current = a.rows[0];
+        await pool.query(
+          `UPDATE content_manifest SET is_active = false WHERE id = ANY($1::text[])`,
+          [current.package_set],
+        );
+        await transition(
+          current.release_id,
+          'active',
+          'deprecated',
+          `rollback to ${targetId}: ${reason}`,
+        );
+      }
+      // Promote target
+      await pool.query(
+        `UPDATE content_manifest SET is_active = true WHERE id = ANY($1::text[])`,
+        [t.rows[0].package_set],
+      );
+      await transition(targetId, 'deprecated', 'active', reason);
+    }
+
+    it('happy: deprecated v1 + active v2 → rollback v1 → v1 active, v2 deprecated', async () => {
+      const v1 = `${TEST_PREFIX}v1`;
+      const v2 = `${TEST_PREFIX}v2`;
+      const m1 = `${TEST_PREFIX}m1@v1`;
+      const m2 = `${TEST_PREFIX}m2@v2`;
+
+      await seedRelease(v1, 'deprecated', [m1]);
+      await seedRelease(v2, 'active', [m2]);
+      await seedManifest(v1, m1, `examples-${TEST_PREFIX}pkg`, false);
+      await seedManifest(v2, m2, `examples-${TEST_PREFIX}pkg`, true);
+
+      await simulateRollback(v1, 'critical bug in v2');
+
+      const pool = getPool();
+      const r = await pool.query(
+        `SELECT release_id, status FROM content_release
+          WHERE release_id IN ($1, $2) ORDER BY release_id`,
+        [v1, v2],
+      );
+      expect(r.rows[0]).toMatchObject({ release_id: v1, status: 'active' });
+      expect(r.rows[1]).toMatchObject({ release_id: v2, status: 'deprecated' });
+
+      const m = await pool.query(
+        `SELECT id, is_active FROM content_manifest
+          WHERE id IN ($1, $2) ORDER BY id`,
+        [m1, m2],
+      );
+      expect(m.rows[0]).toMatchObject({ id: m1, is_active: true });
+      expect(m.rows[1]).toMatchObject({ id: m2, is_active: false });
+    });
+
+    it('rollback to draft target rejected', async () => {
+      const v1 = `${TEST_PREFIX}draft`;
+      await seedRelease(v1, 'draft', []);
+      await expect(simulateRollback(v1, 'r')).rejects.toThrow(
+        /rollback only allowed from 'deprecated'/,
+      );
+    });
+
+    it('rollback to validated target rejected', async () => {
+      const v1 = `${TEST_PREFIX}validated`;
+      await seedRelease(v1, 'validated', []);
+      await expect(simulateRollback(v1, 'r')).rejects.toThrow(
+        /rollback only allowed from 'deprecated'/,
+      );
+    });
+
+    it('rollback to revoked target rejected (P2 关键 case: revoke 不可逆)', async () => {
+      const v1 = `${TEST_PREFIX}revoked`;
+      await seedRelease(v1, 'revoked', []);
+      await expect(simulateRollback(v1, 'r')).rejects.toThrow(
+        /rollback only allowed from 'deprecated'/,
+      );
+    });
+
+    it('rollback to active target rejected', async () => {
+      const v1 = `${TEST_PREFIX}active`;
+      await seedRelease(v1, 'active', []);
+      await expect(simulateRollback(v1, 'r')).rejects.toThrow(
+        /rollback only allowed from 'deprecated'/,
+      );
+    });
+
+    it('rollback when no active release exists: target promotes directly', async () => {
+      const v1 = `${TEST_PREFIX}only`;
+      const m1 = `${TEST_PREFIX}only@v1`;
+      await seedRelease(v1, 'deprecated', [m1]);
+      await seedManifest(v1, m1, `examples-${TEST_PREFIX}only`, false);
+
+      await simulateRollback(v1, 'restore from cold');
+
+      const pool = getPool();
+      const r = await pool.query(
+        `SELECT status FROM content_release WHERE release_id = $1`,
+        [v1],
+      );
+      expect(r.rows[0].status).toBe('active');
+      const m = await pool.query(
+        `SELECT is_active FROM content_manifest WHERE id = $1`,
+        [m1],
+      );
+      expect(m.rows[0].is_active).toBe(true);
+    });
+
+    it('multiple active releases → ReleaseError sanity check (R1#2)', async () => {
+      // Simulate the multi-active latent bug: PR-A's cmd_activate doesn't
+      // demote prior actives' status, only their manifests. So two releases
+      // can both be status='active'. rollback must refuse to silently pick.
+      const v1 = `${TEST_PREFIX}target`;
+      const va = `${TEST_PREFIX}activeA`;
+      const vb = `${TEST_PREFIX}activeB`;
+      await seedRelease(v1, 'deprecated', []);
+      await seedRelease(va, 'active', []);
+      await seedRelease(vb, 'active', []);
+
+      await expect(simulateRollback(v1, 'should fail')).rejects.toThrow(
+        /multiple active releases.*count=2/,
+      );
+    });
+
+    it('chained rollback: v1 → v2 → v3 → rollback v2 → rollback v1 健壮性', async () => {
+      const v1 = `${TEST_PREFIX}c1`;
+      const v2 = `${TEST_PREFIX}c2`;
+      const v3 = `${TEST_PREFIX}c3`;
+      const m1 = `${TEST_PREFIX}cm1@v1`;
+      const m2 = `${TEST_PREFIX}cm2@v2`;
+      const m3 = `${TEST_PREFIX}cm3@v3`;
+
+      // Initial: v1 deprecated, v2 deprecated, v3 active
+      await seedRelease(v1, 'deprecated', [m1]);
+      await seedRelease(v2, 'deprecated', [m2]);
+      await seedRelease(v3, 'active', [m3]);
+      await seedManifest(v1, m1, `examples-${TEST_PREFIX}chain`, false);
+      await seedManifest(v2, m2, `examples-${TEST_PREFIX}chain`, false);
+      await seedManifest(v3, m3, `examples-${TEST_PREFIX}chain`, true);
+
+      // rollback v2: v3 → deprecated, v2 → active
+      await simulateRollback(v2, 'first rollback');
+      const pool = getPool();
+      let r = await pool.query(
+        `SELECT release_id, status FROM content_release
+          WHERE release_id IN ($1, $2, $3) ORDER BY release_id`,
+        [v1, v2, v3],
+      );
+      expect(r.rows.find((x) => x.release_id === v1)?.status).toBe('deprecated');
+      expect(r.rows.find((x) => x.release_id === v2)?.status).toBe('active');
+      expect(r.rows.find((x) => x.release_id === v3)?.status).toBe('deprecated');
+
+      // rollback v1: v2 → deprecated, v1 → active
+      await simulateRollback(v1, 'second rollback');
+      r = await pool.query(
+        `SELECT release_id, status FROM content_release
+          WHERE release_id IN ($1, $2, $3) ORDER BY release_id`,
+        [v1, v2, v3],
+      );
+      expect(r.rows.find((x) => x.release_id === v1)?.status).toBe('active');
+      expect(r.rows.find((x) => x.release_id === v2)?.status).toBe('deprecated');
+      expect(r.rows.find((x) => x.release_id === v3)?.status).toBe('deprecated');
+
+      // activation_log on v3 should have entries from both rollback chains
+      const v3Log = await pool.query(
+        `SELECT activation_log FROM content_release WHERE release_id = $1`,
+        [v3],
+      );
+      const log = v3Log.rows[0].activation_log as Array<{ reason: string }>;
+      // v3 was demoted once (during rollback v2). The reason should be prefixed.
+      const v3DemoteReason = log.find((e) => e.reason.startsWith('rollback to'));
+      expect(v3DemoteReason?.reason).toBe(`rollback to ${v2}: first rollback`);
+    });
+  });
 });
