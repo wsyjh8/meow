@@ -88,7 +88,10 @@ void main() {
         ),
       );
       expect(find.text('accident'), findsOneWidget);
-      expect(find.text('ˈæksɪdənt'), findsOneWidget);
+      // Cream-Café redesign (May 2026): WordHeaderSection wraps the raw
+      // phonetic in /.../ slashes so the IPA reads canonically. Match the
+      // displayed form rather than the raw `phonetic` field.
+      expect(find.text('/ˈæksɪdənt/'), findsOneWidget);
       expect(find.text('意外事件'), findsOneWidget);
     });
 
@@ -105,7 +108,10 @@ void main() {
           onSpeakerTap: () async => calls++,
         ),
       );
-      await tester.tap(find.text('发音'));
+      // Cream-Café redesign (May 2026): the speaker is now an icon-only
+      // circular button (Icons.volume_up_rounded), no '发音' label text.
+      // Tap by icon to exercise the GestureDetector inside _SpeakerButton.
+      await tester.tap(find.byIcon(Icons.volume_up_rounded));
       await tester.pump();
       expect(calls, 1);
     });
@@ -146,12 +152,16 @@ void main() {
       final longHeight =
           tester.getSize(find.byType(WordHeaderSection)).height;
 
-      // Both heights must be identical (the SizedBox(156) wrapper
-      // strictly fixes the height regardless of content). Capping at
-      // 170px keeps a small safety margin so a future padding tweak
-      // doesn't blow up the test on 1px diffs.
-      expect(shortHeight, equals(longHeight));
-      expect(longHeight, lessThanOrEqualTo(170));
+      // Cream-Café redesign (May 2026): the hero card is now content-aware
+      // (no SizedBox fixed-height wrapper). Word + phonetic each ellipsis
+      // at maxLines=1, so growth comes only from meaningLines. The
+      // invariant is now:
+      //   - both render successfully (>0 height; no overflow exception)
+      //   - long content does NOT shrink (>= short)
+      //   - long content stays under a generous safety cap (no runaway)
+      expect(shortHeight, greaterThan(0));
+      expect(longHeight, greaterThanOrEqualTo(shortHeight));
+      expect(longHeight, lessThanOrEqualTo(400));
     });
   });
 
@@ -225,11 +235,11 @@ void main() {
       expect(find.text('近反义词'), findsNothing);
     });
 
-    testWidgets('only synonyms → only "近义词：" row appears', (tester) async {
-      // Note: the section title "近反义词" itself produces a RichText
-      // whose plain text contains the substring "反义词", so we look
-      // for the colon-prefixed labels which are unique to the row
-      // bodies.
+    testWidgets('only synonyms → only SYN row appears', (tester) async {
+      // Cream-Café redesign (May 2026): per-row labels are now mono
+      // 'SYN +' / 'ANT −' Text widgets (success / accent colours), not
+      // RichText '近义词：' / '反义词：'. The section title '近反义词' is
+      // unchanged.
       await _pumpInWidth(
         tester,
         const WordRelationsSection(
@@ -238,11 +248,13 @@ void main() {
         ),
       );
       expect(find.text('近反义词'), findsOneWidget);
-      expect(_richTextContains(tester, '近义词：'), isTrue);
-      expect(_richTextContains(tester, '反义词：'), isFalse);
+      expect(find.text('SYN +'), findsOneWidget);
+      expect(find.text('ANT −'), findsNothing);
+      // Synonym chip text is rendered.
+      expect(find.text('mishap'), findsOneWidget);
     });
 
-    testWidgets('only antonyms → only "反义词：" row appears', (tester) async {
+    testWidgets('only antonyms → only ANT row appears', (tester) async {
       await _pumpInWidth(
         tester,
         const WordRelationsSection(
@@ -251,8 +263,9 @@ void main() {
         ),
       );
       expect(find.text('近反义词'), findsOneWidget);
-      expect(_richTextContains(tester, '近义词：'), isFalse);
-      expect(_richTextContains(tester, '反义词：'), isTrue);
+      expect(find.text('SYN +'), findsNothing);
+      expect(find.text('ANT −'), findsOneWidget);
+      expect(find.text('plan'), findsOneWidget);
     });
   });
 
@@ -374,6 +387,26 @@ void main() {
 
     testWidgets('preview disclaimer shown only when previewDurations != null',
         (tester) async {
+      // Need #16 (May 2026): the disclaimer slot is now wrapped in
+      // Visibility(maintainSize: true, ...) so the rating row's vertical
+      // layout doesn't shift when previewDurations toggles null↔value.
+      // Consequence: the disclaimer Text widget is ALWAYS in the tree;
+      // visibility is controlled by the Visibility ancestor's `visible`
+      // flag. We therefore inspect that flag instead of the text's
+      // presence.
+      Visibility findDisclaimerVisibility(WidgetTester tester) {
+        return tester.widgetList<Visibility>(find.byType(Visibility)).firstWhere(
+          (v) {
+            final child = v.child;
+            if (child is Padding) {
+              final inner = child.child;
+              if (inner is Text) return inner.data == '预计间隔（仅供参考）';
+            }
+            return false;
+          },
+        );
+      }
+
       await _pumpInWidth(
         tester,
         ReviewButtonsSection(
@@ -382,7 +415,7 @@ void main() {
           onRate: (_) {},
         ),
       );
-      expect(find.text('预计间隔（仅供参考）'), findsNothing);
+      expect(findDisclaimerVisibility(tester).visible, isFalse);
 
       await _pumpInWidth(
         tester,
@@ -392,7 +425,7 @@ void main() {
           onRate: (_) {},
         ),
       );
-      expect(find.text('预计间隔（仅供参考）'), findsOneWidget);
+      expect(findDisclaimerVisibility(tester).visible, isTrue);
     });
   });
 }

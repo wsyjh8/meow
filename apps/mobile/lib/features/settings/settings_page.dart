@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -62,11 +63,15 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _deviceId;
   String? _deviceModel;
 
+  // PR-B3 Day 3: manifest sync feature flag (debug-only switch).
+  bool _manifestSyncEnabled = false;
+
   @override
   void initState() {
     super.initState();
     _loadLatestStatus();
     _loadDeviceInfo();
+    _loadManifestSyncFlag();
   }
 
   Future<void> _loadLatestStatus() async {
@@ -95,6 +100,27 @@ class _SettingsPageState extends State<SettingsPage> {
         _deviceModel = model;
       });
     }
+  }
+
+  // ===== PR-B3 manifest sync flag (Day 3 debug-only switch) =====
+  // Sync uses the same `await SharedPreferences.getInstance() +
+  // LocalSettingsService(prefs)` pattern the rest of this page already
+  // follows (see _loadDeviceInfo / _performBackup), avoiding the need
+  // for an InheritedWidget DI scaffold.
+  Future<void> _loadManifestSyncFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _manifestSyncEnabled =
+            LocalSettingsService(prefs).manifestSyncEnabled;
+      });
+    }
+  }
+
+  Future<void> _setManifestSyncFlag(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await LocalSettingsService(prefs).setManifestSyncEnabled(value);
+    if (mounted) setState(() => _manifestSyncEnabled = value);
   }
 
   Future<void> _performBackup() async {
@@ -228,6 +254,22 @@ class _SettingsPageState extends State<SettingsPage> {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _runEnrichmentImport(context),
           ),
+          // PR-B3 Day 3 v0.2: manifest sync debug switch (kDebugMode-only).
+          // Existing debug ListTiles ("复习历史" / "重新导入增强数据") keep
+          // their pre-PR-B3 release visibility; only this new switch is
+          // hidden in release builds. Recon confirmed _buildDebugSection's
+          // call site (line 188) has no outer kDebugMode guard, so this
+          // local guard is not redundant (v0.2 #10 R1#8 review-adopted).
+          if (kDebugMode)
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              secondary: const Icon(Icons.cloud_sync_outlined),
+              title: const Text('Manifest sync (PR-B3 dev)'),
+              subtitle: const Text('开/关后下次重启 App 生效。失败静默。'),
+              value: _manifestSyncEnabled,
+              onChanged: _setManifestSyncFlag,
+            ),
         ],
       ),
     );
