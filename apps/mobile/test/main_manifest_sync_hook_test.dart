@@ -86,22 +86,37 @@ void main() {
     if (await tempDocs.exists()) await tempDocs.delete(recursive: true);
   });
 
-  group('runManifestSyncIfEnabled (PR-B3 Day 3 v0.2)', () {
-    test('flag=false: short-circuits before invoking service', () async {
-      // Default flag = false (setMockInitialValues({}) above).
+  group('runManifestSyncIfEnabled (PR-B3 Day 3 + PR-B4)', () {
+    test(
+        'flag=false (explicit, post-PR-B4): short-circuits before invoking service',
+        () async {
+      // PR-B4: default flipped from false to true. To exercise the
+      // short-circuit branch we must EXPLICITLY persist false now —
+      // setMockInitialValues({}) (the setUp default) would yield true
+      // and trip the syncIfNeeded path.
+      SharedPreferences.setMockInitialValues({
+        'settings_manifest_sync_enabled': false,
+      });
+
       await runManifestSyncIfEnabled(
         db: db,
         serviceFactory: (Directory _, AppDatabase __) => fakeService,
       );
       expect(fakeService.syncCalls, 0,
-          reason: 'flag=false must NOT invoke ContentPackageService '
-              '(release behavior parity with PR-B2)');
+          reason: 'explicit flag=false must NOT invoke '
+              'ContentPackageService (user opt-out preserved)');
       expect(fakeService.lastAppVersion, isNull);
     });
 
     test(
-        'flag=true: invokes syncIfNeeded with real appVersion '
-        'from PackageInfo (v0.2 #3 R2#P1 #2)', () async {
+        'flag=true (PR-B4 default): invokes syncIfNeeded with real appVersion '
+        'from PackageInfo (covers PR-B4 default + PR-B3 Day 3 v0.2 #3)',
+        () async {
+      // PR-B4: setMockInitialValues({}) (from setUp) means no key set →
+      // LocalSettingsService.manifestSyncEnabled returns the new
+      // default=true, so the explicit setManifestSyncEnabled(true) here
+      // is redundant but kept as documentation that this case was
+      // originally written for the PR-B3 default=false world.
       final prefs = await SharedPreferences.getInstance();
       await LocalSettingsService(prefs).setManifestSyncEnabled(true);
 
@@ -111,13 +126,13 @@ void main() {
       );
 
       expect(fakeService.syncCalls, 1,
-          reason: 'flag=true must invoke ContentPackageService.syncIfNeeded');
-      // v0.2 #3 R2#P1 #2 review-adopted: appVersion must be the real
-      // pubspec version, not null. Server's min_app_version filter
-      // depends on this being non-null to engage.
+          reason: 'flag=true (default in PR-B4) must invoke '
+              'ContentPackageService.syncIfNeeded');
+      // PR-B3 Day 3 v0.2 #3: appVersion must be the real pubspec version,
+      // not null — server's min_app_version filter depends on it.
       expect(fakeService.lastAppVersion, '0.0.1',
           reason: 'appVersion must come from PackageInfo.fromPlatform(), '
-              'not be null (v0.2 #3 closes the min_app_version bypass)');
+              'not be null');
     });
   });
 }
