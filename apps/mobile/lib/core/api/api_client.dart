@@ -1,19 +1,22 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../config/api_base.dart';
 import '../models/content_models.dart';
 export '../models/content_models.dart' show WordExample;
 
 /// API Client for Phase 1 / Phase 2 / Phase 3
 ///
 /// Minimal API client for Today / New Study / Review / Settlement / Session / Check-in flows.
+///
+/// PR-C S1=β: `baseUrl` defaults to [apiV1Base] resolved by
+/// `--dart-define=API_BASE=...` at compile time.
 class ApiClient {
   final String baseUrl;
   final http.Client _client;
 
   ApiClient({
-    this.baseUrl = 'http://10.0.2.2:3000/api/v1',
- //   this.baseUrl = 'http://localhost:3000/api/v1',
+    this.baseUrl = apiV1Base,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
