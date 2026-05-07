@@ -601,6 +601,32 @@ E. flag=true full E2E: dev API → `/cdn/staging/...` URL → DownloadManager
    fetches → checksum → install → drift readback. Detailed commands in
    master plan v0.2.
 
+## v0.3 PR-B4 (default flag flipped to true)
+
+Single-day follow-up to PR-B3. `LocalSettingsService.manifestSyncEnabled`
+default flips from `false` to `true`, so dev/profile builds auto-sync on
+cold start without the user toggling the debug switch.
+
+**Release behavior unchanged.** PR-B3's three-layer guard in
+`runManifestSyncIfEnabled` (main.dart) is fully preserved:
+1. `if (!kDebugMode) return;` — release builds dead-code-eliminate the
+   entire hook.
+2. `if (!manifestSyncEnabled) return;` — feature flag gate (now defaults
+   to true in dev/profile only).
+3. `syncIfNeeded(appVersion: …)` — actually runs sync.
+
+Removing the `kDebugMode` guard is deferred to PR-B5, which will land
+**after** PR-C swaps `pipeline.py`'s `file://` URLs for real CDN
+(https://) URLs. Until PR-C, production manifest API skips all `file://`
+rows and would return an empty packages list to release clients anyway,
+so flipping release behavior on now would just add empty network
+roundtrips and server log noise.
+
+Existing dev users who explicitly turned the switch OFF in PR-B3 keep
+their `false` value (SharedPreferences only consults the default when
+the key is absent). Users who never touched the switch get the new
+default on next cold start.
+
 ## Reference
 
 - `docs/design/词书单词例句与例句音频架构_v0.3.md` §B.4 / §B.7 / §B.10

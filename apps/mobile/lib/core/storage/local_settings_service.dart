@@ -54,18 +54,24 @@ class LocalSettingsService {
   Future<bool> setActiveWordbook(String slug) =>
       _prefs.setString(_keyActiveWordbook, slug);
 
-  // ==================== Manifest Sync (PR-B3) ====================
+  // ==================== Manifest Sync (PR-B3 + PR-B4) ====================
   /// PR-B3 feature flag — when true, app fires async manifest sync on
-  /// startup (Day 3 wires it into main.dart). Default false until rollout
-  /// is gated by the user from the debug settings page (Day 3).
+  /// startup (PR-B3 Day 3 wires it into main.dart).
+  ///
+  /// **PR-B4: default flipped to `true`.** Dev/profile builds now
+  /// auto-sync on cold start without the user toggling the debug switch.
+  /// Release builds still dead-code-eliminate the entire hook via
+  /// main.dart's `kDebugMode` guard, so the default only takes effect in
+  /// debug/profile builds; release behavior is byte-for-byte identical
+  /// to PR-B3 (and PR-B2, since PR-B3 default was false). Removing the
+  /// `kDebugMode` guard is deferred to PR-B5, after PR-C lands real CDN
+  /// URLs in pipeline.py — until then production manifest API skips all
+  /// `file://` rows and would return an empty packages list anyway.
   ///
   /// Failure of sync NEVER blocks UI; flag exists purely to gate the
   /// fire-and-forget call in main.dart.
-  ///
-  /// Day 2 → Day 3 间隔期 flag 字段实装但仅 LocalSettingsService 测试访问；
-  /// Day 3 commit 接 main.dart 启动 hook + settings page 开关。
   bool get manifestSyncEnabled =>
-      _prefs.getBool(_keyManifestSyncEnabled) ?? false;
+      _prefs.getBool(_keyManifestSyncEnabled) ?? true;
   Future<bool> setManifestSyncEnabled(bool value) =>
       _prefs.setBool(_keyManifestSyncEnabled, value);
 
