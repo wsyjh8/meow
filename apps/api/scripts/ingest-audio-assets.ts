@@ -82,12 +82,29 @@ function parseArgs(): Args {
   const repoRoot = path.resolve(__dirname, '..', '..', '..');
   const defaultAudio = path.join(repoRoot, 'audio-pipeline', 'out', 'audio_assets.jsonl');
 
+  // PR-D R4 P1#2 R2: AUDIO_CDN_ORIGIN env (or --cdn-origin flag) is required.
+  // The legacy `http://10.0.2.2:3000/cdn` fallback was removed because
+  // main.ts no longer serves /cdn (PR-D Option A); falling back would write
+  // forever-404 URLs into PG audio_assets.url.
+  const cdnOriginFlag = getOpt('--cdn-origin');
+  const cdnOriginEnv = process.env.AUDIO_CDN_ORIGIN;
+  const cdnOrigin = cdnOriginFlag ?? cdnOriginEnv;
+  if (!cdnOrigin) {
+    console.error(
+      'ERROR: AUDIO_CDN_ORIGIN env var or --cdn-origin flag required.\n' +
+        '       Expected format: https://<bucket>.cos.<region>.myqcloud.com\n' +
+        '       (PR-D Option A: /cdn static route removed; legacy 10.0.2.2:3000\n' +
+        '        fallback removed to prevent forever-404 URLs in PG.)',
+    );
+    process.exit(2);
+  }
+
   return {
     // Optional: when omitted, skip examples-table ingest. Used by the
     // word-audio path (kind=word) where there is no content-table side-input.
     examplesJson: getOpt('--examples-json'),
     audioJsonl: get('--audio-jsonl', defaultAudio),
-    cdnOrigin: get('--cdn-origin', 'http://10.0.2.2:3000/cdn'),
+    cdnOrigin,
     manifestId: get('--manifest-id', 'audio-meta-cet4@v1'),
     packageName: get('--package-name', 'audio-meta-cet4'),
     contentVersion: get('--content-version', 'v1'),
