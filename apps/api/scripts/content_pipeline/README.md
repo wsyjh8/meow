@@ -531,6 +531,76 @@ PR-B1 "发布侧补全" 4 天交付，基于 PR-A 已建立的 release 状态机
 详见 `docs/design/v0.3_PR-B_scope_v0.1.md` / `docs/design/pr-b1.md` /
 `docs/design/pr-b1-day{1,2,3,4}-*.md`。
 
+## v0.3 PR-B3 (mobile manifest sync wire-up)
+
+3-day delivery (`feat/v0.3-pr-b3-feature-flag-wire-up`) adds the mobile-side
+plumbing to consume manifests served by the pipeline.
+
+### Day 1 — Server staging serve route + manifest URL transform
+
+- `GET /cdn/staging/<file>` → `apps/api/audio-pipeline-staging/<file>` (dev only).
+- `manifest` API in dev mode rewrites `file:///*\/audio-pipeline-staging/<file>`
+  → `http://{host}/cdn/staging/<file>` and `file:///*\/cdn-mock/<rel>` →
+  `http://{host}/cdn/<rel>` so Flutter clients can fetch via HTTP GET.
+- **Production behavior unchanged**: `if (!isProdEnv)` guard around the
+  staging `useStaticAssets` registration in `main.ts`; `manifest` API still
+  skips `file://` rows in production (PR-A behavior preserved).
+- Strict `Host` header check in dev mode — missing header throws 500
+  rather than silently falling back to a hardcoded host:port.
+
+### Day 2 — Mobile feature flag + WordbookLoader D1 收口
+
+- `LocalSettingsService.manifestSyncEnabled` SharedPreferences flag,
+  default `false`. Wiring deferred to Day 3.
+- `WordbookLoader._clearContentTables(bookSlug)` no longer wipes
+  `example_sentences` unconditionally on a bundle version bump. When the
+  local DB has any `content_package_states` row matching this book's
+  `examples-<slug>` package, only rows with `stable_id IS NULL` (legacy
+  pre-v0.3-P0 bundle rows) are deleted — manifest-installed rows and
+  modern bundle rows with stable_id survive.
+- bookSlug → packageName mapping handles `book-001 → examples-cet4`;
+  other books map by `examples-<slug>` directly.
+- **v0.4 scope §1.3 implicit limit (documented)**: once a book has manifest
+  examples, bundle examples upgrades for that book are suppressed. Both
+  unique indexes on `example_sentences` — `(word_id, sort_order)` and
+  `stable_id` — make the InsertOrIgnore reimport a no-op against any
+  preserved row. Bundle examples content updates flow via server-pushed
+  manifest packages from this point on; bundle JSON only seeds fresh
+  installs and books that never received manifest packages.
+
+### Day 3 — Startup hook + settings page debug switch + sub-smokes
+
+- `main.dart` runs a fire-and-forget `runManifestSyncIfEnabled(db: appDb)`
+  helper before `runApp()`. **Three guards, in order**:
+  1. `kDebugMode` — release/profile builds dead-code-eliminate the entire
+     hook, so a SharedPreferences flag set in a debug build can never
+     trigger sync after upgrading to a same-package release build.
+  2. `LocalSettingsService.manifestSyncEnabled` — feature flag, default
+     false, off until the user opts in.
+  3. `ContentPackageService.syncIfNeeded(appVersion: PackageInfo
+     .fromPlatform().version)` — real app version (currently `0.0.1`)
+     sent to the server so its `min_app_version` filter actually engages.
+- Settings page `调试` section gains a `kDebugMode`-only `SwitchListTile`
+  ("Manifest sync (PR-B3 dev)") that toggles the flag. Existing debug
+  ListTiles ("复习历史" / "重新导入增强数据") keep their pre-PR-B3
+  release visibility unchanged.
+- **Startup parity guarantee**: when flag=false or build is non-debug,
+  the helper returns immediately. The `runApp()` call is not preceded by
+  any new awaits, so the cold-start sequence is byte-for-byte identical
+  to PR-B2 in those cases.
+
+### Sub-smokes (manual, pre-PR)
+
+A. flag=false default → app behaves identically to PR-B2.
+B. flag=true + dev API up → manifest sync writes drift; logcat shows
+   "manifest sync result: installed=N replaced=M …".
+C. flag=true + offline → app starts normally, sync fails silently.
+D. flag=true bundle v3 + manifest install → bump bundle to v4 → restart
+   → manifest data preserved (D1 收口 real-device regression).
+E. flag=true full E2E: dev API → `/cdn/staging/...` URL → DownloadManager
+   fetches → checksum → install → drift readback. Detailed commands in
+   master plan v0.2.
+
 ## Reference
 
 - `docs/design/词书单词例句与例句音频架构_v0.3.md` §B.4 / §B.7 / §B.10
