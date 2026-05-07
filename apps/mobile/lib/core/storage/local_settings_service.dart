@@ -18,6 +18,7 @@ class LocalSettingsService {
   static const _keyNotificationTime = 'settings_notification_time';
   static const _keyDesiredRetention = 'settings_desired_retention';
   static const _keyActiveWordbook = 'settings_active_wordbook';
+  static const _keyManifestSyncEnabled = 'settings_manifest_sync_enabled';
 
   // ==================== Daily Goal ====================
   int get dailyGoal => _prefs.getInt(_keyDailyGoal) ?? 20;
@@ -52,6 +53,21 @@ class LocalSettingsService {
       _prefs.getString(_keyActiveWordbook) ?? 'book-001';
   Future<bool> setActiveWordbook(String slug) =>
       _prefs.setString(_keyActiveWordbook, slug);
+
+  // ==================== Manifest Sync (PR-B3) ====================
+  /// PR-B3 feature flag — when true, app fires async manifest sync on
+  /// startup (Day 3 wires it into main.dart). Default false until rollout
+  /// is gated by the user from the debug settings page (Day 3).
+  ///
+  /// Failure of sync NEVER blocks UI; flag exists purely to gate the
+  /// fire-and-forget call in main.dart.
+  ///
+  /// Day 2 → Day 3 间隔期 flag 字段实装但仅 LocalSettingsService 测试访问；
+  /// Day 3 commit 接 main.dart 启动 hook + settings page 开关。
+  bool get manifestSyncEnabled =>
+      _prefs.getBool(_keyManifestSyncEnabled) ?? false;
+  Future<bool> setManifestSyncEnabled(bool value) =>
+      _prefs.setBool(_keyManifestSyncEnabled, value);
 
   /// Clear all settings (for testing / debug only).
   Future<bool> clearAll() => _prefs.clear();

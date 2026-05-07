@@ -1,10 +1,17 @@
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../storage/drift/app_database.dart';
 import '../util/stable_id.dart' show computeExampleStableId, normalizeWord;
+
+/// PR-B3 Day 2 v0.2 #2 (R1#2) review-adopted: injected DI replaces direct
+/// `rootBundle.loadString` calls so unit tests can fake the asset layer
+/// without using `setMockMessageHandler('flutter/assets')` — that channel
+/// would be the first repo-wide use and risky to introduce here.
+typedef AssetLoader = Future<String> Function(String path);
 
 /// Loads a preset wordbook (ZK / GK) from bundled assets into the local
 /// SQLite database on first launch.
@@ -25,8 +32,16 @@ import '../util/stable_id.dart' show computeExampleStableId, normalizeWord;
 ///   await WordbookLoader(db: AppDatabase()).loadIfNeeded('gk');
 class WordbookLoader {
   final AppDatabase _db;
+  final AssetLoader _assetLoader;
 
-  WordbookLoader({required AppDatabase db}) : _db = db;
+  /// [assetLoader] is optional and defaults to `rootBundle.loadString`.
+  /// Tests inject a fake to load JSON from in-memory strings instead of
+  /// actual bundled assets (PR-B3 Day 2 v0.2 #2 R1#2 review-adopted).
+  WordbookLoader({
+    required AppDatabase db,
+    AssetLoader? assetLoader,
+  })  : _db = db,
+        _assetLoader = assetLoader ?? rootBundle.loadString;
 
   /// Load the wordbook for [bookSlug] from its bundled asset if not yet
   /// present in [preset_wordbooks], or if the stored [content_version] differs
@@ -46,7 +61,7 @@ class WordbookLoader {
   /// Returns the number of words imported into [word_entries] (0 = already up to date).
   Future<int> loadIfNeeded(String bookSlug) async {
     final jsonString =
-        await rootBundle.loadString('assets/words/$bookSlug.json');
+        await _assetLoader('assets/words/$bookSlug.json');
     final data = json.decode(jsonString) as Map<String, dynamic>;
     final assetVersion = data['contentVersion'] as String?;
 
@@ -56,8 +71,7 @@ class WordbookLoader {
       if (await _exampleSentencesIntegrityOk()) {
         return 0;
       }
-      // ignore: avoid_print
-      print(
+      debugPrint(
           '[WordbookLoader] $bookSlug: version match ($assetVersion) but '
           'example_sentences integrity check failed (null stable_id detected) '
           '— forcing reimport.');
@@ -66,7 +80,7 @@ class WordbookLoader {
     // Either first load, version mismatch, or integrity-backstop trigger —
     // clear content tables and reimport.
     if (storedVersion != null) {
-      await _clearContentTables();
+      await _clearContentTables(bookSlug);
     }
     return _loadFromData(bookSlug, data);
   }
@@ -93,14 +107,76 @@ class WordbookLoader {
     return result?.readNullable<String>('content_version');
   }
 
-  /// Drop and recreate all 4 content-layer tables.
-  /// Called when a version mismatch is detected — safe because all data is
-  /// reloaded from bundled assets.
-  Future<void> _clearContentTables() async {
-    await _db.customStatement('DELETE FROM example_sentences');
+  /// PR-B3 Day 2 v0.2 #3 (R2#P1.2) review-adopted: bookSlug → manifest
+  /// packageName mapping. server-side `deriveBookId` (controllers/
+  /// content-manifest.controller.ts:79) emits `book_id='cet4'` for
+  /// `examples-cet4` packages, but mobile WordbookLoader callers use
+  /// bookSlug `'book-001'` for CET-4. Mapping converges them by the
+  /// well-known `examples-` prefix on packageName.
+  String _packageNameForBookSlug(String bookSlug) {
+    if (bookSlug == 'book-001') return 'examples-cet4';
+    return 'examples-$bookSlug';
+  }
+
+  /// PR-B3 Day 2 v0.2 #3 (R2#P1.2) review-adopted: per-book manifest
+  /// existence check. Returns true iff `content_package_state` has at
+  /// least one row with `package_kind='examples'` AND `package_name`
+  /// matching this bookSlug — narrower than v0.1's full-table scan,
+  /// avoiding cross-book false positives where installing manifest for
+  /// book A would suppress D1 protection on book B's bundle upgrade.
+  Future<bool> _hasManifestExamplesForBook(String bookSlug) async {
+    final pkgName = _packageNameForBookSlug(bookSlug);
+    final row = await _db
+        .customSelect(
+      "SELECT 1 AS hit FROM content_package_states "
+      "WHERE package_kind = 'examples' AND package_name = ? LIMIT 1",
+      variables: [Variable.withString(pkgName)],
+    ).getSingleOrNull();
+    return row != null;
+  }
+
+  /// Drop and recreate bundle-derived content-layer tables.
+  ///
+  /// PR-B3 Day 2 v0.2 D1 收口: example_sentences MAY contain manifest-
+  /// installed rows (PR-B2 ContentPackageService writes them via
+  /// stable_id-keyed InsertOrReplace). When the local DB has at least one
+  /// content_package_state row whose `package_name` matches this bookSlug,
+  /// we SKIP the unconditional `DELETE FROM example_sentences` and only
+  /// remove rows with `stable_id IS NULL` — those are pre-v0.3-P0 legacy
+  /// bundle rows that would otherwise trigger the integrity backstop in
+  /// `loadIfNeeded` on every launch (forcing a useless reimport loop).
+  ///
+  /// **Side effect (v0.4 scope §1.3 implicit limit, R1#1 + R2#P1.1
+  /// review-adopted):** once a book has manifest examples, bundle examples
+  /// upgrades for that book are effectively suppressed. The subsequent
+  /// `_loadFromData` reimport uses InsertOrIgnore on TWO unique indexes
+  /// — `(word_id, sort_order)` and `stable_id` — and either collision
+  /// produces a no-op. Bundle examples content updates therefore flow via
+  /// server-pushed manifest packages (PackageInstaller InsertOrReplace by
+  /// stable_id), not via app-upgrade + bundle JSON replacement. This is
+  /// consistent with PR-B's design choice to transfer examples ownership
+  /// from bundle to server-manifest. Bundle JSON only seeds fresh installs
+  /// or books that never received manifest packages.
+  Future<void> _clearContentTables(String bookSlug) async {
+    // 3 张 bundle-only 表照旧清（manifest 不写这些）
     await _db.customStatement('DELETE FROM word_book_assignments');
     await _db.customStatement('DELETE FROM word_entries');
     await _db.customStatement('DELETE FROM preset_wordbooks');
+
+    if (await _hasManifestExamplesForBook(bookSlug)) {
+      debugPrint(
+          '[WordbookLoader] $bookSlug has manifest examples; '
+          'preserving non-null stable_id rows (PR-B3 D1 收口). '
+          'Bundle examples upgrades for this book are now manifest-driven.');
+      // 仅清 legacy null stable_id 行（避免 integrity backstop 死循环；
+      // v0.2 #4 R2#P1.3 review-adopted）
+      await _db.customStatement(
+        'DELETE FROM example_sentences WHERE stable_id IS NULL',
+      );
+    } else {
+      // 无 manifest 介入：行为完全等同 PR-B2 之前
+      await _db.customStatement('DELETE FROM example_sentences');
+    }
   }
 
   Future<int> _loadFromData(
