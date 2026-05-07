@@ -1,2 +1,13 @@
 psycopg2-binary>=2.9
 PyYAML>=6.0
+
+# PR-C: Tencent COS via S3-compatible API. boto3 chosen over cos-python-sdk-v5
+# so a future swap to AWS S3 / Cloudflare R2 / etc just changes endpoint_url +
+# region — same put_object / list_objects / etc API.
+boto3>=1.34.0
+
+# PR-C R3 P1 + R4-1: pipeline.py auto-loads .env from its own directory so
+# users don't have to manually `export DATABASE_URL=... COS_*=...` before each
+# invocation. Without this, _connect_or_die() reads os.environ which silently
+# misses .env contents.
+python-dotenv>=1.0.0
