@@ -627,6 +627,134 @@ their `false` value (SharedPreferences only consults the default when
 the key is absent). Users who never touched the switch get the new
 default on next cold start.
 
+## v0.3 PR-C (Tencent COS integration + S1=β mobile 4-service env + PR-B5 release default-on)
+
+PR-C swaps `pipeline.py`'s `file://` URLs for real Tencent COS public-read
+URLs and unblocks release-build full-chain via `--dart-define=API_BASE`.
+
+### PR-C 边界声明（β 切 baseUrl 但 audio 资产仍预存债务，留 PR-D）
+
+PR-C 兑现「release mobile 4 service baseUrl 切 production + COS 接入」。
+
+Release 用户**能**：
+- ✅ 启动从 COS 拉 manifest → 导入 drift（`ManifestClient`）
+- ✅ ApiClient 业务接口走真域名（取题目 / 设置 / 等）
+- ✅ Audio/Pronunciation **metadata API 调用** 走真域名（返 JSON 200）
+
+Release 用户**仍不能**（R4-2 / R4-3 揭示的 PR-D 范围）：
+- ❌ 真**播放**例句 mp3 字节：`audio_assets.url` 仍是 `ingest-audio-assets.ts:90`
+  写入的 emulator host（`http://10.0.2.2:3000/cdn/...`）→ GET 该 url timeout
+- ❌ 真**听**单词发音 wav 字节：`data/pronunciation/` 在 Docker image 内不存在
+- ❌ `/cdn` static route 在 production 服不到 mp3：`apps/api/cdn-mock/` 在 repo 仅 `.gitkeep`
+
+**PR-D 范围（R4 后明确）**：audio mp3 + pronunciation wav 接 COS 或 mount 进
+container；`partial_publish.py` / `ingest-audio-assets.ts` 改用 https origin
+重 ingest `audio_assets.url`；server `/cdn` static route 删除。估时 ~2-3d。
+
+### pipeline.py prerequisites
+
+- Tencent COS bucket (ap-shanghai recommended), public-read ACL
+- CAM subaccount with `QcloudCOSDataWrite` scoped to the bucket
+- `pip install -r apps/api/scripts/content_pipeline/requirements.txt` (adds
+  `boto3>=1.34.0` and `python-dotenv>=1.0.0`)
+- `.env` populated per `.env.example` (R3 P1 + R4-1: `pipeline.py` only reads
+  `DATABASE_URL`, NOT `PG*` split env):
+  ```
+  DATABASE_URL=postgresql://postgres:<password>@localhost:5432/<dbname>
+  COS_REGION COS_BUCKET COS_SECRET_ID COS_SECRET_KEY COS_PUBLIC_URL_BASE
+  ```
+- Connect to production DB via SSH tunnel (recommended):
+  ```
+  ssh -L 5432:localhost:5432 user@your-server-ip
+  # Then in .env:
+  DATABASE_URL=postgresql://postgres:<prod-password>@localhost:5432/meow_prod
+  ```
+
+### `publish-manifest` post-PR-C
+
+`publish-manifest` derives the expected COS URL from
+`<package_name>@<version>` + file suffixes, **checks PG idempotent /
+conflict first**, and only uploads to COS if it's a genuinely new INSERT.
+Re-runs of the same manifest with the same content cost **zero network
+IO** (R1#3 + R2#2: vs v0.1's "upload first then check" which would corrupt
+the COS object on conflict-with-different-content). Different content
+under the same manifest_id remains a hard error per PR-A — bump
+`content_version` instead.
+
+`Cache-Control: public, max-age=31536000, immutable` on the COS object
+because the URL key is content-addressable. `ContentType` auto-detected by
+`mimetypes.guess_type` (R1#11; future .br/.tar.gz transparently handled).
+
+### `validate` post-PR-C (R1#1 + R3 P2: https-only)
+
+`pipeline.py validate <release>` accepts `https://` URLs in addition to
+legacy `file://` (R1#1). **`http://` is rejected** (R3 P2: production must
+be HTTPS; plain http is a security regression). `https://` URLs skip local
+file existence / checksum / size checks — mobile DownloadManager performs
+sha256 on download (PR-B2). Server-side HEAD verification 留 v0.4 §7.4.
+
+### `orphan-scan` break change post-PR-C (R1#4)
+
+Default `--scope` changed from `'all'` to `'audio'` (cdn-mock only). PR-C
+moves all manifest packages to COS, so `audio-pipeline-staging` files are
+build intermediates with no PG reference — under the old default they
+would all be flagged as orphans by `orphan-scan --clean`.
+
+The actual `orphan_scan.py` choices are `audio` / `packages` / `all`
+(NOT `staging`; v0.1 plan typo'd this). To clean staging intermediates
+explicitly:
+
+```bash
+pipeline.py orphan-scan --scope packages --clean  # only audio-pipeline-staging
+pipeline.py orphan-scan --scope all --clean       # both (PR-B1 default behavior)
+```
+
+### Server cleanup
+
+PR-B3 Day 1's `/cdn/staging` static route + `transformFileUrlForDev` helper
++ `isProdEnv` const are **all removed**. `pipeline.py` always writes https
+URLs now, so the `manifest` API can pass `file_url` straight through. The
+defensive `file://` skip remains (any leftover row from pre-PR-C ingest is
+treated as a data bug and skipped in any environment).
+
+### PR-B5 (merged into PR-C) + S1=β
+
+PR-B3 Day 3's `runManifestSyncIfEnabled` Layer-1 guard
+`if (!kDebugMode) return;` is **removed**. With real CDN URLs reaching
+production clients via S1=β + COS, release builds also auto-sync. The
+settings page `SwitchListTile`'s `if (kDebugMode)` wrap is removed too;
+the title is rebranded from "Manifest sync (PR-B3 dev)" to user-facing
+"内容自动更新". The `flutter/foundation` import is removed from both
+`main.dart` and `settings_page.dart` (R2#6: would otherwise be an unused
+import).
+
+**S1=β (mobile baseUrl 4 service env-aware)**:
+
+New `apps/mobile/lib/core/config/api_base.dart` exports:
+```dart
+const String apiV1Base = String.fromEnvironment(
+  'API_BASE',
+  defaultValue: 'http://10.0.2.2:3000/api/v1',
+);
+```
+
+4 mobile services switch to `apiV1Base`:
+- `ManifestClient.baseUrl`
+- `ApiClient.baseUrl`
+- `ExampleAudioService._baseUrl` (`static const → final` + `{String? baseUrl}` named optional)
+- `PronunciationService._baseUrl` (same pattern)
+
+Build for release:
+
+```bash
+flutter build apk --release \
+  --dart-define=API_BASE=https://api.<your-domain>.<tld>/api/v1
+```
+
+Without the `--dart-define`, all 4 services fall back to `10.0.2.2` and
+release-build manifest/api/audio/pronunciation requests time out
+(visible in `adb logcat`, not silent failure).
+
 ## Reference
 
 - `docs/design/词书单词例句与例句音频架构_v0.3.md` §B.4 / §B.7 / §B.10
