@@ -1,25 +1,41 @@
-# PR-D plan v0.2 — Option A 详细实施（audio + pronunciation 全 COS；D2=a redirect）
+# PR-D plan v0.3 — Option A 详细实施（audio + pronunciation 全 COS；D2=a redirect）
 
 - **Date**: 2026-05-07
-- **Status**: plan v0.2 — 与 `pr-d-scope.md` v0.2 同步；D1=A 用户拍板；D2=a server-side 302 redirect；取代 v0.1（v0.1 主张 Option B）
+- **Status**: plan v0.3 — 与 `pr-d-scope.md` v0.3 同步；吸收 R4 评审 12 处（5 P1 / 3 P2 / 4 Nit）；取代 v0.2
 - **基线 commit**: `ec095ea`（PR-C merged 进 main）
 - **工作分支**: `feat/v0.3-pr-d-audio-asset-ingest-cos`
 - **预算**: 我做 ~2-2.5d；用户 Phase 0 ~1-1.5 hr
 
 ---
 
-## 0. v0.1 → v0.2 修订
+## 0. v0.2 → v0.3 修订（R4 评审 12 处）
 
-| # | v0.1 | v0.2 |
+### 🔴 P1（开工前必修）
+
+| # | 来源 | 问题 | 修订 |
+|---|---|---|---|
+| P1-1 | R1#1 | e2e 三 case set `process.env.PRONUNCIATION_CDN_ORIGIN` 但无 afterEach 还原 → 污染后续 e2e | wrap 进独立 describe + `beforeEach` 备份 + `afterEach` 还原；`delete` case 单独 wrap |
+| P1-2 | R1#2 + R2#7 | `sync-*-to-cos.ts` `Body: fs.readFileSync(abs)` 全文件读内存（GB 级 mp3 OOM 风险）| 改 `Body: fs.createReadStream(abs)` + `ContentLength: fs.statSync(abs).size`（与 PR-C boto3 流式上传同款）|
+| P1#1 R2 | R2#1 | §0.3 示例 `--src cdn-mock --prefix audio/v1` 与 §1.5 acknowledged 修正矛盾（双 audio/v1 prefix）| 全部统一 `--src cdn-mock/audio/v1 --prefix audio/v1`；删 §1.5 "冲突"段落 |
+| P1#2 R2 | R2#2 | §2.3 ingest cdnOrigin fallback `'http://10.0.2.2:3000/cdn'`，但 `/cdn` route 已删 → fallback 写出永远 404 的 url | 改 fail-fast：`AUDIO_CDN_ORIGIN` 必须设置；缺失 process.exit(2)；删 back-compat fallback |
+| P1-3 | R1#3 + R2#3 | §3.2 第三个 e2e case 注释 "NestJS NotFoundException maps to 404 by default" 但 controller §2.1 抛 `NotFoundException`，不是配置缺失对应的 500 | controller 改抛 `InternalServerErrorException`（500）；e2e `.expect(500)` |
+
+### 🟡 P2（应修）
+
+| # | 来源 | 修订 |
 |---|---|---|
-| D1 主张 | Option B（server volume mount）| **Option A**（用户拍板，全 COS）|
-| D2 决策 | 未提（B 不需要）| **a: server-side 302 redirect** |
-| 估时 | 1d | 2-2.5d |
-| 工具 | 1 个：repipe-audio-urls.ts | 3 个：sync-audio-mp3 + sync-pronunciation + repipe（共 ~400 行 ts）|
-| pronunciation controller | 不动 | 重写：fs.readFile → 302 redirect |
-| main.ts /cdn route | 保留 | 删除 |
-| docker-compose volumes | 加 cdn-mock + data/pronunciation mounts | 不加（资产全 COS）|
-| mobile 改动 | 0 | **0**（D2=a 关键好处：http follows redirect）|
+| P2-1 | R1#4 | Phase 0 §0.4 加 prerequisite："`apps/api/data/pronunciation/` 在 dev 机存在；如不存在（PR-C R4-3 揭示）需先从备份恢复或跳过 pronunciation sync 步骤" |
+| P2-2 | R2#5 | §1.1 18 行自写 dotenv parser 不处理 quote/multiline/BOM；改用 `dotenv` npm package（`apps/api/package.json` 已有 NestJS 默认依赖；如无单独 add）|
+| P2-3 | R2#11 | env vars 散落 `apps/api/.env`（NestJS）+ `apps/api/scripts/content_pipeline/.env`（pipeline）混淆；加 cheat sheet 表 |
+
+### 🟢 Nit
+
+| # | 来源 | 修订 |
+|---|---|---|
+| Nit-6 | R1#7 | recon §5 "main.ts ~line 36-50" → 实测 line 28-34（PR-C 后实际位置）|
+| Nit-7 | R1#8 | recon §4 "ingest line 158" → 实测 line 159 |
+| Nit-8 | R2#9 | `.gitignore` line 68-69 已含 `apps/api/cdn-mock/audio/`；说明 cdn-mock/audio 不进 git；`.gitkeep` 守 dir 占位 |
+| Nit-10 | R2#10 | pronunciation wav `Cache-Control` 与 audio mp3 对齐：`public, max-age=31536000, immutable`（语音文件版本路径化 v1，永久缓存安全）|
 
 ---
 
@@ -39,15 +55,21 @@ grep -A 5 "data/pronunciation\|firstLetter" apps/api/src/controllers/pronunciati
 grep "^[a-z]" apps/api/src/controllers/pronunciation.controller.ts
 # → /^[a-z][a-z0-9''\-]{0,59}$/
 
-# 4. ingest-audio-assets.ts cdnOrigin default
+# 4. ingest-audio-assets.ts cdnOrigin default (Nit-7 v0.3 更正)
 grep -n "cdnOrigin" apps/api/scripts/ingest-audio-assets.ts | head
 # → line 90: cdnOrigin: get('--cdn-origin', 'http://10.0.2.2:3000/cdn')
-# → line 158: row.url = cdnOrigin + row.url.substring('local://cdn'.length)
+# → line 159: row.url = cdnOrigin + row.url.substring('local://cdn'.length)
 
-# 5. main.ts /cdn static route (PR-C 后)
+# 5. main.ts /cdn static route (PR-C 后；Nit-6 v0.3 更正)
 grep -n "useStaticAssets\|cdn-mock" apps/api/src/main.ts
-# → ~line 36-50: app.useStaticAssets(join(__dirname, '..', 'cdn-mock'), { prefix: '/cdn' })
+# → line 28-34: app.useStaticAssets(join(__dirname, '..', 'cdn-mock'), { prefix: '/cdn', setHeaders: ... })
 # → PR-D 删除整段
+
+# 8. .gitignore cdn-mock state (Nit-8 v0.3)
+grep -n "cdn-mock" .gitignore
+# → line 68-69: # Keep apps/api/cdn-mock/.gitkeep; ignore everything under audio/
+#               apps/api/cdn-mock/audio/
+# → 已 ignore 资产；.gitkeep 守 dir。PR-D 不需进一步改 .gitignore。
 
 # 6. 现有 .env.example
 cat apps/api/.env.example
@@ -68,6 +90,16 @@ cat apps/api/scripts/content_pipeline/.env.example
   - pronunciation wav: `pronunciation/{locale}/{voice}/v1/{firstLetter}/{word}.wav`
 - `AUDIO_CDN_ORIGIN` + `PRONUNCIATION_CDN_ORIGIN` 默认值都是 `${COS_PUBLIC_URL_BASE}` 的衍生，但允许独立配置以备未来分桶 / 接 CDN
 - `apps/api/.env`（NestJS 用）跟 `apps/api/scripts/content_pipeline/.env`（pipeline 用）分开。PR-D 工具放 `apps/api/scripts/`，复用 `content_pipeline/.env`（COS_*）+ `apps/api/.env`（DATABASE_URL）；或新建 `apps/api/scripts/.env` 集中。**采用现有混用**（无碎片化）。
+
+### env 变量去哪（v0.3 P2-3 cheat sheet）
+
+| 变量 | 文件 | 谁读 |
+|---|---|---|
+| `DATABASE_URL` | `apps/api/.env` | NestJS 启动时 / `repipe-audio-urls.ts` |
+| `AUDIO_CDN_ORIGIN` | `apps/api/.env` | `ingest-audio-assets.ts`（必须设置；fail-fast 不再 fallback）|
+| `PRONUNCIATION_CDN_ORIGIN` | `apps/api/.env` | NestJS `pronunciation.controller.ts`（缺失抛 500）|
+| `COS_REGION` / `COS_BUCKET` / `COS_SECRET_ID` / `COS_SECRET_KEY` / `COS_PUBLIC_URL_BASE` | `apps/api/scripts/content_pipeline/.env` | `pipeline.py`（PR-C） + `sync-*-to-cos.ts` / `cos-sync-helper.ts`（PR-D；通过 dotenv loadCandidates 拣到） |
+| `PORT` / `NODE_ENV` / `CORS_ORIGIN` | `apps/api/.env` | NestJS bootstrap |
 
 ---
 
@@ -94,28 +126,32 @@ COS_SECRET_KEY=<key-secret>
 COS_PUBLIC_URL_BASE=https://<bucket>.cos.<region>.myqcloud.com
 ```
 
-新增 `apps/api/.env` 末尾两行（让 NestJS pronunciation controller 知道 redirect target）：
+新增 `apps/api/.env` 末尾两行（必填，v0.3 fail-fast）：
 ```
 AUDIO_CDN_ORIGIN=https://<bucket>.cos.<region>.myqcloud.com
 PRONUNCIATION_CDN_ORIGIN=https://<bucket>.cos.<region>.myqcloud.com
 ```
 
-（实际可以省略 `AUDIO_CDN_ORIGIN`，server 端 NestJS 不需要这个变量；只有 ingest-audio-assets.ts 用到。）
+- `AUDIO_CDN_ORIGIN`：`ingest-audio-assets.ts` 必读；缺失 exit 2（v0.3 P1#2 R2）。
+- `PRONUNCIATION_CDN_ORIGIN`：NestJS `pronunciation.controller.ts` 必读；缺失 500（v0.3 P1-3）。
+- 单 bucket 时两者同值；split 出来留给未来 multi-bucket 弹性。
 
 ### 0.3 一次性 sync audio mp3 到 COS
+
+**v0.3 P1#1 R2 修订**：`--src` 指 `cdn-mock/audio/v1`（不是 `cdn-mock`），与 `--prefix audio/v1` 对齐避免双 audio/v1 prefix。
 
 ```bash
 cd /d/code/AI/startUp/meow/apps/api
 
 # Dry-run: 列举将上传文件数 + 总大小估算
 npx ts-node scripts/sync-audio-mp3-to-cos.ts \
-  --src cdn-mock \
+  --src cdn-mock/audio/v1 \
   --prefix audio/v1 \
   --dry-run
 
 # 实跑
 npx ts-node scripts/sync-audio-mp3-to-cos.ts \
-  --src cdn-mock \
+  --src cdn-mock/audio/v1 \
   --prefix audio/v1 \
   --commit
 # 输出: "uploaded N files, skipped M (same ETag)"; 进度条
@@ -124,7 +160,18 @@ npx ts-node scripts/sync-audio-mp3-to-cos.ts \
 
 ### 0.4 一次性 sync pronunciation wav 到 COS
 
+**v0.3 P2-1 prerequisite**：执行前确保 `apps/api/data/pronunciation/` 在 dev 机存在。
+PR-C R4-3 已揭示：dev/repo 都不存 pronunciation 资产，仓库 `.gitignore` 也不
+追踪。如 dev 机本地无该目录，需先：
+
+- (a) 从备份恢复（之前生成过 wav 的本地备份）；或
+- (b) 跑 pronunciation pipeline 重新生成（参考 `apps/api/scripts/audio_pipeline/`）；或
+- (c) 跳过 §0.4 → F4 sub-smoke 暂保留 PR-C R4-3 "expected fail"，PR-E 时再补 sync。
+
 ```bash
+# Prerequisite check
+test -d data/pronunciation && echo "OK" || echo "MISSING — see options (a)(b)(c) above"
+
 npx ts-node scripts/sync-pronunciation-to-cos.ts \
   --src data/pronunciation \
   --prefix pronunciation \
@@ -247,25 +294,16 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 
 import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import * as dotenv from 'dotenv';
 
-// ----- env loading (same pattern as ingest-audio-assets.ts) -----
+// ----- env loading (v0.3 P2-2: use dotenv npm package; handles quotes/multiline/BOM) -----
 const envCandidates = [
-  path.resolve(__dirname, '..', 'scripts', 'content_pipeline', '.env'),
-  path.resolve(__dirname, '..', '.env'),
+  path.resolve(__dirname, 'content_pipeline', '.env'),  // PR-C COS_*
+  path.resolve(__dirname, '..', '.env'),                // PR-D AUDIO_CDN_ORIGIN
 ];
 for (const envPath of envCandidates) {
   if (fs.existsSync(envPath)) {
-    const content = fs.readFileSync(envPath, 'utf-8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#')) {
-        const eq = trimmed.indexOf('=');
-        if (eq > 0) {
-          const key = trimmed.substring(0, eq);
-          if (!process.env[key]) process.env[key] = trimmed.substring(eq + 1);
-        }
-      }
-    }
+    dotenv.config({ path: envPath, override: false });
   }
 }
 
@@ -370,10 +408,13 @@ async function main() {
       continue;
     }
 
+    // v0.3 P1-2: stream upload to avoid OOM on multi-GB total / large mp3.
+    // ContentLength required when Body is a Readable stream (S3 can't infer).
     await client.send(new PutObjectCommand({
       Bucket: bucket,
       Key: key,
-      Body: fs.readFileSync(abs),
+      Body: fs.createReadStream(abs),
+      ContentLength: size,
       ContentType: 'audio/mpeg',
       CacheControl: 'public, max-age=31536000, immutable',
       ACL: 'public-read',
@@ -396,8 +437,10 @@ main().catch((err) => { console.error('ERROR:', err); process.exit(1); });
 // 同 sync-audio-mp3-to-cos.ts 但:
 //   - walkMp3 → walkWav (filter .wav extension)
 //   - ContentType: 'audio/wav'
-//   - CacheControl: 'public, max-age=86400' (PR-A 原 controller header)
-//   - 其它逻辑相同
+//   - CacheControl: 'public, max-age=31536000, immutable'
+//     (v0.3 Nit-10: 与 audio mp3 对齐;wav 路径含 v1 segment, 升级靠新版本路径,
+//      object 永不原地 overwrite, 永久缓存安全)
+//   - 其它逻辑相同 (含 P1-2 createReadStream + ContentLength)
 ```
 
 为避免重复代码，把 walk + upload 抽成 shared `cos-sync-helper.ts`，两个 sync 工具调用 helper：
@@ -433,42 +476,30 @@ export async function syncDirectoryToCos(opts: {
    "dependencies": {
      ...
 +    "@aws-sdk/client-s3": "^3.x.x",
++    "dotenv": "^16.x.x",
      ...
    }
 ```
 
 或用 `aws-sdk` v2（更老但更小）；推荐 v3 模块化。
 
-注：PR-C 已用 `boto3` (Python) 给 manifest 上传。这里是 TypeScript 部分，需要 JS 版 S3 SDK。`@aws-sdk/client-s3` 是官方 v3。
+注：PR-C 已用 `boto3` (Python) 给 manifest 上传。这里是 TypeScript 部分，需要 JS 版 S3 SDK。`@aws-sdk/client-s3` 是官方 v3。`dotenv` 是 v0.3 P2-2 修订（用 npm 包替代自写 parser）；如已是间接依赖（NestJS @nestjs/config 自带），check `node_modules/dotenv` 已存在则不需要 npm install。
 
 ```bash
 cd apps/api
-npm install @aws-sdk/client-s3
+npm install @aws-sdk/client-s3 dotenv
 ```
 
-### Step 1.5 path layout 确认
+### Step 1.5 path layout 约定（v0.3 P1#1 R2 final）
 
-`--src cdn-mock --prefix audio/v1` 时：
-- 文件 `cdn-mock/audio/v1/examples/en-US/af_bella/v1/ab/abc123.mp3`
-- walk yields `rel = 'audio/v1/examples/en-US/af_bella/v1/ab/abc123.mp3'`
-- COS key = `audio/v1` + `/` + `audio/v1/examples/.../abc123.mp3` = **冲突**（双 audio/v1）
+**约定**：src 已指到 prefix 对应的本地子树，walk 从 src 起算 rel（不含 src 路径前缀），COS key = prefix + '/' + rel：
 
-修：sync 工具加 `--strip-prefix` 或类似选项。或者更简单，src 直接指 `cdn-mock/audio/v1`，prefix `audio/v1`。
+| 工具 | --src | --prefix | 例 |
+|---|---|---|---|
+| sync-audio-mp3 | `cdn-mock/audio/v1` | `audio/v1` | `cdn-mock/audio/v1/examples/en-US/af_bella/v1/ab/abc.mp3` → rel=`examples/.../abc.mp3` → key=`audio/v1/examples/.../abc.mp3` ✓ |
+| sync-pronunciation | `data/pronunciation` | `pronunciation` | `data/pronunciation/en-US/am_michael/v1/a/abandon.wav` → rel=`en-US/.../abandon.wav` → key=`pronunciation/en-US/.../abandon.wav` ✓ |
 
-最 KISS：**约定 src 与 COS prefix 关系**：
-- audio: `--src cdn-mock/audio/v1 --prefix audio/v1`（两边对应）
-- pronunciation: `--src data/pronunciation --prefix pronunciation`（两边对应）
-
-walk 时 rel 从 src 起算（不含 src 路径），COS key = prefix + rel：
-- `cdn-mock/audio/v1/examples/.../abc.mp3` → rel = `examples/.../abc.mp3` → key = `audio/v1/examples/.../abc.mp3` ✓
-
-更新示例命令（已在 §0.3 / §0.4）：
-```bash
-npx ts-node scripts/sync-audio-mp3-to-cos.ts --src cdn-mock/audio/v1 --prefix audio/v1
-npx ts-node scripts/sync-pronunciation-to-cos.ts --src data/pronunciation --prefix pronunciation
-```
-
-代码里 walk 从 src 起算 rel（不含 src 路径前缀）。
+代码里 walk 从 src 起算 rel（不含 src 路径前缀）；不再处理 strip-prefix 边界（KISS）。
 
 ---
 
@@ -481,8 +512,9 @@ npx ts-node scripts/sync-pronunciation-to-cos.ts --src data/pronunciation --pref
    Controller,
    Get,
 -  Header,
-   NotFoundException,
+-  NotFoundException,
    BadRequestException,
++  InternalServerErrorException,
    Param,
    Query,
 -  StreamableFile,
@@ -572,9 +604,10 @@ npx ts-node scripts/sync-pronunciation-to-cos.ts --src data/pronunciation --pref
 -    });
 +    const cdnOrigin = process.env.PRONUNCIATION_CDN_ORIGIN;
 +    if (!cdnOrigin) {
-+      throw new NotFoundException({
++      // v0.3 P1-3: server config error → 500 (not 404). NotFoundException
++      // would mislead client to think the word is missing from corpus.
++      throw new InternalServerErrorException({
 +        error: 'PRONUNCIATION_CDN_ORIGIN not configured on server',
-+        word: normalized,
 +      });
 +    }
 +
@@ -584,7 +617,9 @@ npx ts-node scripts/sync-pronunciation-to-cos.ts --src data/pronunciation --pref
  }
 ```
 
-注：保留 `NotFoundException` import 用于 PRONUNCIATION_CDN_ORIGIN 缺失时返 500（架构错误）；word 格式非法仍是 `BadRequestException`。
+注：v0.3 P1-3：PRONUNCIATION_CDN_ORIGIN 缺失改抛 `InternalServerErrorException`（500，
+真实语义为 server 配置错误）。`NotFoundException` 已删（404 会让 client 误判
+"该单词不存在"）。word/locale/voice 格式非法仍是 `BadRequestException`（400）。
 
 ### Step 2.2 `apps/api/src/main.ts` 删 /cdn static route
 
@@ -621,21 +656,31 @@ npx ts-node scripts/sync-pronunciation-to-cos.ts --src data/pronunciation --pref
 
 如果 `import { join } from 'path'` 仅用于 cdn static route，删后 `join` 不再使用 → 同步删 import。
 
-### Step 2.3 `apps/api/scripts/ingest-audio-assets.ts` cdnOrigin default 改 env
+### Step 2.3 `apps/api/scripts/ingest-audio-assets.ts` cdnOrigin fail-fast（v0.3 P1#2 R2）
+
+`/cdn` static route 删除后，老 fallback `http://10.0.2.2:3000/cdn` 写出的 url 永远 404。改 fail-fast：
 
 ```diff
-+// PR-D: cdnOrigin reads AUDIO_CDN_ORIGIN env (falls back to legacy hardcode
-+// if env unset, preserving PR-A behavior for users who haven't migrated).
++// PR-D v0.3 P1#2 R2: AUDIO_CDN_ORIGIN must be set. The legacy 10.0.2.2:3000
++// /cdn fallback is removed because main.ts no longer serves /cdn (PR-D
++// Option A). Falling back would write永远-404 urls into PG audio_assets.url.
 -cdnOrigin: get('--cdn-origin', 'http://10.0.2.2:3000/cdn'),
-+cdnOrigin: get(
-+  '--cdn-origin',
-+  process.env.AUDIO_CDN_ORIGIN || 'http://10.0.2.2:3000/cdn',
-+),
++cdnOrigin: (() => {
++  const v = get('--cdn-origin', process.env.AUDIO_CDN_ORIGIN);
++  if (!v) {
++    console.error(
++      'ERROR: AUDIO_CDN_ORIGIN env var or --cdn-origin flag required.\n' +
++      '       Expected format: https://<bucket>.cos.<region>.myqcloud.com',
++    );
++    process.exit(2);
++  }
++  return v;
++})(),
 ```
 
-注：`AUDIO_CDN_ORIGIN` 是 COS public base（含或不含 `/cdn` 段取决于 layout）。PR-D 用 `https://<bucket>.cos.<region>.myqcloud.com`（不含 `/cdn`）+ ingest 拼 `audio/v1/...` 上去。
-
-但 `audio_assets.jsonl` 里 url 字段是 `local://cdn/audio/v1/...`，rewrite 后变 `${cdnOrigin}/audio/v1/...`。如果 `cdnOrigin = https://<bucket>.cos.<region>.myqcloud.com` → 最终 url = `https://<bucket>.cos.<region>.myqcloud.com/audio/v1/...` ✓ 与 sync 上传 layout 一致。
+注：`AUDIO_CDN_ORIGIN` 是 COS public base（不含 `/cdn`）；`audio_assets.jsonl`
+里 url 字段是 `local://cdn/audio/v1/...`，rewrite 后变 `${cdnOrigin}/audio/v1/...`
+= `https://<bucket>.cos.<region>.myqcloud.com/audio/v1/...` ✓ 与 sync 上传 layout 一致。
 
 ---
 
@@ -657,16 +702,17 @@ npx ts-node scripts/sync-pronunciation-to-cos.ts --src data/pronunciation --pref
  # Persistence backend: 'pg' (default) or 'json' (legacy fallback)
  PERSISTENCE_BACKEND=pg
 +
-+# PR-D Option A: pronunciation controller 302 redirect target.
-+# Format: https://<bucket>.cos.<region>.myqcloud.com (no trailing slash)
-+# Used by:
-+#   - apps/api/src/controllers/pronunciation.controller.ts
-+#   - apps/api/scripts/ingest-audio-assets.ts (cdnOrigin default; reads
-+#     AUDIO_CDN_ORIGIN; same value as PRONUNCIATION_CDN_ORIGIN typically)
-+# Leave commented to fall back to legacy 'http://10.0.2.2:3000/cdn' (PR-A
-+# behavior, dev only).
-+#PRONUNCIATION_CDN_ORIGIN=https://your-bucket.cos.ap-shanghai.myqcloud.com
-+#AUDIO_CDN_ORIGIN=https://your-bucket.cos.ap-shanghai.myqcloud.com
++# PR-D Option A: COS public-read base (no trailing slash).
++# Format: https://<bucket>.cos.<region>.myqcloud.com
++#
++# AUDIO_CDN_ORIGIN — required by apps/api/scripts/ingest-audio-assets.ts.
++#   Missing → script exits 2 (v0.3 P1#2 R2: fail-fast since /cdn route is
++#   removed; legacy 10.0.2.2:3000 fallback would write 404-永远 urls into PG).
++# PRONUNCIATION_CDN_ORIGIN — required by NestJS pronunciation.controller.ts.
++#   Missing → 500 (v0.3 P1-3: server config error, not 404).
++# Same value typically; split for future multi-bucket flexibility.
++AUDIO_CDN_ORIGIN=https://your-bucket.cos.ap-shanghai.myqcloud.com
++PRONUNCIATION_CDN_ORIGIN=https://your-bucket.cos.ap-shanghai.myqcloud.com
 ```
 
 ### Step 3.2 e2e 加 1 case (pronunciation 302 redirect)
@@ -674,7 +720,23 @@ npx ts-node scripts/sync-pronunciation-to-cos.ts --src data/pronunciation --pref
 `apps/api/test/pg-regression.e2e-spec.ts` 加：
 
 ```typescript
+// v0.3 P1-1: env isolation。三 case 都改 process.env，需 beforeEach/afterEach
+// 还原避免污染后续 e2e（其它 controller 也可能读 PRONUNCIATION_CDN_ORIGIN）。
 describe('GET /api/v1/pronunciation/:word — PR-D 302 redirect', () => {
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env.PRONUNCIATION_CDN_ORIGIN;
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env.PRONUNCIATION_CDN_ORIGIN;
+    } else {
+      process.env.PRONUNCIATION_CDN_ORIGIN = savedEnv;
+    }
+  });
+
   it('returns 302 with Location pointing at PRONUNCIATION_CDN_ORIGIN', async () => {
     process.env.PRONUNCIATION_CDN_ORIGIN = 'https://test-bucket.cos.example.com';
 
@@ -696,11 +758,13 @@ describe('GET /api/v1/pronunciation/:word — PR-D 302 redirect', () => {
   });
 
   it('returns 500 if PRONUNCIATION_CDN_ORIGIN missing', async () => {
+    // v0.3 P1-3: server config error → InternalServerErrorException (500),
+    // 不是 NotFoundException (404)。404 会让 client 误判该单词在 corpus 缺失。
     delete process.env.PRONUNCIATION_CDN_ORIGIN;
 
     await request(app.getHttpServer())
       .get('/api/v1/pronunciation/abandon')
-      .expect(404);  // NestJS NotFoundException maps to 404 by default
+      .expect(500);
   });
 });
 ```
@@ -908,10 +972,12 @@ cd apps/api && npm run test:e2e:pg
 | AudioCacheRepository 旧缓存命中失败 | 缓存按 audio_id (DB §7.4),不按 url;audio_id 不变 → 缓存继续命中 |
 | pronunciation `Cache-Control` 行为变 | 从 server `max-age=86400` → COS object's `Cache-Control public, max-age=86400, immutable` (sync-pronunciation-to-cos.ts 设置);client 看到的 cache 行为基本不变 |
 | word 校验 regex 在 PR-A 时容忍单引号 + 连字符 | controller 重写保留 regex;COS key 也接受这些字符 (URL 正常 encode);Phase 4 可加 case 验证 |
-| `partial_publish.py` 之后 ingest 仍用老 cdnOrigin | `.env` `AUDIO_CDN_ORIGIN` 设置后 ingest 自动读;back-compat fallback 老 hardcode |
+| `partial_publish.py` 之后 ingest 仍用老 cdnOrigin | v0.3: `AUDIO_CDN_ORIGIN` env 必填;缺失 ingest 直接 exit 2 (P1#2 R2 fail-fast);不再有写老 hardcode 的回退路径 |
 | @aws-sdk/client-s3 与 boto3 一致性 | COS S3 兼容;实测 PR-C 用 boto3 OK;PR-D 用 @aws-sdk v3 同样兼容 |
-| 部署 server 时 `PRONUNCIATION_CDN_ORIGIN` 漏配 → controller 抛 NotFound | controller fail-fast;Phase 0 §0.8 验证步骤会撞;不会 silent failure |
+| 部署 server 时 `PRONUNCIATION_CDN_ORIGIN` 漏配 → controller 抛 500 | v0.3 P1-3: controller 抛 InternalServerErrorException (500);Phase 0 §0.8 curl -I 验证步骤立刻撞 500;不会 silent failure 或被误读为 "单词不存在" |
 | sub-smoke F2 url 断言 (含 .cos.) 在 multi-bucket 未来场景失效 | 当前单 bucket;F2 断言 specific to PR-D;PR-E multi-bucket 时再调整 |
+| sync 工具读 GB 级 mp3 OOM | v0.3 P1-2: createReadStream + ContentLength 流式上传(同 PR-C boto3);Node heap 不再受单文件大小约束 |
+| e2e PRONUNCIATION_CDN_ORIGIN 污染后续 case | v0.3 P1-1: beforeEach savedEnv + afterEach 还原;`describe` 退出后 env 与进入前一致 |
 
 ---
 
@@ -920,6 +986,7 @@ cd apps/api && npm run test:e2e:pg
 ```
 docs(v0.3-pr-d): scope v0.1 + plan v0.1 (Option B 推荐)
 docs(v0.3-pr-d): scope v0.2 + plan v0.2 (D1=A 用户拍板, D2=a redirect)
+docs(v0.3-pr-d): scope v0.2 → v0.3 + plan v0.2 → v0.3 (吸收 R4 评审 12 处)
 feat(v0.3-pr-d): Phase 1 — cos-sync-helper + sync-audio-mp3-to-cos +
                  sync-pronunciation-to-cos + repipe-audio-urls
 feat(v0.3-pr-d): Phase 2 — pronunciation 302 redirect + main.ts 删 /cdn

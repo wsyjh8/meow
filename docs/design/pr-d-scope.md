@@ -1,14 +1,24 @@
-# PR-D scope v0.2 · audio mp3 + pronunciation wav 接 COS（Option A，全 CDN 化）
+# PR-D scope v0.3 · audio mp3 + pronunciation wav 接 COS（Option A，全 CDN 化）
 
 - **Date**: 2026-05-07
-- **Status**: scope v0.2 — 用户拍板 **D1 = Option A**（全 COS，audio + pronunciation 都迁）+ **D2 = a**（pronunciation controller 改 302 redirect，mobile 0 改动）；plan v0.2 同步；取代 v0.1（v0.1 主张 Option B 已被否决）
+- **Status**: scope v0.3 — 吸收 R4 评审 12 处（5 P1 / 3 P2 / 4 Nit）；plan v0.3 同步；取代 v0.2
 - **基线 commit**: PR-C merged @ `ec095ea`（main）；PR-D 从 `2a3cbeb` 开，可直接基于新 main rebase
 - **工作分支**: `feat/v0.3-pr-d-audio-asset-ingest-cos`
 - **关系**: 闭合 `pr-c-scope.md` v0.3 §0.5.1 caveat 列出的"release 仍不能"3 条
 
 ---
 
-## 0. v0.1 → v0.2 修订（用户决策点 D1 + D2）
+## 0. v0.2 → v0.3 修订（R4 评审 12 处）
+
+详见 `pr-d-plan.md` §0 完整表。核心摘要：
+
+- **P1**（开工前必修）：(1) e2e env beforeEach/afterEach 还原；(2) sync 工具 createReadStream + ContentLength 流式上传防 OOM；(3) `--src cdn-mock/audio/v1` 与 `--prefix audio/v1` 对齐统一；(4) ingest fail-fast（`AUDIO_CDN_ORIGIN` 必填，去 10.0.2.2 fallback）；(5) controller `InternalServerErrorException`（500 而非 404）。
+- **P2**：(1) Phase 0 §0.4 加 `data/pronunciation/` prerequisite；(2) 用 `dotenv` npm 包替自写 parser；(3) env vars cheat sheet。
+- **Nit**：(6) main.ts 实测 line 28-34；(7) ingest 实测 line 159；(8) `.gitignore` 已含 `apps/api/cdn-mock/audio/`；(10) pronunciation wav `Cache-Control` 与 audio mp3 对齐 `immutable, 1y`。
+
+---
+
+## 0'. v0.1 → v0.2 修订（用户决策点 D1 + D2）
 
 | # | 决策 | v0.1 | v0.2 |
 |---|---|---|---|
@@ -205,6 +215,7 @@ Phase 4 sub-smoke 真机  : 30 min (F1-F4 全过)
 ```
 docs(v0.3-pr-d): scope v0.1 + plan v0.1 (Option B 推荐)
 docs(v0.3-pr-d): scope v0.2 + plan v0.2 (D1=A 用户拍板, D2=a redirect)
+docs(v0.3-pr-d): scope v0.2 → v0.3 + plan v0.2 → v0.3 (吸收 R4 评审 12 处)
 feat(v0.3-pr-d): Phase 1 — sync-audio + sync-pronunciation + repipe-audio-urls (3 个 ts 工具)
 feat(v0.3-pr-d): Phase 2 — pronunciation 302 redirect + main.ts 删 /cdn + ingest cdnOrigin env
 feat(v0.3-pr-d): Phase 3 — README PR-D 章节 + e2e 加 redirect case + .env.example
