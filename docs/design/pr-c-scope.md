@@ -1,7 +1,7 @@
-# PR-C scope v0.2 · 真 CDN 接入（腾讯云 COS）+ PR-B5 release default-on（合并）
+# PR-C scope v0.3 · 真 CDN 接入（腾讯云 COS）+ PR-B5 release default-on（合并）
 
 - **Date**: 2026-05-07
-- **Status**: scope v0.2 — 吸收三份外部评审 24 处修订（R1 13 + R2 7 + R3 4）+ 最终决策 **S1=β**（用户拍板：4 service 全切；R3 评审 P0 反对 α 切片，用户改回 β）+ R2#7 改 acme-companion 优先 + R3 P1/P2 修订（DATABASE_URL / scope=packages / validate https-only）（plan v0.2 同步）；取代 v0.1
+- **Status**: scope v0.3 — 吸收四份外部评审 28 处修订（R1 13 + R2 7 + R3 4 + R4 4）+ 最终决策 **S1=β**（4 service baseUrl 全切）+ **R4 揭示 audio asset URL + Docker 资产挂载是预存架构债务，明示留 PR-D**；plan v0.3 同步；取代 v0.1 / v0.2
 - **基线 commit**: `5392032`（PR-B4 merge 进 main）
 - **工作分支**: `feat/v0.3-pr-c-cos-and-prb5`
 - **worktree**: `D:\code\AI\startUp\meow\.claude\worktrees\v0.3-pr-c`
@@ -9,11 +9,13 @@
 
 ---
 
-## 0. v0.1 → v0.2 修订（吸收两份评审 + S1 决策 + R3 评审）
+## 0. v0.1 → v0.2 → v0.3 修订（吸收四份评审 + S1=β 决策 + R4 audio 资产 PR-D 拆出）
 
-合并 R1（13 条）+ R2（7 条）+ R3（4 条 P0/P1/P2）+ recon 实测 = **24 处去重修订**。scope 决策点 **S1=β**（用户最终拍板）：mobile **4 个** service 一并环境化（`ManifestClient` / `ApiClient` / `ExampleAudioService` / `PronunciationService`），让 release build 整链路（manifest + api + audio + pronunciation）连 production；PR-C 不再制造 release 半生产态。
+合并 R1（13 条）+ R2（7 条）+ R3（4 条 P0/P1/P2）+ R4（4 条 P1/P2，含 audio asset URL + Docker 资产 P0 揭示）+ recon 实测 = **28 处去重修订**。
 
-PR-C 边界：**release app 全链路可用**（manifest + api + audio + pronunciation 全部走 `apiV1Base`）。无需 caveat 软化——β 是诚实承诺。
+scope 决策点 **S1=β**（用户最终拍板）：mobile **4 个** service baseUrl 一并环境化（`ManifestClient` / `ApiClient` / `ExampleAudioService` / `PronunciationService`）。
+
+PR-C 边界（**R4 后修订**）：「release mobile 4 service baseUrl 切 production + COS 接入」——manifest sync + ApiClient 业务 + audio/pronunciation **metadata API** 走真域名；但**不**含 audio mp3 字节真能播放 / pronunciation wav 真能听（R4-2/R4-3：`audio_assets.url` ingestion + `cdn-mock` / `data/pronunciation` 资产挂载是预存架构债务，PR-D 修）。
 
 ### 0.1 P0 必修（评审一致；6 处）
 
@@ -38,7 +40,16 @@ PR-C 边界：**release app 全链路可用**（manifest + api + audio + pronunc
 | R2#5 | smoke 命令 `--package-name test-prc-examples` 改 `examples-test-prc`（PR-A R1.5 naming convention：`examples-` 前缀必须）|
 | R2#6 | `settings_page.dart` 删 `flutter/foundation` import（PR-B5 移 kDebugMode 后唯一用途消失，触发 `unused_import` lint）|
 
-### 0.3 Nit / Doc 校对（5 处）
+### 0.3 R4 评审修订（4 处，v0.2 → v0.3）
+
+| # | 来源 | 问题 | 修订 |
+|---|---|---|---|
+| **R4-1** | R4 P1 | plan §1.6 `.env.example` 模板**仍写 PG\* 散乱 env**（R3 P1 漏改一处）；Phase 1 manual smoke 第一秒撞 `DATABASE_URL not set` | plan §1.6 改 `DATABASE_URL=postgresql://...` 形态（与 §0.5 对齐）|
+| **R4-2** | R4 P1 (P0 揭示) | β 切 mobile baseUrl 后 metadata API 走真域名 ✓ 但返回的 `audio_assets.url` 仍是 `ingest-audio-assets.ts:90` 写的 `http://10.0.2.2:3000/cdn/...` → release 用户拿 metadata 200 但 GET mp3 timeout | scope §0.5.1 + plan top + README 三处明示**留 PR-D**；sub-smoke F 拆细：F2 expect metadata.url 含 10.0.2.2，F3 expect mp3 GET timeout（"PR-C 范围内已知 fail"）|
+| **R4-3** | R4 P1 (P0 揭示) | `apps/api/cdn-mock/` 仅 `.gitkeep`；`data/pronunciation/` 在 repo 不存在 → Docker image 起来后 `/cdn` static + pronunciation controller 全 404 | 同 R4-2 留 PR-D；Dockerfile **不** COPY 这两个目录（避免误传空目录）；sub-smoke F4 expect 404 |
+| **R4-4/5/6/7** | R4 P2 | 行号 190-198 → 184-196；β 调用方风险措辞改"实测 3 处皆不传参"；manifest_client_test.dart 显式 baseUrl 注入建议（PR-D 候选）；sub-smoke F 加 fixture + URL host 断言 | 4 处 P2 措辞 / 行号刷新 / 风险表精化 / sub-smoke F 拆细（与 R4-2/R4-3 合并修）|
+
+### 0.4 Nit / Doc 校对（5 处，原 R1+R2 nit）
 
 | # | 修订 |
 |---|---|
@@ -48,7 +59,7 @@ PR-C 边界：**release app 全链路可用**（manifest + api + audio + pronunc
 | R1#13 | `main.ts` 同步删 `const isProdEnv` 声明（删 `/cdn/staging` route 后唯一引用消失；TS strict unused-variable warning）|
 | (新) | scope §3.1 / §3.2 mobile 改动列表加 4 个 service + `api_base.dart` 新文件（S1=β）|
 
-### 0.4 决策点 S1：mobile API base URL 环境化（用户最终拍板 β）
+### 0.5 决策点 S1：mobile API base URL 环境化（用户最终拍板 β）
 
 **问题**：`http://10.0.2.2:3000` 在 mobile **4 个** service 硬编码：
 
@@ -73,19 +84,41 @@ PR-C 合并 PR-B5（release default-on）后，release 用户启动会跑 manife
 - release / profile build 必传 `--dart-define=API_BASE=https://api.<domain>/api/v1`
 - 不重构调用层 / 不做环境选择 UI / 不碰业务逻辑（仅 baseUrl 替换 + 2 个 service 加 named param）
 
-#### 0.4.1 PR-C 边界声明（β 后无需 caveat 软化）
+#### 0.5.1 PR-C 边界声明（β 切 baseUrl 但 audio 资产仍预存债务，R4-2 / R4-3 后修订）
 
-> **PR-C 兑现的是「release app 全链路可用」**：
-> - ✅ 启动自动从腾讯云 COS 拉 manifest 包，导入 drift
-> - ✅ 点播放例句音频走真域名（`ExampleAudioService`）
-> - ✅ 取题目 / 业务接口走真域名（`ApiClient`）
-> - ✅ 听单词发音走真域名（`PronunciationService`）
+> **PR-C 兑现的是「release mobile 端 4 service baseUrl 切到 production 真域名」+ COS 接入**。
 >
-> β 后 release 用户体验与 dev/emulator 一致，不留半生产态债务。
+> Release 用户在 PR-C/PR-B5 合并后**能**：
+> - ✅ 启动自动从腾讯云 COS 拉 manifest 包，导入 drift（`ManifestClient`）
+> - ✅ ApiClient 业务接口走真域名（取题目 / 设置 / 等）
+> - ✅ ExampleAudioService **metadata API 调用** 走真域名
+>   （`https://api.<domain>/api/v1/examples/<stable_id>/audio` 返 JSON 200）
+> - ✅ PronunciationService **API 调用** 走真域名
 >
-> **PR-D 不再需要做 baseUrl 重构**——本来 α 留下的 3 个 service 在 β 已一并处理。后续 PR-D 候选（如真做）改成 audio file 接 COS / multi-env build flavor / 其他。
+> Release 用户在 PR-C/PR-B5 合并后**仍然不能**（**R4 揭示的预存架构债务**）：
+> - ❌ 真**播放例句 mp3 字节**：`audio_assets.url` 是 `ingest-audio-assets.ts:90`
+>   写入的 `http://10.0.2.2:3000/cdn/audio/v1/...`（emulator host），release 用户
+>   拿到 metadata 后 GET 该 url → timeout。**需 PR-D 重 ingest 改 cdnOrigin
+>   到 production 域名 / 或 audio file 一并接 COS**。
+> - ❌ 真**听单词发音 wav 字节**：`pronunciation.controller.ts` 读
+>   `data/pronunciation/{locale}/{voice}/v1/{firstLetter}/{word}.wav`，
+>   该目录在 repo 内**不存在**（仅 dev 开发机），Docker image 起来后路径 404。
+>   **需 PR-D 把 pronunciation data 也 mount 进 container 或迁 COS**。
+> - ❌ `apps/api/cdn-mock/` 在 repo 仅 `.gitkeep` 占位；Docker image 起来后
+>   `/cdn` static route serve 不到任何 mp3 文件（即便 `audio_assets.url` 重 ingest
+>   到 production 域名也只是 redirect 到这个空目录）。**需 PR-D 把 audio file
+>   接 COS（最干净）或 mount cdn-mock 进 container**。
+>
+> **PR-D 范围（R4 之后明确）**：
+> 1. `partial_publish.py` / `ingest-audio-assets.ts` 改写 `audio_assets.url` 用 COS https URL（同 manifest pipeline 模式）
+> 2. audio mp3 文件 + pronunciation wav 文件迁 COS
+> 3. server controller 删 `/cdn` static route（不再需要本地 cdn-mock）
+> 4. PR-D 估时 ~2-3d
+>
+> **不要把 PR-C 包装成"audio mp3 真能播 / 发音真能听"。** 这一段必须出现在
+> README + PR_DESCRIPTION。
 
-#### 0.4.2 历经 α → β 决策路径
+#### 0.5.2 历经 α → β 决策路径
 
 1. **v0.1**: 未察觉 mobile 4 处 hardcode 是 PR-B5 release 触发会暴露的盲区
 2. **R1+R2 评审**: R2#1 P0 揭示问题，提议 β 全切
@@ -100,7 +133,7 @@ PR-C 合并 PR-B5（release default-on）后，release 用户启动会跑 manife
 - caveat 三处硬写虽然诚实但不如代码兑现一刀切干净
 - α 节省的 0.5d 不值得让 release 用户体验半生产态
 
-#### 0.4.3 放弃 α / γ 理由
+#### 0.5.3 放弃 α / γ 理由
 
 - **α（仅 ManifestClient）**: 用户体验半生产态——manifest sync 走真域名，audio/api 仍 `10.0.2.2` → release 用户启动后可见进度但点啥都 timeout；caveat 硬写也无法让用户预期（用户不读 PR description）
 - **γ（PR-C 不动 mobile，PR-B5 拆出等 PR-D）**: 让 PR-C 失去"用户可见 manifest sync 兑现"价值，退化纯 server cleanup PR；release default-on 又往后推一轮迭代
@@ -243,7 +276,10 @@ v0.1 估 2d + S1=β 1d = 3d。**PR-B3 估时 2.5d 实际 3d；PR-B4 估时 1d �
 | **release build 忘传 `--dart-define=API_BASE=...`** | `apiV1Base` fallback `http://10.0.2.2:3000/api/v1` → release 用户启动后 manifest + audio + api + pronunciation 全部 timeout（不是 silent failure；4 处一起撞而非 1 处）；sub-smoke A + F 必跑都会撞；README 强调 release build 命令 |
 | 移 kDebugMode guard 后 release 用户首次启动多 1 次 manifest API call | sync 是 fire-and-forget unawaited；不阻塞 UI；hasFailure 静默 |
 | β `ExampleAudioService` / `PronunciationService` `static const → final` 改动 | 仅签名改；既有 `XxxService()` 调用方零改动（named optional default fallback）；现有 service consumer 也不需要改 |
-| sub-smoke F 真机验 audio/api 真域名连通失败 | 阻塞 PR-C 提交；β 一刀切的代价就是 sub-smoke 必须验全链路；如真机失败回头看 nginx-proxy / acme-companion / DNS / dart-define 配置 |
+| sub-smoke F1 (ApiClient 业务接口) 真机验失败 | 阻塞 PR-C 提交；β baseUrl 切换 critical safeguard；如失败回头看 nginx-proxy / acme-companion / DNS / dart-define 配置 |
+| **R4-2 audio_assets.url 仍是 10.0.2.2 → mp3 播不出** | **预存架构债务**，留 PR-D（partial_publish.py / ingest-audio-assets.ts 改用 production cdnOrigin 重 ingest，或 audio file 一并接 COS）；sub-smoke F2 expect 见 emulator host，F3 expect timeout（与 plan 边界声明一致）|
+| **R4-3 Docker image 无 cdn-mock + data/pronunciation 资产** | **预存架构债务**，留 PR-D（资产迁 COS 或 Dockerfile COPY/mount）；sub-smoke F4 expect 404；当前 Dockerfile 不 COPY 这两个目录（避免误传空目录到 production） |
+| **DNS propagate 国内可能 > 10min（R4 P2-3）** | Phase 0 §0.1 加注 "国内 DNS 偶尔 30min+，等不及可手动 `dig +short api.<domain> @8.8.8.8` 查询是否已 propagate" |
 | 删除 server `/cdn/staging` route 后 dev 本地无 fallback | dev 本机 pipeline.py 也走 COS 真上传；如需纯离线 dev 可临时 git revert main.ts 改动 |
 | `.env` SecretId/SecretKey 误 commit | `.gitignore` 已忽略 `.env`；plan 强调用 `.env.example` 占位（不含真凭据）|
 | **`cmd_validate` Step 5 改写后 file:// 路径回归** | 加 1 unit test 覆盖 file:// 仍走原校验 + https 跳过校验；e2e 既有 cases 也覆盖 |
@@ -297,14 +333,17 @@ Merge feat/v0.3-pr-c-cos-and-prb5 — v0.3 PR-C COS + PR-B5 + S1=β (~3d)
 - [ ] PR-B5: release build settings 页能看到 SwitchListTile（移 kDebugMode 包裹）
 - [ ] PR-B5: settings_page `flutter/foundation` import 已删（unused_import 不报）
 
-### Sub-smoke A-F（真机）
+### Sub-smoke A-E + F1-F4（真机；R4-7 拆细）
 
 - [ ] **A**: release build (`flutter build apk --release --dart-define=...`) → 启动 → adb logcat 见 manifest sync log（PR-B5 验证）
 - [ ] **B**: release build settings 页能看到 SwitchListTile（kDebugMode 包裹已移）
 - [ ] **C**: release build flag=false 重启 → 无 sync log（用户 opt-out 仍生效）
 - [ ] **D**: dev build bundle v3 + manifest sync → 改 bundle v4 → 重启 → manifest 数据保留（D1 收口真机回归）
-- [ ] **E**: full E2E: dev API → COS https URL → DownloadManager → drift readback（curl + adb logcat + sqlite 验证）
-- [ ] **F (β 关键)**: release build → 点播放例句音频 + 取题目 + 听单词发音 → 全连 production 真域名（β 兑现"全链路可用"必跑）
+- [ ] **E**: full E2E: dev API → COS https URL → DownloadManager → drift readback
+- [ ] **F1 (β baseUrl 关键)**: release build 触发 ApiClient 业务接口 → adb logcat 见 `https://api.<domain>/api/v1/...` 200（**不是** 10.0.2.2）
+- [ ] **F2 (β baseUrl)**: release build 触发 ExampleAudioService metadata API → 200；**断言返回 JSON `url` 字段含 `10.0.2.2`**（验证 R4-2 预存债务真存在；这一步 expect 此 host）
+- [ ] **F3 (R4-2 known fail, expected)**: F2 拿到 metadata.url 后 GET mp3 → timeout（PR-D 修）
+- [ ] **F4 (R4-3 known fail, expected)**: 触发 PronunciationService → API 200 + wav 文件 GET 404（容器内 `data/pronunciation/` 不存在；PR-D 修）
 
 ### 文档 / PR
 
@@ -317,6 +356,7 @@ Merge feat/v0.3-pr-c-cos-and-prb5 — v0.3 PR-C COS + PR-B5 + S1=β (~3d)
 
 | 优先级 | 候选 | 触发 |
 |---|---|---|
+| **高** | **PR-D**: audio mp3 + pronunciation wav 接 COS 或 mount 进 container；`partial_publish.py` / `ingest-audio-assets.ts` 改用 production cdnOrigin 重 ingest `audio_assets.url`；server `/cdn` static route 删除 | **R4-2/R4-3 揭示的预存架构债务**——PR-C β 切了 mobile baseUrl 但 audio asset URL ingestion + Docker 资产挂载不在 PR-C 范围；sub-smoke F2/F3/F4 already expect to fail in PR-C；PR-D 估时 ~2-3d |
 | 中 | 观测性埋点（v0.4 §7.3）| 用户量起 / PR-B5 long-term 删 flag 触发条件 metrics |
 | 低 | 审批 Web UI（v0.4 §7.2）| 多人协作 |
 | 低 | 性能（v0.4 §7.4）| 流量起 |
