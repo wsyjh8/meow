@@ -755,6 +755,160 @@ Without the `--dart-define`, all 4 services fall back to `10.0.2.2` and
 release-build manifest/api/audio/pronunciation requests time out
 (visible in `adb logcat`, not silent failure).
 
+## v0.3 PR-D (Option A: audio + pronunciation 全 COS；闭合 PR-C R4-2/R4-3)
+
+PR-D 闭合 PR-C v0.3 §0.5.1 caveat 列出的 release **仍不能** 3 条：真播 mp3 字节 /
+真听 wav 字节 / `/cdn` static route 不存在。Option A 全 COS：
+
+- audio mp3 上 COS；`audio_assets.url` 重写指 COS public-read URL
+- pronunciation wav 上 COS；controller 改 302 redirect → COS
+- server `/cdn` static route 删除（不再依赖容器内文件）
+- mobile **0 改动**（D2=a；http package 默认 follow 302；audioplayers UrlSource
+  走 system http stack 也 follow）
+
+### 6 个 scope 决策
+
+| # | 决策 | 理由 |
+|---|---|---|
+| **D1** | 全 COS（audio + pronunciation 都迁）| release 流量不在 app server；架构一致；未来真接 CDN 边缘节点零成本 |
+| **D2** | pronunciation API = **302 redirect to COS URL**；mobile 0 改动 | mobile 不动 + API URL 形态保 + 未来切 CDN 改 redirect target 即可 |
+| **D3** | COS 路径 layout 沿用现有 fs layout | audio: `audio/v1/{kind}s/{locale}/{voice}/{audio_version}/{shard}/{audio_id}.mp3`；pronunciation: `pronunciation/{locale}/{voice}/v1/{firstLetter}/{word}.wav` |
+| **D4** | 一次性 bootstrap = 新 ts 工具同步 dev fs → COS；不动 `partial_publish.py` | partial_publish 仍写 `local://cdn/...` placeholder + 写 cdn-mock dir（dev 仍 work） |
+| **D5** | server `/cdn` static route **删除** | Option A 不再需要 server-side 静态文件 |
+| **D6** | release 端 SwitchListTile 文案 / kDebugMode 不动 | PR-C/PR-B5 已处理 |
+
+### 一次性 bootstrap（用户操作 ~1-1.5 hr）
+
+1) **同步 dev fs → COS**（在 dev 机本地跑）：
+
+   ```bash
+   cd apps/api
+
+   # audio mp3（path layout：--src 已包含 audio/v1，--prefix audio/v1 单层不重复）
+   npx ts-node scripts/sync-audio-mp3-to-cos.ts \
+     --src cdn-mock/audio/v1 \
+     --prefix audio/v1 \
+     --commit
+
+   # pronunciation wav
+   npx ts-node scripts/sync-pronunciation-to-cos.ts \
+     --src data/pronunciation \
+     --prefix pronunciation \
+     --commit
+   ```
+
+   两个工具都是 idempotent：HEAD ETag 检查 → skip 同 md5 文件；中断重跑安全。
+   流式上传（`createReadStream` + `ContentLength`），不受单文件大小约束。
+   **dry-run 模式默认**；加 `--commit` 才真上传。
+
+   **prerequisite**：`apps/api/data/pronunciation/` 在 dev 机存在。如不存在
+   （PR-C R4-3 已揭示）：(a) 从备份恢复；(b) 跑 pronunciation pipeline 重新
+   生成；(c) 跳过本步 → F4 暂仍 expected fail。
+
+2) **重写 PG `audio_assets.url`**（一次性）：
+
+   ```bash
+   # Dry-run 先看 sample 3 行 before/after
+   npx ts-node scripts/repipe-audio-urls.ts \
+     --from 'http://10.0.2.2:3000/cdn' \
+     --to   'https://<bucket>.cos.<region>.myqcloud.com'
+
+   # commit
+   npx ts-node scripts/repipe-audio-urls.ts \
+     --from 'http://10.0.2.2:3000/cdn' \
+     --to   'https://<bucket>.cos.<region>.myqcloud.com' \
+     --commit
+   ```
+
+   单事务；dry-run 自动 ROLLBACK；`--commit` 显式才 COMMIT。LIKE 前缀精确匹配；
+   二次跑 0 行匹配（幂等）。
+
+3) **部署新 NestJS image**（含 pronunciation 302 redirect + 删 `/cdn` route）：
+
+   ```bash
+   cd apps/api
+   docker build -t meow-api:latest .
+   ssh user@server 'cd /path/to/compose && docker compose up -d --force-recreate api'
+   ```
+
+4) **验证**：
+
+   ```bash
+   # COS 直读
+   curl -I '<COS_PUBLIC_URL_BASE>/audio/v1/examples/.../<audio_id>.mp3'
+   curl -I '<COS_PUBLIC_URL_BASE>/pronunciation/en-US/am_michael/v1/a/abandon.wav'
+
+   # server pronunciation API → 302 + Location
+   curl -I 'https://api.<your-domain>/api/v1/pronunciation/abandon?locale=en-US&voice=am_michael'
+   # 期望: HTTP/2 302 + location: <COS URL>
+
+   # follow redirect → COS wav
+   curl -L 'https://api.<your-domain>/api/v1/pronunciation/abandon' -o /tmp/abandon.wav
+   ```
+
+### server-side env（PR-D 必填）
+
+`apps/api/.env`：
+
+```
+AUDIO_CDN_ORIGIN=https://<bucket>.cos.<region>.myqcloud.com
+PRONUNCIATION_CDN_ORIGIN=https://<bucket>.cos.<region>.myqcloud.com
+```
+
+- `AUDIO_CDN_ORIGIN`：`scripts/ingest-audio-assets.ts` 必读（fail-fast；缺失
+  exit 2）。R4 P1#2 R2：`/cdn` route 已删，老 `10.0.2.2:3000` fallback 移除，
+  避免写出 forever-404 URL 进 PG。
+- `PRONUNCIATION_CDN_ORIGIN`：NestJS `pronunciation.controller.ts` 必读；缺失
+  抛 `InternalServerErrorException`（500，**不是** 404 — R4 P1-3）。
+- 单 bucket 时两者同值；split 出来留给 multi-bucket 弹性。
+
+`apps/api/scripts/content_pipeline/.env`（PR-C 已建；PR-D sync 工具复用）：
+`COS_REGION` / `COS_BUCKET` / `COS_SECRET_ID` / `COS_SECRET_KEY` /
+`COS_PUBLIC_URL_BASE`。
+
+### pronunciation API 形态变化（D2=a）
+
+PR-A：
+
+```
+GET /api/v1/pronunciation/abandon
+  → 200 + audio/wav stream (server reads data/pronunciation/.../*.wav)
+```
+
+PR-D：
+
+```
+GET /api/v1/pronunciation/abandon
+  → 302 Found
+    Location: https://<bucket>.cos...../pronunciation/en-US/am_michael/v1/a/abandon.wav
+client follow → COS 200 + audio/wav
+```
+
+mobile `http` package 默认 maxRedirects=5 → follow 透明；`PronunciationService` 0 改动。
+
+### 后续 ingest 流程（新 mp3 加入）
+
+1. dev 机 `partial_publish.py` 跑 → `cdn-mock/` 写 mp3 + `audio_assets.jsonl` 写
+   `local://cdn/...` placeholder
+2. dev 机 `sync-audio-mp3-to-cos.ts` 跑 → 增量上传新 mp3 到 COS（HEAD ETag skip）
+3. `ingest-audio-assets.ts` 跑（dev 或 server）→ `cdnOrigin` 从 `AUDIO_CDN_ORIGIN`
+   env 读 → INSERT/UPDATE PG `audio_assets.url` 指 COS
+
+`partial_publish.py` 不动（仍写 `local://cdn/...` placeholder + cdn-mock dir
+供 dev 本地 + sync 工具的 src）。
+
+### sub-smoke A-F1-F4 真机（PR-D 后）
+
+承袭 PR-C sub-smoke 命令；F2/F3/F4 从 expected-fail 翻 PASS：
+
+| # | 场景 | 期望 |
+|---|---|---|
+| A-E | 同 PR-C | 全 PASS（regression） |
+| **F1** (β baseUrl) | release ApiClient | 200 + `https://api.<domain>/api/v1/...` |
+| **F2** (PR-D 关键) | release ExampleAudioService metadata API | 200 + `url` 字段含 `.cos.` 而**不**含 `10.0.2.2` |
+| **F3** (PR-D 关键) | F2 metadata.url GET → mp3 字节 | **200** + audio/mpeg（PR-C 时 timeout，现在 PASS）|
+| **F4** (PR-D 关键) | release PronunciationService → wav | 第一跳 302 + Location → 第二跳 COS 200 + audio/wav（PR-C 时 404，现在 PASS）|
+
 ## Reference
 
 - `docs/design/词书单词例句与例句音频架构_v0.3.md` §B.4 / §B.7 / §B.10

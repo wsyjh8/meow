@@ -1815,4 +1815,94 @@ describeIfPg('PG Backend Regression (e2e)', () => {
       expect(log[1].reason).toBe('approved by editor-B: second');
     });
   });
+
+  // ========== PR-D: pronunciation 302 redirect ==========
+  //
+  // PR-D Option A migrates pronunciation wav files from local fs (PR-A
+  // StreamableFile) to Tencent COS public-read URLs. Controller is a thin
+  // redirect; mobile http package follows automatically (D2=a, mobile 0
+  // changes).
+  //
+  // R4 P1-1: env isolation — beforeEach saves PRONUNCIATION_CDN_ORIGIN, afterEach
+  // restores it. Without restore, the third case (delete env) would leak into
+  // any subsequent describe block that exercises the pronunciation controller.
+
+  describe('GET /api/v1/pronunciation/:word — PR-D 302 redirect', () => {
+    let savedEnv: string | undefined;
+
+    beforeEach(() => {
+      savedEnv = process.env.PRONUNCIATION_CDN_ORIGIN;
+    });
+
+    afterEach(() => {
+      if (savedEnv === undefined) {
+        delete process.env.PRONUNCIATION_CDN_ORIGIN;
+      } else {
+        process.env.PRONUNCIATION_CDN_ORIGIN = savedEnv;
+      }
+    });
+
+    it('returns 302 with Location pointing at PRONUNCIATION_CDN_ORIGIN', async () => {
+      process.env.PRONUNCIATION_CDN_ORIGIN = 'https://test-bucket.cos.example.com';
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/pronunciation/abandon')
+        .expect(302);
+
+      expect(res.headers.location).toBe(
+        'https://test-bucket.cos.example.com/pronunciation/en-US/am_michael/v1/a/abandon.wav',
+      );
+    });
+
+    it('strips trailing slash on PRONUNCIATION_CDN_ORIGIN to avoid double-slash', async () => {
+      process.env.PRONUNCIATION_CDN_ORIGIN = 'https://test-bucket.cos.example.com/';
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/pronunciation/abandon')
+        .expect(302);
+
+      expect(res.headers.location).toBe(
+        'https://test-bucket.cos.example.com/pronunciation/en-US/am_michael/v1/a/abandon.wav',
+      );
+    });
+
+    it('honors locale + voice query params in redirect URL', async () => {
+      process.env.PRONUNCIATION_CDN_ORIGIN = 'https://test-bucket.cos.example.com';
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/pronunciation/abandon?locale=en-GB&voice=bf_emma')
+        .expect(302);
+
+      expect(res.headers.location).toBe(
+        'https://test-bucket.cos.example.com/pronunciation/en-GB/bf_emma/v1/a/abandon.wav',
+      );
+    });
+
+    it('returns 400 on invalid word format (path traversal protection)', async () => {
+      process.env.PRONUNCIATION_CDN_ORIGIN = 'https://test-bucket.cos.example.com';
+
+      await request(app.getHttpServer())
+        .get('/api/v1/pronunciation/INVALID%20word')
+        .expect(400);
+    });
+
+    it('returns 400 on invalid locale format', async () => {
+      process.env.PRONUNCIATION_CDN_ORIGIN = 'https://test-bucket.cos.example.com';
+
+      await request(app.getHttpServer())
+        .get('/api/v1/pronunciation/abandon?locale=../etc')
+        .expect(400);
+    });
+
+    it('returns 500 if PRONUNCIATION_CDN_ORIGIN missing (server config error)', async () => {
+      // R4 P1-3: server config error → InternalServerErrorException (500),
+      // NOT NotFoundException (404). 404 would mislead clients into thinking
+      // the word is missing from the corpus.
+      delete process.env.PRONUNCIATION_CDN_ORIGIN;
+
+      await request(app.getHttpServer())
+        .get('/api/v1/pronunciation/abandon')
+        .expect(500);
+    });
+  });
 });

@@ -1,76 +1,78 @@
 import {
   Controller,
   Get,
-  Header,
-  NotFoundException,
   BadRequestException,
+  InternalServerErrorException,
   Param,
   Query,
-  StreamableFile,
+  Res,
 } from '@nestjs/common';
-import * as fs from 'fs';
-import * as path from 'path';
+import type { Response } from 'express';
 
 /**
- * Pronunciation controller — stream WAV audio for a given word.
+ * Pronunciation controller — 302 redirect to Tencent COS public-read URL.
  *
  * GET /api/v1/pronunciation/:word?locale=en-US&voice=am_michael
  *
- * Audio files live at:
- *   data/pronunciation/{locale}/{voice}/v1/{firstLetter}/{word}.wav
+ * PR-D Option A: WAV files now live on COS at:
+ *   {PRONUNCIATION_CDN_ORIGIN}/pronunciation/{locale}/{voice}/v1/{firstLetter}/{word}.wav
  *
- * Default voice: American male (en-US / am_michael).
- * Returns 404 if the audio file does not exist for the requested word/locale/voice.
+ * The server returns 302 with `Location: <COS URL>`; mobile `http` package
+ * follows redirects automatically (default maxRedirects=5), so client code
+ * is unchanged.
+ *
+ * Validation (preserved from PR-A; defense-in-depth against path traversal
+ * in COS keys):
+ *   - word:   /^[a-z][a-z0-9'\-]{0,59}$/
+ *   - locale: /^[A-Za-z\-]{1,16}$/
+ *   - voice:  /^[a-z_]{1,32}$/
+ *
+ * Errors:
+ *   - 400 BadRequest      → invalid word/locale/voice format
+ *   - 500 InternalError   → server config missing PRONUNCIATION_CDN_ORIGIN
+ *                            (NOT 404 — that would mislead clients into
+ *                             thinking the word is missing from corpus)
+ *   - 404 from COS GET    → wav genuinely missing (after client follows redirect)
  */
 @Controller('pronunciation')
 export class PronunciationController {
-  // In ts-node dev:   __dirname = src/controllers/  → up 2 → project root
-  // In compiled dist: __dirname = dist/controllers/ → up 2 → project root
-  private readonly dataDir = path.resolve(
-    __dirname,
-    '..',
-    '..',
-    'data',
-    'pronunciation',
-  );
-
   @Get(':word')
-  @Header('Cache-Control', 'public, max-age=86400')
   getAudio(
     @Param('word') word: string,
     @Query('locale') locale = 'en-US',
     @Query('voice') voice = 'am_michael',
-  ): StreamableFile {
+    @Res() res: Response,
+  ): void {
     const normalized = word.toLowerCase().trim();
 
     // Sanitize: only allow characters that appear in English words.
-    // Prevents path traversal (no slashes, dots, etc.).
-    if (!/^[a-z][a-z0-9''\-]{0,59}$/.test(normalized)) {
+    // Prevents path traversal (no slashes, dots, etc.) — same regex as PR-A.
+    if (!/^[a-z][a-z0-9'\-]{0,59}$/.test(normalized)) {
       throw new BadRequestException('Invalid word');
     }
 
-    const audioPath = path.join(
-      this.dataDir,
-      locale,
-      voice,
-      'v1',
-      normalized[0],
-      `${normalized}.wav`,
-    );
+    // Validate locale / voice. These are user-supplied query params; even
+    // though they're substituted into a COS URL (not a filesystem path),
+    // strict allowlists prevent surprises (path traversal, header injection).
+    if (!/^[A-Za-z\-]{1,16}$/.test(locale)) {
+      throw new BadRequestException('Invalid locale');
+    }
+    if (!/^[a-z_]{1,32}$/.test(voice)) {
+      throw new BadRequestException('Invalid voice');
+    }
 
-    if (!fs.existsSync(audioPath)) {
-      throw new NotFoundException({
-        error: 'Pronunciation not found',
-        word: normalized,
+    const cdnOrigin = process.env.PRONUNCIATION_CDN_ORIGIN;
+    if (!cdnOrigin) {
+      // R4 P1-3: server config error → 500 (NOT 404). 404 would mislead
+      // clients into thinking the requested word is missing from the corpus.
+      throw new InternalServerErrorException({
+        error: 'PRONUNCIATION_CDN_ORIGIN not configured on server',
       });
     }
 
-    // Include Content-Length so Android's MediaPlayer can properly size its buffer.
-    // Without it, the chunked transfer response causes MEDIA_ERROR_SYSTEM on Android.
-    const { size } = fs.statSync(audioPath);
-    return new StreamableFile(fs.createReadStream(audioPath), {
-      type: 'audio/wav',
-      length: size,
-    });
+    // Strip any trailing slash on the env value so we don't double-slash.
+    const origin = cdnOrigin.replace(/\/+$/, '');
+    const cosUrl = `${origin}/pronunciation/${locale}/${voice}/v1/${normalized[0]}/${normalized}.wav`;
+    res.redirect(302, cosUrl);
   }
 }
