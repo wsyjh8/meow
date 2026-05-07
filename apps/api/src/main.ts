@@ -12,35 +12,19 @@ async function bootstrap() {
   // Global prefix for API versioning (does NOT affect static assets below)
   app.setGlobalPrefix('api/v1');
 
-  // PR-B3 Day 1 (D3) — staging serve route. Two key constraints:
-  //   1. (R1#1) MUST be registered BEFORE the /cdn cdn-mock route below.
-  //      NestJS/express useStaticAssets matches by registration order +
-  //      next() fallthrough — NOT by prefix length. If cdn-mock came first,
-  //      a request for /cdn/staging/foo would enter the /cdn middleware
-  //      first (looking up cdn-mock/staging/foo) and only fall through to
-  //      this route via next() — risky if cdn-mock ever has a staging/
-  //      subdir, which would shadow real staging files.
-  //   2. (R2#1) Dev/local mode only. In production we still skip file://
-  //      rows in the manifest API, but the static route would expose the
-  //      deploy directory. Guard with `if (!isProdEnv)`.
-  //
-  // Cache-Control 'no-cache' because staging files change during develop;
-  // a real CDN (future) sets long-lived cache headers itself.
-  const isProdEnv = process.env.NODE_ENV === 'production';
-  if (!isProdEnv) {
-    app.useStaticAssets(join(__dirname, '..', 'audio-pipeline-staging'), {
-      prefix: '/cdn/staging',
-      setHeaders: (res) => {
-        res.setHeader('Cache-Control', 'no-cache');
-      },
-    });
-  }
+  // PR-C: PR-B3 Day 1 staging serve route + isProdEnv guard removed.
+  // pipeline.py uploads packages to Tencent COS and writes the public https
+  // URL to content_manifest.file_url, so the dev-mode file:// → http://host/
+  // cdn/staging fallback is no longer needed. /cdn cdn-mock route below
+  // remains for legacy mp3 audio assets (留 PR-D 接 COS).
 
   // Mock CDN — serve published audio assets from apps/api/cdn-mock/ at /cdn/*
   // Codex pipeline writes mp3 files under cdn-mock/audio/v1/{kind}s/{locale}/{voice}/{audio_version}/{shard}/{audio_id}.mp3
   // App fetches via http://10.0.2.2:3000/cdn/audio/v1/...
-  // When real CDN comes online, just stop serving this prefix and update audio_assets.url.
-  // NOTE: Registered AFTER /cdn/staging above — see PR-B3 Day 1 comment.
+  // PR-D candidate: replace this static route with COS public-read URLs in
+  // audio_assets.url (R4-3: cdn-mock/ in repo is just a .gitkeep placeholder;
+  // production deployment relies on this dir being present, which currently
+  // requires a docker volume mount or out-of-band sync).
   app.useStaticAssets(join(__dirname, '..', 'cdn-mock'), {
     prefix: '/cdn',
     setHeaders: (res) => {

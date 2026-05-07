@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import mimetypes
 import os
 import sys
 from pathlib import Path
@@ -43,6 +44,19 @@ import psycopg2
 import psycopg2.extras
 
 HERE = Path(__file__).resolve().parent
+
+# PR-C R3 P1 + R4-1: explicit .env load relative to this script (not cwd) so
+# pipeline can be invoked from any directory. Without this, _connect_or_die()
+# reads os.environ which silently misses .env contents.
+try:
+    from dotenv import load_dotenv  # noqa: E402
+    load_dotenv(HERE / ".env")
+except ImportError:
+    # python-dotenv not installed yet — graceful fallback for users who haven't
+    # run `pip install -r requirements.txt` after upgrading. shell-export still
+    # works.
+    pass
+
 # Allow `from build_examples_package import run` (sibling module in same dir)
 sys.path.insert(0, str(HERE))
 
@@ -57,6 +71,102 @@ from content_release_repo import (  # noqa: E402
     rollback_release,
     transition_status,
 )
+
+
+# =============================================================================
+# PR-C: Tencent COS upload helpers (boto3 with COS S3-compatible endpoint).
+#
+# Future swap to AWS S3 / Cloudflare R2: change endpoint_url + region only;
+# put_object / list_objects / etc API is unchanged.
+# =============================================================================
+
+
+def _cos_client():
+    """Build a fresh boto3 S3 client pointed at Tencent COS endpoint.
+
+    R1#5: NOT a singleton. boto3 client creation is ms-level; rebuilding each
+    call lets tests inject env override + avoids stale client after key rotate.
+
+    Returns: (client, bucket_name)
+    """
+    region = os.environ.get("COS_REGION", "ap-shanghai")
+    bucket = os.environ.get("COS_BUCKET")
+    secret_id = os.environ.get("COS_SECRET_ID")
+    secret_key = os.environ.get("COS_SECRET_KEY")
+    if not all([bucket, secret_id, secret_key]):
+        raise ReleaseError(
+            "COS_BUCKET / COS_SECRET_ID / COS_SECRET_KEY missing from env; "
+            "see apps/api/scripts/content_pipeline/.env.example"
+        )
+
+    # Lazy import: not all cmd_* need boto3 (e.g. create-release, list, gc).
+    import boto3
+    from botocore.config import Config as BotoConfig
+
+    endpoint = f"https://cos.{region}.myqcloud.com"
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        region_name=region,
+        aws_access_key_id=secret_id,
+        aws_secret_access_key=secret_key,
+        config=BotoConfig(
+            signature_version="s3v4",
+            retries={"max_attempts": 3, "mode": "standard"},
+        ),
+    )
+    return (client, bucket)
+
+
+def _expected_cos_url(cos_key: str) -> str:
+    """Derive the public https URL for a COS key without uploading.
+
+    R1#3: used for idempotent check BEFORE _upload_to_cos so re-runs of the
+    same manifest with the same content cost zero network IO.
+    """
+    public_base = os.environ.get("COS_PUBLIC_URL_BASE")
+    if not public_base:
+        raise ReleaseError(
+            "COS_PUBLIC_URL_BASE missing from env; expected form: "
+            "https://<bucket>.cos.<region>.myqcloud.com"
+        )
+    return f"{public_base}/{cos_key}"
+
+
+def _upload_to_cos(local_path: Path, key: str) -> str:
+    """Upload local file to COS at given key. Returns the public https URL.
+
+    R1#7: try/except friendly error + ContentLength byte verification.
+    R1#11: ContentType via mimetypes.guess_type (handles future .br/.tar.gz/etc).
+    """
+    client, bucket = _cos_client()
+    expected_url = _expected_cos_url(key)  # validates COS_PUBLIC_URL_BASE early
+
+    size = local_path.stat().st_size
+    content_type = (
+        mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
+    )
+    # Lazy import (matched _cos_client lazy boto3 import)
+    import botocore.exceptions
+
+    try:
+        with open(local_path, "rb") as f:
+            client.put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=f,
+                ContentLength=size,
+                ContentType=content_type,
+                # Long-lived: URL key contains content_version so a content
+                # change → different key → cache miss naturally.
+                CacheControl="public, max-age=31536000, immutable",
+                ACL="public-read",
+            )
+    except botocore.exceptions.ClientError as e:
+        raise ReleaseError(
+            f"COS upload failed (bucket={bucket} key={key!r}): {e}"
+        ) from e
+    return expected_url
 
 
 # =============================================================================
@@ -139,12 +249,14 @@ def cmd_create_release(args: argparse.Namespace) -> int:
 def cmd_publish_manifest(args: argparse.Namespace) -> int:
     """Register a built package into content_manifest + release.package_set.
 
-    Constraints (v0.2 评审采纳):
+    Constraints (v0.2 评审采纳 + PR-C):
       - release.status MUST equal 'draft' (R1.2/R2.1; validated 是冻结态)
       - package_name MUST match naming convention (R1.5)
       - Same manifest_id with different content → error (R1.7/R2.4)
-      - Same manifest_id with same content → idempotent no-op
-      - file_url 固定 file:// scheme (R1.4/R2.5; --cdn-prefix 已删)
+      - Same manifest_id with same content → idempotent no-op (PR-C: zero
+        network IO; conflict check happens BEFORE COS upload)
+      - PR-C: file_url is the public Tencent COS URL (https://...). Idempotent
+        re-runs skip the COS upload entirely.
     """
     conn = _connect_or_die()
     if conn is None:
@@ -160,9 +272,17 @@ def cmd_publish_manifest(args: argparse.Namespace) -> int:
             raise ReleaseError(f"file not found: {file_path}")
         sha = file_sha256(file_path)
         size = file_path.stat().st_size
-        # Use POSIX path with file:// scheme for cross-platform consistency
-        file_url = f"file:///{file_path.as_posix().lstrip('/')}"
         manifest_id = f"{args.package_name}@{args.content_version}"
+
+        # PR-C R1#3 / R2#2: derive expected_url WITHOUT uploading. Used to
+        # detect idempotent re-runs and conflict-with-different-content
+        # before any network IO.
+        # R1#6: full ".".join(suffixes) handles .jsonl.gz / .br / future
+        # formats uniformly (vs v0.1 ".suffix + fallback if .gz" which only
+        # caught .jsonl.gz).
+        suffixes = "".join(file_path.suffixes)  # '.jsonl.gz' / '.br' / etc
+        cos_key = f"v1/{manifest_id}{suffixes}"
+        expected_url = _expected_cos_url(cos_key)
 
         with conn:  # auto BEGIN; commit on success; rollback on exception
             with conn.cursor() as cur:
@@ -180,7 +300,11 @@ def cmd_publish_manifest(args: argparse.Namespace) -> int:
                         f"got {row[0]!r}"
                     )
 
-                # 2. Conflict handling
+                # 2. Conflict / idempotent check — PR-C R1#3 / R2#2: BEFORE
+                # COS upload, so duplicate publish-manifest exits with zero
+                # network IO. v0.1 uploaded first then checked PG which
+                # would (a) waste a put_object and (b) overwrite the COS
+                # object even on conflict-with-different-content.
                 cur.execute(
                     """SELECT checksum_sha256, size_bytes, file_url, release_id
                        FROM content_manifest WHERE id=%s""",
@@ -188,20 +312,33 @@ def cmd_publish_manifest(args: argparse.Namespace) -> int:
                 )
                 existing = cur.fetchone()
                 if existing:
-                    if existing == (sha, size, file_url, args.release):
+                    if existing == (sha, size, expected_url, args.release):
                         print(
                             f"  manifest {manifest_id} already registered "
-                            f"(idempotent, no change)"
+                            f"(idempotent, no change — skipped COS upload)"
                         )
                         return 0
                     raise ReleaseError(
                         f"manifest {manifest_id} exists with different metadata "
                         f"(existing checksum/size/url/release={existing}, "
-                        f"new=({sha},{size},{file_url},{args.release})); "
+                        f"new=({sha},{size},{expected_url},{args.release})); "
                         f"use a new content_version instead of overwriting"
                     )
 
-                # 3. INSERT manifest (is_active=false until activate)
+                # 3. NEW INSERT path — only now do we touch the network.
+                # COS put_object is idempotent at COS level too (same key +
+                # same body → same ETag) but here we know it's genuinely
+                # new because the PG row didn't exist.
+                print(f"  uploading to COS: key={cos_key} size={size:,}")
+                actual_url = _upload_to_cos(file_path, cos_key)
+                # Sanity: _upload_to_cos derives the same expected URL
+                assert actual_url == expected_url, (
+                    f"COS URL mismatch (this is a bug): "
+                    f"expected={expected_url} actual={actual_url}"
+                )
+                file_url = actual_url
+
+                # 4. INSERT manifest (is_active=false until activate)
                 cur.execute(
                     """INSERT INTO content_manifest
                        (id, package_name, package_kind, content_version, file_url,
@@ -221,7 +358,7 @@ def cmd_publish_manifest(args: argparse.Namespace) -> int:
                     ),
                 )
 
-                # 4. Append to package_set (idempotent dedupe)
+                # 5. Append to package_set (idempotent dedupe)
                 cur.execute(
                     """UPDATE content_release
                           SET package_set = package_set || to_jsonb(%s::text)
@@ -312,10 +449,20 @@ def cmd_validate(args: argparse.Namespace) -> int:
         # Step 5-8: file_url scheme + file existence + checksum + size
         for mid, m in manifests_by_id.items():
             url: str = m["file_url"]
+            # PR-C R1#1 / R2#3 / R3 P2 review-adopted: accept https URLs from
+            # real CDN (Tencent COS). Skip local file existence/checksum/size
+            # checks — mobile DownloadManager validates checksum on download
+            # (PR-B2 sha256). Server-side HEAD verification 留 v0.4 §7.4
+            # 性能候选.
+            #
+            # R3 P2: ONLY https (NOT http://); production must be HTTPS;
+            # plain http is a security regression.
+            if url.startswith("https://"):
+                continue
             if not url.startswith("file://"):
                 raise ReleaseError(
-                    f"manifest {mid} file_url scheme must be file://, got {url!r}; "
-                    f"remote URL validation is PR-B / Day 5+, not Day 3"
+                    f"manifest {mid} file_url scheme must be file:// or https://, "
+                    f"got {url!r}"
                 )
             # Strip 'file:///' prefix → posix path
             local_path_str = url[len("file:///") :] if url.startswith("file:///") else url[len("file://") :]
@@ -945,9 +1092,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Staging dir for content_manifest URLs (default audio-pipeline-staging)",
     )
     p_orphan.add_argument(
-        "--scope", default="all",
+        "--scope", default="audio",
         choices=["audio", "packages", "all"],
-        help="Limit scan target (default 'all')",
+        # PR-C R1#4: default changed from 'all' to 'audio' (cdn-mock only).
+        # PR-C 后 audio-pipeline-staging 是 build 中间产物 — packages 都已
+        # 上传到 COS，PG manifest.file_url 不再引用 staging dir → 全部会被
+        # 识别为 orphan 误删。要扫 staging 中间产物显式 --scope packages
+        # 或 --scope all (恢复 PR-B1 旧行为).
+        help=(
+            "Limit scan target (default 'audio': cdn-mock only). "
+            "Use 'packages' to scan audio-pipeline-staging staging dir, "
+            "or 'all' for both (PR-B1 default behavior pre-PR-C)."
+        ),
     )
     p_orphan.set_defaults(func=cmd_orphan_scan)
 

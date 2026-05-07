@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:http/http.dart' as http;
 
+import '../config/api_base.dart';
 import 'audio_cache_repository.dart';
 
 /// 例句发音服务（v0.3.0 P2.1）。
@@ -24,15 +25,19 @@ import 'audio_cache_repository.dart';
 /// 失败处理（DB §11）：CDN miss / 下载失败 → 抛 [AudioFetchException]
 /// 给调用方（UI 灰按钮）。**不调用系统 TTS 兜底**。
 class ExampleAudioService {
-  ExampleAudioService({AudioCacheRepository? cache})
-      : _cache = cache ?? AudioCacheRepository();
+  /// PR-C S1=β: `baseUrl` defaults to [apiV1Base] resolved by
+  /// `--dart-define=API_BASE=...`. dev/test/`flutter run` falls back to
+  /// `http://10.0.2.2:3000/api/v1` (与 PR-A 起的 hardcode 行为一致).
+  ExampleAudioService({AudioCacheRepository? cache, String? baseUrl})
+      : _cache = cache ?? AudioCacheRepository(),
+        _baseUrl = baseUrl ?? apiV1Base;
 
   final AudioCacheRepository _cache;
   final AudioPlayer _player = AudioPlayer();
 
-  /// 模拟器内通过 10.0.2.2 访问宿主机上的 API（端口 3000）。
-  /// 真机调试时改为局域网 IP。
-  static const String _baseUrl = 'http://10.0.2.2:3000/api/v1';
+  /// API base URL. PR-C S1=β: was `static const`, now instance `final` to
+  /// support per-instance override via constructor (test injection).
+  final String _baseUrl;
 
   /// 当前默认 voice（MVP 阶段写死，P2.2 后可换成用户偏好）。
   static const String _defaultVoice = 'af_bella';

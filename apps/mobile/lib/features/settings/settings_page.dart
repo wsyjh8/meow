@@ -1,4 +1,7 @@
-import 'package:flutter/foundation.dart';
+// PR-C/PR-B5: removed `import 'package:flutter/foundation.dart'` (was for
+// kDebugMode wrapping the manifest sync SwitchListTile). PR-C unwraps the
+// switch so release users see it too; foundation import is no longer used
+// (R2#6 review-adopted).
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -254,22 +257,18 @@ class _SettingsPageState extends State<SettingsPage> {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _runEnrichmentImport(context),
           ),
-          // PR-B3 Day 3 v0.2: manifest sync debug switch (kDebugMode-only).
-          // Existing debug ListTiles ("复习历史" / "重新导入增强数据") keep
-          // their pre-PR-B3 release visibility; only this new switch is
-          // hidden in release builds. Recon confirmed _buildDebugSection's
-          // call site (line 188) has no outer kDebugMode guard, so this
-          // local guard is not redundant (v0.2 #10 R1#8 review-adopted).
-          if (kDebugMode)
-            SwitchListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              secondary: const Icon(Icons.cloud_sync_outlined),
-              title: const Text('Manifest sync (PR-B3 dev)'),
-              subtitle: const Text('开/关后下次重启 App 生效。失败静默。'),
-              value: _manifestSyncEnabled,
-              onChanged: _setManifestSyncFlag,
-            ),
+          // PR-B3 Day 3 → PR-C/PR-B5: 原 kDebugMode-only 限制移除.
+          // 真 CDN URL 已落地, S1=β 4 service 走 apiV1Base; release 用户
+          // 也看得到 + 可关. Title 改面向用户.
+          SwitchListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            secondary: const Icon(Icons.cloud_sync_outlined),
+            title: const Text('内容自动更新'),
+            subtitle: const Text('开/关后下次重启 App 生效。失败静默。'),
+            value: _manifestSyncEnabled,
+            onChanged: _setManifestSyncFlag,
+          ),
         ],
       ),
     );

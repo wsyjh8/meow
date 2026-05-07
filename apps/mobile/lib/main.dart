@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+// PR-C/PR-B5: removed `import 'package:flutter/foundation.dart'` — was for
+// kDebugMode in the Layer 1 guard which is now removed. debugPrint is
+// re-exported by flutter/material.dart.
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -22,25 +24,26 @@ import 'core/storage/local_settings_service.dart';
 typedef ContentPackageServiceFactory = ContentPackageService Function(
     Directory cacheDir, AppDatabase db);
 
-/// PR-B3 Day 3 v0.2: manifest sync 启动异步 hook (test-friendly top-level
-/// helper). Three-layer guard, any failure returns silently:
+/// PR-B3 Day 3 v0.2 / PR-C v0.3 PR-B5 merged: manifest sync 启动异步 hook.
+/// Two-layer guard, any failure returns silently:
 ///
-///   Layer 1 (kDebugMode, v0.2 #2 R2#P1 #1 review-adopted)
-///     release/profile build dead-code-eliminate; defends against the
-///     case where a debug build sets the SharedPreferences flag to true
-///     and the user later installs a same-package release/profile build —
-///     without this guard the stored flag would still trigger sync,
-///     violating the "debug-only / release behavior unchanged" boundary.
+///   Layer 1 (LocalSettingsService.manifestSyncEnabled; was Layer 2 before
+///            PR-C/PR-B5 removed the kDebugMode Layer 1)
+///     PR-B4: default true since real CDN (Tencent COS) + S1=β mobile
+///     baseUrl env-aware via dart-define. Users can opt out via the
+///     settings page switch.
 ///
-///   Layer 2 (LocalSettingsService.manifestSyncEnabled, default false)
-///     PR-B3 feature flag. Until the user opts in via the debug settings
-///     page, this is false → return.
-///
-///   Layer 3 (ContentPackageService.syncIfNeeded, fire-and-forget)
+///   Layer 2 (ContentPackageService.syncIfNeeded, fire-and-forget; was
+///            Layer 3 before PR-C/PR-B5)
 ///     `appVersion: PackageInfo.fromPlatform().version` is the real
-///     pubspec version (v0.2 #3 R2#P1 #2: server's min_app_version
-///     filter actually engages, vs v0.1's appVersion=null which silently
-///     bypassed it).
+///     pubspec version so server's `min_app_version` filter engages.
+///
+/// PR-C/PR-B5 removed the original Layer 1 `if (!kDebugMode) return;` guard
+/// because: (a) real CDN URLs reach production clients via pipeline.py +
+/// COS, (b) S1=β makes 4 mobile services env-aware via apiV1Base, so
+/// release builds also auto-sync on startup. Existing dev users who opted
+/// out keep their `false` SharedPreferences value (Layer 1 still respects
+/// it).
 ///
 /// Failure handling: hasFailure / hasChanges may both be true (mixed
 /// state — some packages installed, others failed). Output a single mixed
@@ -59,11 +62,15 @@ Future<void> runManifestSyncIfEnabled({
   required AppDatabase db,
   ContentPackageServiceFactory? serviceFactory,
 }) async {
-  // Layer 1: release/profile dead-code-eliminate
-  if (!kDebugMode) return;
+  // PR-C/PR-B5: PR-B3 Day 3 Layer 1 `if (!kDebugMode) return;` guard removed.
+  // Real CDN (Tencent COS) is in place + S1=β makes 4 mobile service
+  // `apiV1Base` env-aware via dart-define, so release/profile builds also
+  // auto-sync. Release 用户整链路 (manifest + api + audio + pronunciation)
+  // 走 production 真域名 (subject to scope §0.5.1 R4-2/R4-3 caveat for
+  // audio asset bytes — still 留 PR-D).
 
   try {
-    // Layer 2: feature flag
+    // Layer 2 (was Layer 2; renumbered to Layer 1 in PR-C): feature flag
     final prefs = await SharedPreferences.getInstance();
     if (!LocalSettingsService(prefs).manifestSyncEnabled) return;
 

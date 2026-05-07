@@ -13,6 +13,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../config/api_base.dart';
+
 /// 12-field DTO mirroring server controller response shape
 /// (apps/api/src/controllers/content-manifest.controller.ts:31-46).
 class ManifestPackage {
@@ -102,16 +104,18 @@ class ManifestParseError implements Exception {
 }
 
 class ManifestClient {
-  /// PR-B2 v0.4 R1#7: baseUrl currently hardcoded in line with
-  /// `api_client.dart:14-18` — no shared config layer exists yet.
-  /// Future PR (likely PR-C alongside observability) should extract a
-  /// const + dev/prod toggle. Out of PR-B2 scope.
+  /// PR-C S1=β: `baseUrl` defaults to [apiV1Base], a compile-time const
+  /// resolved by `--dart-define=API_BASE=...`. release/profile build must
+  /// pass the dart-define; debug/test/`flutter run` falls back to
+  /// `http://10.0.2.2:3000/api/v1`.
+  ///
+  /// Tests and explicit callers can still inject a fixed `baseUrl:`.
   final String baseUrl;
   final http.Client _client;
   final Duration timeout;
 
   ManifestClient({
-    this.baseUrl = 'http://10.0.2.2:3000/api/v1',
+    this.baseUrl = apiV1Base,
     http.Client? client,
     this.timeout = const Duration(seconds: 10),  // R1#4
   }) : _client = client ?? http.Client();

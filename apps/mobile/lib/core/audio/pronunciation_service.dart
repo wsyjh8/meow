@@ -4,6 +4,8 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../config/api_base.dart';
+
 /// 单词发音服务（带本地预加载缓存）。
 ///
 /// 默认声线：美式男声（locale=en-US，voice=am_michael）。
@@ -14,11 +16,16 @@ import 'package:path_provider/path_provider.dart';
 ///   3. 播放时优先从本地缓存读取（[DeviceFileSource]），无缓存才走网络
 ///   4. 缓存目录由系统管理（[getTemporaryDirectory]），应用退出后自动清理
 class PronunciationService {
+  /// PR-C S1=β: `baseUrl` defaults to [apiV1Base] resolved by
+  /// `--dart-define=API_BASE=...`. dev/test/`flutter run` falls back to
+  /// `http://10.0.2.2:3000/api/v1` (与 PR-A 起的 hardcode 行为一致).
+  PronunciationService({String? baseUrl}) : _baseUrl = baseUrl ?? apiV1Base;
+
   final AudioPlayer _player = AudioPlayer();
 
-  /// 模拟器内通过 10.0.2.2 访问宿主机上运行的 API（端口 3000）。
-  /// 真机调试时须改为局域网 IP，例如 http://192.168.1.x:3000/api/v1。
-  static const String _baseUrl = 'http://10.0.2.2:3000/api/v1';
+  /// API base URL. PR-C S1=β: was `static const`, now instance `final` to
+  /// support per-instance override via constructor (test injection).
+  final String _baseUrl;
 
   /// 已缓存文件索引：word (lowercase) → 本地文件路径。
   final Map<String, String> _cache = {};
