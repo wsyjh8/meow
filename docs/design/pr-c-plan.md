@@ -1,18 +1,22 @@
-# PR-C plan v0.2 — 腾讯云 COS 接入 + S1=α mobile ManifestClient 环境化 + 合并 PR-B5
+# PR-C plan v0.2 — 腾讯云 COS 接入 + S1=β mobile 4 service 全栈环境化 + 合并 PR-B5
 
 - **Date**: 2026-05-07
-- **Status**: plan v0.2（与 `pr-c-scope.md` v0.2 同步）— 吸收两份评审 20 处修订 + S1=α（用户拍板）+ R2#7 acme-companion 优先 + host cron fallback；取代 v0.1
+- **Status**: plan v0.2（与 `pr-c-scope.md` v0.2 同步）— 吸收三份评审 24 处修订（R1 13 + R2 7 + R3 4）+ S1=β（用户最终拍板，R3 评审 P0 反对 α 后定稿）+ R2#7 acme-companion 优先 + host cron fallback + R3 P1/P2（DATABASE_URL / orphan-scan packages / validate https-only）；取代 v0.1
 - **基线 commit**: `5392032`（PR-B4 merge 进 main）
 - **工作分支**: `feat/v0.3-pr-c-cos-and-prb5`
-- **预算**: 用户 45 min（Phase 0）+ 我 2.5 day（Phase 1-3）+ 真机 30 min（Phase 4）
+- **预算**: 用户 45 min（Phase 0）+ 我 3 day（Phase 1-3）+ 真机 30 min（Phase 4）
 
-> **PR-C 边界声明（硬写三处之一；scope §0.4.1）**
+> **PR-C 边界声明（β 后无需 caveat 软化，scope §0.4.1）**
 >
-> PR-C 兑现的是「release manifest sync 可用」，不是「release app 全链路可用」。
-> Release 用户合并后能：✅ 启动 → 自动从 COS 拉 manifest → 导入 drift。
-> Release 用户合并后**仍不能**：❌ 点播放例句音频 / 取题目 / 查发音
-> （`ApiClient` / `ExampleAudioService` / `PronunciationService` 仍 hardcode `10.0.2.2`）。
-> 这是 PR-A 起的预存生产化债务，**留 PR-D**（mobile API base URL 全栈环境化）。
+> PR-C 兑现的是「release app 全链路可用」：
+> - ✅ 启动 → 自动从腾讯云 COS 拉 manifest → 导入 drift（`ManifestClient`）
+> - ✅ 点播放例句音频走真域名（`ExampleAudioService`）
+> - ✅ 取题目 / 业务接口走真域名（`ApiClient`）
+> - ✅ 听单词发音走真域名（`PronunciationService`）
+>
+> β 一刀切：4 个 service 全切 `apiV1Base`；release 用户体验与 dev/emulator 一致；不留半生产态。
+>
+> **PR-D 不再需要做 mobile baseUrl 重构**（β 已合并）。
 
 ---
 
@@ -29,7 +33,8 @@ grep -n "file_url scheme must be file://" apps/api/scripts/content_pipeline/pipe
 
 # orphan_scan.py argparse --scope default（v0.2 新核实）
 grep -n "default=\"all\"" apps/api/scripts/content_pipeline/orphan_scan.py
-# → line ~948: parser.add_argument("--scope", default="all", choices=["audio", "staging", "all"])
+# → line ~948: parser.add_argument("--scope", default="all", choices=["audio", "packages", "all"])
+#   (R3 P1: actual choices contain "packages", NOT "staging" — v0.1 plan 写错)
 
 # requirements.txt 现状
 cat apps/api/scripts/content_pipeline/requirements.txt
@@ -57,15 +62,14 @@ grep -n "kDebugMode\|flutter/foundation" apps/mobile/lib/features/settings/setti
 # → import 'package:flutter/foundation.dart'; line ~1
 # → if (kDebugMode) SwitchListTile (line 263-264；v0.1 写 ~235 偏)
 
-# S1=α recon: ManifestClient baseUrl（PR-C 改的唯一一处）
+# S1=β recon: mobile 4 处 hardcode 全切（PR-C 都改）
 grep -n "baseUrl" apps/mobile/lib/core/manifest/manifest_client.dart
-# → line 114: this.baseUrl = 'http://10.0.2.2:3000/api/v1'  (named param 已支持)
+# → line 114: this.baseUrl = 'http://10.0.2.2:3000/api/v1'  (named param 已支持; PR-C 改 default → apiV1Base)
 
-# S1=α 不改但 caveat 引用的 3 处（PR-D 留位）
 grep -rn "10\.0\.2\.2:3000" apps/mobile/lib/core/api/ apps/mobile/lib/core/audio/
-# → core/api/api_client.dart:15             final String baseUrl = 'http://10.0.2.2:3000/api/v1'  (named param 已支持，PR-D 改)
-# → core/audio/example_audio_service.dart:35 static const String _baseUrl = 'http://10.0.2.2:3000/api/v1'  (无 named param，PR-D 改)
-# → core/audio/pronunciation_service.dart:21 static const String _baseUrl = 'http://10.0.2.2:3000/api/v1'  (无 named param，PR-D 改)
+# → core/api/api_client.dart:15             final String baseUrl = 'http://10.0.2.2:3000/api/v1'  (named param 已支持; PR-C 改 default → apiV1Base)
+# → core/audio/example_audio_service.dart:35 static const String _baseUrl = 'http://10.0.2.2:3000/api/v1'  (无 named param; PR-C 改: static const → final + 加 {String? baseUrl} named optional)
+# → core/audio/pronunciation_service.dart:21 static const String _baseUrl = 'http://10.0.2.2:3000/api/v1'  (无 named param; PR-C 改: 同上)
 
 # Dockerfile / docker-compose 仓内现状（v0.1 已 recon）
 find apps/api -name "Dockerfile*" -o -name "docker-compose*"
@@ -86,7 +90,7 @@ grep -c "^\s*it(" apps/api/test/pg-regression.e2e-spec.ts
 **v0.2 关键 recon 发现（v0.1 漏 / 错的）**：
 
 1. `cmd_validate` line 313-319 硬性 file:// → PR-C 写 https URL 后 100% fail（**P0 必修**，R1#1）
-2. mobile 4 处 hardcode `10.0.2.2:3000` —— PR-C/S1=α **仅改 ManifestClient**，其余 3 处留 PR-D
+2. mobile 4 处 hardcode `10.0.2.2:3000` —— PR-C/S1=β **4 处全改**（β：release 整链路诚实可用，不留半生产态）
 3. `transformFileUrlForDev` 起点 line **119**（v0.1 写 99 错）
 4. `isProd skip` line **220**（v0.1 写 178-184 错）
 5. `main.dart kDebugMode guard` line **63**（v0.1 写 ~53 偏）
@@ -304,20 +308,18 @@ curl -v https://api.<your-domain>.<tld>/api/v1/content/manifest
    - 权限: 仅本 bucket 的 read/write（`QcloudCOSDataReadOnly` + `QcloudCOSDataWriteOnly` 限定 resource）
    - 生成 SecretId / SecretKey → 妥善保存
 
-### 0.5 把 SecretId/Key 放到开发机 `.env`（v0.1 §0.6，v0.2 编号调整 + dotenv 路径明示）
+### 0.5 把 SecretId/Key 放到开发机 `.env`（v0.2 R3 P1 修订：用 DATABASE_URL）
 
 `apps/api/scripts/content_pipeline/.env`（**不要 commit**，`.gitignore` 已忽略）:
 ```bash
-# Postgres (existing)
-PGHOST=localhost
-PGPORT=5432
-PGDATABASE=meow_dev
-PGUSER=postgres
-PGPASSWORD=jason123
+# Postgres — pipeline.py 仅读 DATABASE_URL（_connect_or_die line 69），不读
+# PGHOST/PGPORT 等散乱 env。R3 评审 P1 修订：v0.1 模板用 PG* 形式实际不工作。
+DATABASE_URL=postgresql://postgres:jason123@localhost:5432/meow_dev
 
 # (推荐) 开发机连 production DB 走 SSH tunnel：
 # ssh -L 5432:localhost:5432 user@your-server-ip
-# 然后 PGHOST=localhost PGPORT=5432（与连本地 dev DB 配置一致）
+# 然后 DATABASE_URL=postgresql://postgres:<prod-password>@localhost:5432/meow_prod
+# (与连本地 dev DB 形式一致，仅 password / database 不同)
 
 # COS (PR-C new)
 COS_REGION=ap-shanghai
@@ -328,10 +330,11 @@ COS_PUBLIC_URL_BASE=https://meow-content-mvp-1234567890.cos.ap-shanghai.myqcloud
 ```
 
 **v0.2 新增**：pipeline.py 加 `python-dotenv` + `load_dotenv(Path(__file__).parent / '.env')` 显式按脚本目录加载（不依赖 cwd）。
+**v0.2 R3 P1 必读**：`.env` 模板用 `DATABASE_URL=postgresql://...` 形式，不要写 PG* 散乱 env——pipeline.py `_connect_or_die()` line 69 只读 `DATABASE_URL`，PG* 写了也不会被认。
 
-### 0.6 release build 用 dart-define（S1=α 验证前必读）
+### 0.6 release build 用 dart-define（S1=β 验证前必读）
 
-PR-C/B5 后 release build 启动会自动 manifest sync。**必须**传 dart-define 让 ManifestClient 连 production：
+PR-C/B5 后 release build 启动会自动 manifest sync，且 `ApiClient` / `ExampleAudioService` / `PronunciationService` 也走 `apiV1Base`。**必须**传 dart-define 让 4 个 service 都连 production：
 
 ```bash
 cd apps/mobile
@@ -340,11 +343,11 @@ flutter build apk --release \
   --dart-define=API_BASE=https://api.<your-domain>.<tld>/api/v1
 ```
 
-不传 → ManifestClient fallback `http://10.0.2.2:3000/api/v1` → release 用户 sync timeout（不是 silent，sub-smoke A 会撞）。
+不传 → 4 个 service 全 fallback `http://10.0.2.2:3000/api/v1` → release 用户启动后 manifest + audio + api + pronunciation 全 timeout（不是 silent，sub-smoke A + F 都会撞）。
 
-debug / dev build 不传 dart-define：`flutter run` 行为完全等同 PR-A/B（连 emulator 10.0.2.2:3000）。
+debug / dev build 不传 dart-define：`flutter run` 行为完全等同 PR-A/B（4 个 service 全连 emulator 10.0.2.2:3000）。
 
-> **注（α caveat）**：`ApiClient` / `ExampleAudioService` / `PronunciationService` 仍 hardcode `10.0.2.2`，不读 dart-define。release build 即便传了 `--dart-define=API_BASE=...`，这 3 个 service **仍连不到 production**——audio/api/pronunciation 在 release build 不工作是 PR-A 起的预存现状，PR-D 修。
+> **β 兑现**：4 个 service 一并走 `apiV1Base`，release 用户体验整链路与 dev 一致——manifest sync / 例句音频 / 业务接口 / 发音查询全部连真域名，不留半生产态债务。
 
 ---
 
@@ -610,7 +613,10 @@ def _compute_cos_key(file_path: Path, manifest_id: str) -> str:
 +            # PR-C R1#1: https URL → skip local existence/checksum/size checks.
 +            # Mobile DownloadManager validates checksum on download (PR-B2).
 +            # Server-side HEAD verification 留 PR-C+ 候选（v0.4 §7.4 性能）。
-+            if url.startswith("https://") or url.startswith("http://"):
++            if url.startswith("https://"):
++                # R3 P2: only https accepted (no http://); production must
++                # be HTTPS. Plain http would be a security regression and
++                # bypasses the cmd_validate scheme check.
 +                continue
              if not url.startswith("file://"):
                  raise ReleaseError(
@@ -643,20 +649,20 @@ def test_validate_https_url_skips_local_check(monkeypatch, conn):
 ```diff
  parser_orphan.add_argument(
      "--scope",
-     choices=["audio", "staging", "all"],
+     choices=["audio", "packages", "all"],   # R3 P1: actual choices = packages (NOT staging)
 -    default="all",
 +    default="audio",
      help=(
--        "Which roots to scan: audio (cdn-mock), staging (audio-pipeline-staging), "
+-        "Which roots to scan: audio (cdn-mock), packages (audio-pipeline-staging), "
 -        "or all (both)."
-+        "Which roots to scan: audio (cdn-mock), staging (audio-pipeline-staging), "
-+        "or all (both). Default: 'audio'. PR-C 后 staging 是 build 中间产物，"
-+        "不再被 manifest API 引用，default 不扫避免 --clean 误删。"
++        "Which roots to scan: audio (cdn-mock), packages (audio-pipeline-staging), "
++        "or all (both). Default: 'audio'. PR-C 后 audio-pipeline-staging 是 build 中间产物，"
++        "不再被 manifest API 引用 (file_url 全在 COS), default 不扫避免 --clean 误删。"
      ),
  )
 ```
 
-**Break change**: PR-B1 default `'all'` → PR-C default `'audio'`。用户如有 cron 跑 `pipeline.py orphan-scan --clean` 会从扫两根缩到只扫 cdn-mock。要清 staging 中间产物需显式 `--scope staging` 或 `--scope all`。README 加说明。
+**Break change**: PR-B1 default `'all'` → PR-C default `'audio'`。用户如有 cron 跑 `pipeline.py orphan-scan --clean` 会从扫两根缩到只扫 cdn-mock。要清 staging 中间产物需显式 `--scope packages`（R3 P1：实际 choices 是 `audio` / `packages` / `all`，**不是** `staging`）或 `--scope all`。README 加说明。
 
 ### Step 1.6 加 `.env.example`（v0.1 §1.4 沿用）
 
@@ -681,30 +687,27 @@ COS_PUBLIC_URL_BASE=https://meow-content-mvp-1234567890.cos.ap-shanghai.myqcloud
 
 `.gitignore` 应已含 `.env`（验证一次）；不应含 `.env.example`（这个要进 repo）。
 
-### Step 1.7 README PR-C 章节（v0.2 加 dart-define + orphan-scan break + dotenv + α caveat 硬写）
+### Step 1.7 README PR-C 章节（v0.2 加 dart-define + orphan-scan break + dotenv + S1=β 决策段）
 
 文件：`apps/api/scripts/content_pipeline/README.md`，在 PR-B4 子节后加：
 
 ```markdown
-## v0.3 PR-C (Tencent COS integration + S1=α + PR-B5 release default-on)
+## v0.3 PR-C (Tencent COS integration + S1=β mobile 4-service env + PR-B5 release default-on)
 
 PR-C swaps `pipeline.py`'s `file://` URLs for real Tencent COS public-read
-URLs, and unblocks release-build manifest sync via `--dart-define=API_BASE`.
+URLs, and unblocks release-build full-chain via `--dart-define=API_BASE`.
 
-### ⚠️ PR-C 边界声明（α caveat 硬写）
+### PR-C 边界声明（S1=β：release 整链路可用）
 
-PR-C 兑现的是「release manifest sync 可用」，**不是「release app 全链路可用」**。
+PR-C 兑现的是「release app 全链路可用」：
 
-Release 用户合并后能：
-- ✅ 启动 → 从腾讯云 COS 拉 manifest 包 → 导入 drift example_sentences
+- ✅ 启动 → 从腾讯云 COS 拉 manifest → 导入 drift（`ManifestClient`）
+- ✅ 点播放例句音频走真域名（`ExampleAudioService`）
+- ✅ 取题目 / 业务接口走真域名（`ApiClient`）
+- ✅ 听单词发音走真域名（`PronunciationService`）
 
-Release 用户合并后**仍然不能**：
-- ❌ 点播放例句音频（`ExampleAudioService` 仍连 `10.0.2.2`）
-- ❌ 取题目 / 任何 `ApiClient` 业务（`api_client.dart` 仍连 `10.0.2.2`）
-- ❌ 听单词发音（`PronunciationService` 仍连 `10.0.2.2`）
-
-这是 **PR-A 起的预存生产化债务**，PR-C 不在范围内修。**PR-D**（mobile API
-base URL 全栈环境化）单独拆出，作为 PR-C 之后第一个 follow-up。
+β 一刀切：4 个 service 全切 `apiV1Base`（来自 `--dart-define=API_BASE`）；
+release 用户体验与 dev/emulator 一致；不留半生产态债务。
 
 ### pipeline.py prerequisites
 
@@ -712,15 +715,17 @@ base URL 全栈环境化）单独拆出，作为 PR-C 之后第一个 follow-up�
 - CAM subaccount with `QcloudCOSDataWrite` scoped to the bucket
 - `pip install -r apps/api/scripts/content_pipeline/requirements.txt` (adds
   `boto3>=1.34.0` and `python-dotenv>=1.0.0`)
-- `.env` populated per `.env.example`:
+- `.env` populated per `.env.example` (R3 P1: `pipeline.py` only reads
+  `DATABASE_URL`, NOT `PG*` split env):
   ```
-  PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD
+  DATABASE_URL=postgresql://postgres:<password>@localhost:5432/<dbname>
   COS_REGION COS_BUCKET COS_SECRET_ID COS_SECRET_KEY COS_PUBLIC_URL_BASE
   ```
 - Connect to production DB via SSH tunnel (recommended):
   ```
   ssh -L 5432:localhost:5432 user@your-server-ip
-  PGHOST=localhost PGPORT=5432 python pipeline.py ...
+  # Then in .env:
+  DATABASE_URL=postgresql://postgres:<prod-password>@localhost:5432/meow_prod
   ```
 
 ### `publish-manifest` post-PR-C
@@ -737,23 +742,28 @@ manifest_id is a hard error per the PR-A naming-convention rules — bump
 because the URL key is content-addressable. `ContentType` is auto-detected
 by `mimetypes.guess_type` (R1#11).
 
-### `validate` post-PR-C
+### `validate` post-PR-C (R1#1 + R3 P2: https-only)
 
-`pipeline.py validate <release>` now accepts both `file://` and `https://`
-URLs (R1#1). `https://` URLs skip local file existence / checksum / size
-checks — mobile DownloadManager performs sha256 on download (PR-B2).
-`file://` URLs continue to be validated against local filesystem.
+`pipeline.py validate <release>` now accepts `https://` URLs in addition to
+legacy `file://` (R1#1). **`http://` is rejected** (R3 P2: production must
+be HTTPS; plain http would be a security regression). `https://` URLs skip
+local file existence / checksum / size checks — mobile DownloadManager
+performs sha256 on download (PR-B2). `file://` URLs continue to be
+validated against local filesystem.
 
-### `orphan-scan` break change post-PR-C
+### `orphan-scan` break change post-PR-C (R3 P1: actual choices = packages)
 
 Default `--scope` changed from `'all'` to `'audio'` (cdn-mock only). PR-C
 moves all manifest packages to COS, so `audio-pipeline-staging` files are
 build intermediates with no PG reference — they would all be orphans under
-the old default. To clean staging intermediates explicitly:
+the old default.
+
+The actual `orphan_scan.py` choices are `audio` / `packages` / `all`
+(R3 P1; **not** `staging`). To clean staging intermediates explicitly:
 
 ```bash
-pipeline.py orphan-scan --scope staging --clean   # only staging
-pipeline.py orphan-scan --scope all --clean       # both (PR-B1 default)
+pipeline.py orphan-scan --scope packages --clean  # only audio-pipeline-staging
+pipeline.py orphan-scan --scope all --clean       # both (PR-B1 default before PR-C)
 ```
 
 ### Server cleanup
@@ -762,7 +772,7 @@ PR-B3 Day 1 added `/cdn/staging` static route + `transformFileUrlForDev`
 helper for dev-mode `file://` → `http://host/cdn/staging/`. PR-C deletes
 both — `pipeline.py` always writes https URLs now.
 
-### PR-B5 (merged into PR-C) + S1=α
+### PR-B5 (merged into PR-C) + S1=β
 
 PR-B3 Day 3's `runManifestSyncIfEnabled` Layer-1 guard `if (!kDebugMode)
 return;` is removed. With real CDN URLs reaching production clients,
@@ -770,12 +780,19 @@ release builds also auto-sync. The settings page SwitchListTile's
 `if (kDebugMode)` wrap is removed too. The `flutter/foundation` import is
 also removed (R2#6).
 
-**S1=α (mobile baseUrl 仅 ManifestClient 环境化)**:
+**S1=β (mobile baseUrl 4 service 全切)**:
 
-仅 `ManifestClient` 切到 `apps/mobile/lib/core/config/api_base.dart` 的
-`apiV1Base` const（`String.fromEnvironment('API_BASE', defaultValue:
-'http://10.0.2.2:3000/api/v1')`）。其余 3 处 hardcode（`ApiClient` /
-`ExampleAudioService` / `PronunciationService`）一行不动，留 **PR-D**。
+新建 `apps/mobile/lib/core/config/api_base.dart` 暴露 const `apiV1Base`
+（`String.fromEnvironment('API_BASE', defaultValue: 'http://10.0.2.2:3000/api/v1')`）。
+4 个 service 全切 `apiV1Base`：
+
+- `ManifestClient.baseUrl` (line 114)
+- `ApiClient.baseUrl` (line 15)
+- `ExampleAudioService._baseUrl` (line 35) - `static const → final` + 加 `{String? baseUrl}` named optional
+- `PronunciationService._baseUrl` (line 21) - 同上
+
+Release build 用户体验整链路与 dev 一致（manifest sync / 例句音频 / 业务接口 /
+发音查询全部连真域名）；不留半生产态债务。
 
 Build for release:
 
@@ -962,17 +979,17 @@ debug / dev / `flutter run` / unit test 默认 fallback `http://10.0.2.2:3000/ap
 
 ---
 
-## Phase 3 — mobile S1=α（仅 ManifestClient）+ PR-B5 合并（我做，~0.5 day）
+## Phase 3 — mobile S1=β（4 service 全切）+ PR-B5 合并（我做，~1 day）
 
-### Step 3.0 新建 `core/config/api_base.dart`（v0.2 关键 S1=α P0）
+### Step 3.0 新建 `core/config/api_base.dart`（v0.2 关键 S1=β P0）
 
 文件：`apps/mobile/lib/core/config/api_base.dart`（**新建**）
 
 ```dart
-/// PR-C S1=α: API base URL 环境化入口。
+/// PR-C S1=β: API base URL 环境化入口。
 ///
-/// 使用 `String.fromEnvironment` 的编译时 const 让 `ManifestClient` 从
-/// `--dart-define=API_BASE=...` 读 base URL，避免 hardcode `10.0.2.2:3000`
+/// 使用 `String.fromEnvironment` 的编译时 const 让 mobile 4 个 service
+/// 从 `--dart-define=API_BASE=...` 读 base URL，避免 hardcode `10.0.2.2:3000`
 /// 在 release build 跑空。`String.fromEnvironment` 是 const，可作 `final`
 /// 字段 default value。
 ///
@@ -985,18 +1002,15 @@ debug / dev / `flutter run` / unit test 默认 fallback `http://10.0.2.2:3000/ap
 ///     --dart-define=API_BASE=https://api.<your-domain>/api/v1
 ///   ```
 ///
-/// **使用方（PR-C S1=α 范围；PR-D 起将有更多 service 共用此 const）**:
-/// - `ManifestClient` (core/manifest/manifest_client.dart)
-///
-/// **PR-C 不动但留 PR-D 复用此 const 的 3 处 hardcode**:
+/// **使用方（PR-C S1=β 范围，4 service 全切）**:
+/// - `ManifestClient` (core/manifest/manifest_client.dart:114)
 /// - `ApiClient` (core/api/api_client.dart:15)
 /// - `ExampleAudioService` (core/audio/example_audio_service.dart:35)
 /// - `PronunciationService` (core/audio/pronunciation_service.dart:21)
 ///
-/// 三者仍连 `10.0.2.2`，release build 不工作——PR-A 起的预存现状，PR-D 修。
-///
-/// **不传 dart-define 时**: release build 用户 ManifestClient 连 emulator IP
-/// → timeout（不是 silent failure），sub-smoke A 立刻撞错。
+/// **不传 dart-define 时**: release build 用户 4 service 全连 emulator IP
+/// → manifest sync + audio + api + pronunciation 全 timeout（不是 silent
+/// failure），sub-smoke A + F 立刻撞错。
 ///
 /// **完整 base 含 `/api/v1` 前缀**: 与既有 hardcode 一致，调用方直接拿 base
 /// 拼路径（`'$apiV1Base/content/manifest'`）。
@@ -1027,6 +1041,64 @@ const String apiV1Base = String.fromEnvironment(
 
 `apiV1Base` 是 `const` → 作 default value 合法。Test 仍可 `ManifestClient(baseUrl: 'http://test')` 注入。
 
+### Step 3.1.b ApiClient 接 `apiV1Base`（与 ManifestClient 同模式；S1=β）
+
+文件：`apps/mobile/lib/core/api/api_client.dart`，line 15
+
+```diff
++import '../config/api_base.dart';
++
+ class ApiClient {
+   ...
+   final String baseUrl;
+
+   ApiClient({
+-    this.baseUrl = 'http://10.0.2.2:3000/api/v1',
++    this.baseUrl = apiV1Base,
+     ...
+   });
+```
+
+既有 named param 注入路径保留；test / call site 不破。
+
+### Step 3.1.c ExampleAudioService: `static const → final` + named optional（S1=β）
+
+文件：`apps/mobile/lib/core/audio/example_audio_service.dart`，line 35
+
+```diff
++import '../config/api_base.dart';
++
+ class ExampleAudioService {
+-  static const String _baseUrl = 'http://10.0.2.2:3000/api/v1';
++  final String _baseUrl;
++
++  ExampleAudioService({String? baseUrl})
++      : _baseUrl = baseUrl ?? apiV1Base;
+   ...
+ }
+```
+
+**调用方零改动**：现存 `ExampleAudioService()` 不传 `baseUrl` → 默认 `apiV1Base` → release build 走 dart-define / dev 走 emulator fallback。Test / 特殊场景可 `ExampleAudioService(baseUrl: 'http://test')` 注入。
+
+### Step 3.1.d PronunciationService: 同 ExampleAudioService 模式（S1=β）
+
+文件：`apps/mobile/lib/core/audio/pronunciation_service.dart`，line 21
+
+```diff
++import '../config/api_base.dart';
++
+ class PronunciationService {
+-  static const String _baseUrl = 'http://10.0.2.2:3000/api/v1';
++  final String _baseUrl;
++
++  PronunciationService({String? baseUrl})
++      : _baseUrl = baseUrl ?? apiV1Base;
+   ...
+ }
+```
+
+调用方零改动（同 ExampleAudioService 模式）。
+
 ### Step 3.2 PR-B5: main.dart 移 Layer 1 kDebugMode guard（v0.2 行号刷新 R1#10）
 
 文件：`apps/mobile/lib/main.dart`（line 63）
@@ -1040,10 +1112,9 @@ const String apiV1Base = String.fromEnvironment(
 +  try {
 +    // Layer 1 (was kDebugMode guard, removed in PR-C/PR-B5): now release/
 +    // profile builds also auto-sync. Real CDN (Tencent COS) is in place +
-+    // S1=α makes ManifestClient's `apiV1Base` env-aware via dart-define.
-+    //
-+    // Caveat: ApiClient / ExampleAudioService / PronunciationService 仍
-+    // hardcode 10.0.2.2 (release 不工作)，PR-D 修；PR-C 不在范围。
++    // S1=β makes 4 mobile service `apiV1Base` env-aware via dart-define.
++    // Release 用户整链路（manifest + api + audio + pronunciation）连 production
++    // 真域名，不留半生产态。
 +    //
 +    // Layer 2: feature flag (manifestSyncEnabled, default true since PR-B4)
      final prefs = await SharedPreferences.getInstance();
@@ -1094,7 +1165,7 @@ const String apiV1Base = String.fromEnvironment(
 
 ```diff
 -  group('runManifestSyncIfEnabled (PR-B3 Day 3 + PR-B4)', () {
-+  group('runManifestSyncIfEnabled (PR-B3 + PR-B4 + PR-C/PR-B5 + S1=α)', () {
++  group('runManifestSyncIfEnabled (PR-B3 + PR-B4 + PR-C/PR-B5 + S1=β)', () {
      test(
          'flag=false (explicit, post-PR-B4): short-circuits before invoking service',
          () async {
@@ -1105,8 +1176,9 @@ const String apiV1Base = String.fromEnvironment(
 +      // PR-C/PR-B5 also removed the kDebugMode Layer 1 guard, but tests run
 +      // as debug build so that has no observable effect here — see release
 +      // sub-smoke A for that path.
-+      // S1=α: ManifestClient now reads apiV1Base from --dart-define;
-+      // tests don't pass dart-define so falls back to 10.0.2.2:3000/api/v1
++      // S1=β: 4 service (ManifestClient/ApiClient/ExampleAudioService/
++      // PronunciationService) now read apiV1Base from --dart-define;
++      // tests don't pass dart-define so all fall back to 10.0.2.2:3000/api/v1
 +      // (same as PR-A original hardcode).
 ```
 
@@ -1114,7 +1186,7 @@ const String apiV1Base = String.fromEnvironment(
 
 ---
 
-## Phase 4 — README + sub-smoke A-E + PR description（我做 + 你跑真机，~0.5 day）
+## Phase 4 — README + sub-smoke A-F + PR description（我做 + 你跑真机，~0.5 day）
 
 ### Step 4.1 PR description
 
@@ -1122,40 +1194,39 @@ const String apiV1Base = String.fromEnvironment(
 
 骨架（沿用 PR-A/B1/B2/B3 风格 11 章）:
 1. Title + 一句话概述
-2. **顶部 §"PR-C 边界声明"**（α caveat 硬写，逐字 copy scope §0.4.1）
-3. Why / 用户可见效果（仅 release manifest sync；audio/api 不工作仍是预存现状）
-4. 范围 (Phase 0-4)
+2. **顶部 §"PR-C 边界声明"**（S1=β 后无需 caveat 软化；release 整链路可用）
+3. Why / 用户可见效果（release 全链路可用：manifest + audio + api + pronunciation 全连真域名）
+4. 范围 (Phase 0-4) + S1=β 4 service 全切
 5. 关键文件清单
-6. 测试 (e2e + mobile unit + sub-smoke A-E)
+6. 测试 (e2e + mobile unit + sub-smoke A-F)
 7. 风险 & 缓解
-8. 兼容性 (debug/test 不传 dart-define 行为不变)
-9. 不做 (明示边界 + PR-D 留位)
-10. 评审历史 (v0.1 → v0.2 共 20 处修订 + S1=α)
-11. v0.4 SSOT 关系（PR-C 兑现 §7.1 + S1=α 仅 ManifestClient + PR-D 留位）
+8. 兼容性 (debug/test 不传 dart-define 行为不变；PR-A/B/B1-B4 既有契约不破坏)
+9. 不做 (明示边界)
+10. 评审历史 (v0.1 → v0.2 共 24 处修订 + S1=β + R3 P1/P2)
+11. v0.4 SSOT 关系（PR-C 兑现 §7.1 + S1=β 4 service 全切，PR-D 不再做 baseUrl 重构）
 
-### Step 4.2 Sub-smoke A-E（你做，真机/模拟器，~30 min）
+### Step 4.2 Sub-smoke A-F（你做，真机/模拟器，~30 min）
 
 | # | 场景 | 期望 |
 |---|---|---|
-| **A** | release build (`flutter build apk --release --dart-define=API_BASE=https://api.<domain>/api/v1` + install) → 启动 → adb logcat | "manifest sync result: ..." 出现（release 也跑 sync；PR-B5 + S1=α 验证 ManifestClient 真连 production）|
+| **A** | release build (`flutter build apk --release --dart-define=API_BASE=https://api.<domain>/api/v1` + install) → 启动 → adb logcat | "manifest sync result: ..." 出现（release 也跑 sync；PR-B5 + S1=β 验证 ManifestClient 真连 production）|
 | **B** | release build settings 页 | 能看到 SwitchListTile (`if (kDebugMode)` 包裹已移)；可关 |
 | **C** | release build flag=false 重启 | adb logcat 无 sync log（用户 opt-out 仍生效）|
 | **D** | dev build bundle v3 + manifest sync → 改 bundle v4 → 重启 | manifest 数据保留（D1 收口真机回归）|
 | **E** | full E2E: dev API → COS https URL → DownloadManager → drift readback | curl `https://<bucket>.cos...` 返 .gz；adb logcat 见 download 200；drift `content_package_state` 写入 |
+| **F (β 关键)** | release build → 点播放例句音频 + 查询单词题目 + 听单词发音 | 全部连真域名 (`https://api.<domain>/api/v1/...`)；adb logcat 见 200；不是 timeout |
 
-A 是 critical safeguard：验证 PR-B5 + S1=α 真让 release manifest sync 受益。
-
-**没有 sub-smoke F**（v0.1 β 路径有，α 路径删）：α 的 caveat 是 audio/api 在 release 不工作就是预存现状，不需要 sub-smoke 单独验证。release 用户点播放例句音频会 timeout 是 expected 行为，README + PR description 已写明。
+A + F 是 critical safeguard：A 验证 manifest sync release 受益；F 验证 audio/api/pronunciation release 真连 production（β 兑现"全链路可用"必跑）。
 
 如果 release build 忘传 `--dart-define=API_BASE=...`：
 
-- ManifestClient fallback `http://10.0.2.2:3000/api/v1`
-- A 看 manifest sync timeout（release apk 连不到 emulator IP）
+- 4 service 全 fallback `http://10.0.2.2:3000/api/v1`
+- A 看 manifest sync timeout；F 看 audio/api/pronunciation 全 timeout
 - 不是 silent failure，立即可见
 
 ---
 
-## 关键文件汇总（v0.2 刷新，α 版本）
+## 关键文件汇总（v0.2 刷新，β 版本）
 
 ### 修改
 
@@ -1163,22 +1234,23 @@ A 是 critical safeguard：验证 PR-B5 + S1=α 真让 release manifest sync 受
 |---|---|---|---|---|
 | `apps/api/Dockerfile` (新) | ~25 | 0 | +25 | R1#2 |
 | `apps/api/scripts/content_pipeline/requirements.txt` | 4 | 0 | +4 | boto3 + python-dotenv |
-| `apps/api/scripts/content_pipeline/pipeline.py` | ~120 | ~5 | +115 | COS upload + cmd_validate https + dotenv + idempotent 重排 |
-| `apps/api/scripts/content_pipeline/orphan_scan.py` | 4 | 1 | +3 | --scope default 改 |
-| `apps/api/scripts/content_pipeline/.env.example` (新) | ~15 | 0 | +15 | |
-| `apps/api/scripts/content_pipeline/README.md` | ~80 | 0 | +80 | PR-C 章节 + α caveat 硬写 + dart-define + orphan-scan break + dotenv |
+| `apps/api/scripts/content_pipeline/pipeline.py` | ~120 | ~5 | +115 | COS upload + cmd_validate https-only + dotenv + idempotent 重排 |
+| `apps/api/scripts/content_pipeline/orphan_scan.py` | 4 | 1 | +3 | --scope default 改 'audio'（choices 不变 audio/packages/all）|
+| `apps/api/scripts/content_pipeline/.env.example` (新) | ~12 | 0 | +12 | DATABASE_URL + COS_* (R3 P1 不用 PG* 散乱 env) |
+| `apps/api/scripts/content_pipeline/README.md` | ~70 | 0 | +70 | PR-C 章节 + S1=β 决策段 + dart-define + orphan-scan break + dotenv |
 | `apps/api/src/main.ts` | 0 | ~28 | -28 | 删 staging route + isProdEnv |
 | `apps/api/src/controllers/content-manifest.controller.ts` | ~5 | ~50 | -45 | 删 transform helper + Req |
 | `apps/api/test/pg-regression.e2e-spec.ts` | ~50 | ~150 | -100 | trim 2 describe + 加 1 case |
-| `apps/mobile/lib/core/config/api_base.dart` (新) | ~30 | 0 | +30 | **S1=α** + dartdoc 含 PR-D 留位 |
+| `apps/mobile/lib/core/config/api_base.dart` (新) | ~28 | 0 | +28 | **S1=β** + dartdoc |
 | `apps/mobile/lib/core/manifest/manifest_client.dart` | ~3 | ~1 | +2 | apiV1Base default |
-| `apps/mobile/lib/main.dart` | ~5 | ~3 | +2 | PR-B5: 删 kDebugMode guard + 加 caveat 注释 |
+| `apps/mobile/lib/core/api/api_client.dart` | ~3 | ~1 | +2 | apiV1Base default（β 新加）|
+| `apps/mobile/lib/core/audio/example_audio_service.dart` | ~7 | ~1 | +6 | static const → final + named optional（β 新加）|
+| `apps/mobile/lib/core/audio/pronunciation_service.dart` | ~7 | ~1 | +6 | 同上（β 新加）|
+| `apps/mobile/lib/main.dart` | ~5 | ~3 | +2 | PR-B5: 删 kDebugMode guard |
 | `apps/mobile/lib/features/settings/settings_page.dart` | ~5 | ~12 | -7 | PR-B5: 删 SwitchListTile 包裹 + flutter/foundation import |
 | `apps/mobile/test/main_manifest_sync_hook_test.dart` | ~10 | ~5 | +5 | 注释更新 |
 
-**预估 diff**: 约 +355 / -250，net +105 行（v0.1 估 -40；v0.2 加 Dockerfile + api_base.dart + cmd_validate + orphan_scan + dotenv + α caveat README 段）。
-
-> **β 版本会再加 ~14 行**（ApiClient / ExampleAudioService / PronunciationService 各 ~5 行）+ 各 service 单测注释更新 — α 全砍掉，留 PR-D。
+**预估 diff**: 约 +375 / -252，net +123 行（v0.1 估 -40；v0.2 加 Dockerfile + api_base.dart + cmd_validate + orphan_scan + dotenv + β 4 service 全切；S1=β 比 α 多 +18 行的 ApiClient/ExampleAudioService/PronunciationService 三处）。
 
 ### 新建
 
@@ -1189,16 +1261,13 @@ A 是 critical safeguard：验证 PR-B5 + S1=α 真让 release manifest sync 受
 - `docs/design/pr-c-plan.md`（v0.1 → v0.2，本文件）
 - `C:\Users\lenovo\.claude\PR_DESCRIPTION_PR-C.md`（user dir）
 
-### 不动（α 边界）
+### 不动（β 后无 mobile baseUrl 留位；S1=β 已一并处理 4 service）
 
-- `apps/mobile/lib/core/api/api_client.dart`（PR-D 改）
-- `apps/mobile/lib/core/audio/example_audio_service.dart`（PR-D 改）
-- `apps/mobile/lib/core/audio/pronunciation_service.dart`（PR-D 改）
 - `apps/mobile/lib/core/manifest/{download_manager,package_installer,content_package_service}.dart`
 - `apps/mobile/lib/core/memory/wordbook_loader.dart`
 - `apps/mobile/lib/core/storage/local_settings_service.dart`
 - `apps/mobile/lib/core/storage/drift/`
-- `apps/mobile/pubspec.yaml`（pubspec 不动；α 不加新依赖）
+- `apps/mobile/pubspec.yaml`（pubspec 不动；β 不加新依赖）
 - `apps/api/src/infrastructure/`
 - `apps/api/scripts/content_pipeline/build_examples_package.py` / `gc_stale.py` / `content_release_repo.py`
 
@@ -1222,8 +1291,9 @@ flutter analyze lib/main.dart `
 
 ```powershell
 flutter test
-# 期望: 1202/1202 全过 (α 不破现有测试，仅 ManifestClient default 改一行；既有
-# named param 注入测试零影响)
+# 期望: 1202/1202 全过 (β 仅改 4 service default value；既有 named param
+# 注入测试零影响；ExampleAudioService/PronunciationService 改 static const → final
+# 后既有 `XxxService()` 调用方零改动)
 ```
 
 ### server e2e
@@ -1279,7 +1349,7 @@ python scripts\content_pipeline\pipeline.py orphan-scan --scope all
 python scripts\content_pipeline\pipeline.py revoke pr-c-smoke --reason "smoke done"
 ```
 
-### Sub-smoke A-E（真机；详细 §"Phase 4 Step 4.2"）
+### Sub-smoke A-F（真机；详细 §"Phase 4 Step 4.2"；β 加 F 验全链路）
 
 ---
 
@@ -1295,8 +1365,9 @@ python scripts\content_pipeline\pipeline.py revoke pr-c-smoke --reason "smoke do
 | `cmd_validate` 改写后 file:// 路径回归 | 加 1 unit test 覆盖 file:// 仍走原校验 + https 跳过；e2e 既有 cases 也覆盖 file:// 路径 |
 | idempotent re-publish 重排逻辑误改 conflict 路径 | recon line 190-198 conflict 检查保留；只把 `_upload_to_cos` 移到 conflict check 之后；manual smoke 双覆盖（含 idempotent re-run 验证）|
 | orphan_scan default 改 'audio' break PR-B1 既有 cron | 用户当前无 cron；plan README 明示 break change + `--scope all` 可恢复旧行为 |
-| **release build 忘传 `--dart-define=API_BASE=...`** | ManifestClient fallback 10.0.2.2 → release manifest sync timeout（不是 silent）；sub-smoke A 必跑会撞；README 强调 release build 命令 |
-| **α caveat 被忽视 → 用户/PM 误解 PR-C 让 release 全链路可用** | caveat 硬写三处（scope §0.4.1 + README PR-C 章节顶 + PR_DESCRIPTION 顶部 §"PR-C 边界声明"）；逐字 copy 同一段落，避免误解漂 |
+| **release build 忘传 `--dart-define=API_BASE=...`** | 4 service 全 fallback 10.0.2.2 → release manifest + audio + api + pronunciation 全 timeout（不是 silent，4 处一起撞）；sub-smoke A + F 必跑会撞；README 强调 release build 命令 |
+| **β `static const → final` 改动破坏既有 `XxxService()` 调用方** | recon: ExampleAudioService/PronunciationService 既有调用方都是 `XxxService()` 不传 baseUrl，加 named optional 后 default fallback `apiV1Base`，调用方零改动；baseline `flutter test` 验证 |
+| **sub-smoke F audio/api 真域名连通失败** | 阻塞 PR-C 提交；β 一刀切的代价就是必须验全链路；如真机失败排查顺序：dart-define / DNS / nginx-proxy / acme-companion / API endpoint 实现 |
 | 移 kDebugMode guard 后 release 用户首次启动多 1 次 manifest API call | sync fire-and-forget unawaited；不阻塞 UI；hasFailure 静默 |
 | 删除 server `/cdn/staging` route 后 dev 本地无 fallback | dev 本机 pipeline.py 也走 COS 真上传；如需纯离线 dev 可临时 git revert main.ts 改动 |
 | `.env` SecretId/SecretKey 误 commit | `.gitignore` 已忽略 `.env`；plan 强调用 `.env.example` 占位 |
@@ -1315,17 +1386,21 @@ python scripts\content_pipeline\pipeline.py revoke pr-c-smoke --reason "smoke do
 - [ ] **`pipeline.py orphan-scan` default 仅扫 cdn-mock**（R1#4 manual smoke）
 - [ ] PG `content_manifest.file_url` 是 https
 - [ ] manifest API（dev / production 都 OK）返非空 packages，含 https URL
-- [ ] **`api_base.dart` 新文件 + `ManifestClient` default 切到 `apiV1Base`**（S1=α）
-- [ ] **flutter test 1202/1202 全过**（α 既有测试不破）
+- [ ] **`api_base.dart` 新文件 + 4 个 service default 全切 `apiV1Base`**（S1=β）
+  - [ ] `ManifestClient.baseUrl` (line 114)
+  - [ ] `ApiClient.baseUrl` (line 15)
+  - [ ] `ExampleAudioService._baseUrl` (line 35) - `static const → final` + named optional
+  - [ ] `PronunciationService._baseUrl` (line 21) - 同上
+- [ ] **flutter test 1202/1202 全过**（β 既有测试不破；既有 named param 注入零退化）
 - [ ] flutter analyze 0 new issues（含 settings_page `flutter/foundation` import 已删 R2#6）
 - [ ] release build 启动也跑 sync（sub-smoke A）
 - [ ] release build settings 能看到开关（sub-smoke B）
 - [ ] release build 用户能 opt-out（sub-smoke C）
 - [ ] e2e suite ~48 cases 通过 + 1 baseline `/me/today` fail
-- [ ] sub-smoke A-E 真机全过（**无 F**：α caveat 接受 audio/api release 不工作）
-- [ ] **README PR-C 章节含 α caveat 硬写**（边界声明 + ApiClient/ExampleAudioService/PronunciationService 留 PR-D）
-- [ ] **PR_DESCRIPTION_PR-C.md 顶部 §"PR-C 边界声明"**（逐字 copy scope §0.4.1）
-- [ ] PR_DESCRIPTION_PR-C.md 写到 user dir
+- [ ] sub-smoke A-E 真机全过（D1 收口 / 全链路 manifest sync）
+- [ ] **sub-smoke F 真机全过**（β 关键：release build 点 audio + api + pronunciation 都连真域名，不 timeout）
+- [ ] **README PR-C 章节含 S1=β 决策段**（β 后无需 caveat 软化；release 整链路可用）
+- [ ] PR_DESCRIPTION_PR-C.md 写到 user dir（11 章 + S1=β 决策段 + sub-smoke F 验证段）
 
 ---
 
@@ -1335,13 +1410,13 @@ python scripts\content_pipeline\pipeline.py revoke pr-c-smoke --reason "smoke do
 
 ```
 docs(v0.3-pr-c): scope v0.1 + plan v0.1 (旧版，可保留作 history 对照)
-docs(v0.3-pr-c): scope v0.2 + plan v0.2 (吸收 20 处评审 + S1=α + 硬 caveat)
+docs(v0.3-pr-c): scope v0.2 + plan v0.2 (吸收 24 处评审 + S1=β + R3 P1/P2)
 feat(v0.3-pr-c): Phase 0 — Dockerfile multi-stage
-feat(v0.3-pr-c): Phase 1 — pipeline.py COS upload + cmd_validate https + dotenv + orphan_scan default
+feat(v0.3-pr-c): Phase 1 — pipeline.py COS upload + cmd_validate https-only + dotenv + orphan_scan default
 feat(v0.3-pr-c): Phase 2 — server cleanup (transform helper / staging route / e2e trim)
-feat(v0.3-pr-c): Phase 3 — mobile S1=α (api_base.dart + ManifestClient) + PR-B5 (移 kDebugMode + 删 flutter/foundation)
-feat(v0.3-pr-c): Phase 4 — README + sub-smoke 验收 + α caveat 硬写
-Merge feat/v0.3-pr-c-cos-and-prb5 — v0.3 PR-C COS + PR-B5 + S1=α (~2.5d)
+feat(v0.3-pr-c): Phase 3 — mobile S1=β (api_base.dart + 4 service) + PR-B5 (移 kDebugMode + 删 flutter/foundation)
+feat(v0.3-pr-c): Phase 4 — README + sub-smoke A-F 验收
+Merge feat/v0.3-pr-c-cos-and-prb5 — v0.3 PR-C COS + PR-B5 + S1=β (~3d)
 ```
 
 按 phase 拆 commit — 与 PR-B3 / PR-B4 风格一致，每 phase 独立 commit 便于 git bisect / revert。
@@ -1350,18 +1425,18 @@ Merge feat/v0.3-pr-c-cos-and-prb5 — v0.3 PR-C COS + PR-B5 + S1=α (~2.5d)
 
 ## 评审节奏
 
-1. 本次：scope v0.2 + plan v0.2 push 让 codex / 用户 review（20 处修订 + S1=α + α caveat 硬写）
+1. 本次：scope v0.2 + plan v0.2 push 让 codex / 用户 review（24 处修订 + S1=β + R3 P1/P2）
 2. 评审吸收 → v0.3（如有新 P0/P1）
 3. Phase 0 你跑（Dockerfile + 域名 + nginx-proxy + COS）
-4. Phase 1-3 我做（pipeline + server + mobile α + PR-B5）
-5. Phase 4 sub-smoke A-E 你跑真机
+4. Phase 1-3 我做（pipeline + server + mobile β 4 service + PR-B5）
+5. Phase 4 sub-smoke A-F 你跑真机（含 F：audio/api 全链路验证）
 6. Merge 进 main + 删 feature branch
 7. v0.3 milestone 全部完成 → 打 git tag v0.3.0 + Release notes
-8. **PR-D（mobile API base URL 全栈环境化）作为 PR-C 之后第一个 follow-up**：把 `ApiClient` / `ExampleAudioService` / `PronunciationService` 也切到 `apiV1Base`，让 release build 全链路可用。估时 ~1d（4 service → 3 service，复用 PR-C 的 `api_base.dart`）。
+8. **PR-D 不再做 mobile baseUrl 重构**（β 已合并）；候选改成 audio file 接 COS / multi-env build flavor / 其他
 
 ---
 
-## 不做（与 scope §0.2 同 + α 边界明示）
+## 不做（与 scope §0.2 同 + β 边界明示）
 
 - ❌ 真 Cloudflare/AWS CDN 接入（boto3 已铺路 future swap）
 - ❌ presigned URL（v0.3 走 public-read）
@@ -1370,9 +1445,9 @@ Merge feat/v0.3-pr-c-cos-and-prb5 — v0.3 PR-C COS + PR-B5 + S1=α (~2.5d)
 - ❌ 改 ContentPackageService / PackageInstaller / DownloadManager / WordbookLoader
 - ❌ 改 drift schema / pubspec
 - ❌ 多 region / multi-bucket（单 ap-shanghai 够 v0.3）
-- ❌ **改 `ApiClient` / `ExampleAudioService` / `PronunciationService` baseUrl**（α 边界硬切：留 PR-D）
-- ❌ **重构 mobile service 调用层**（α 边界：仅环境化 ManifestClient.baseUrl，零调用层 / UI / 业务逻辑改动）
+- ❌ **重构 mobile service 调用层**（β 边界：仅 baseUrl default 替换 + 2 个 service 加 named optional；零调用层 / UI / 业务逻辑改动）
 - ❌ **环境选择 UI** / build flavor（PR-D 候选；当前 dart-define 一次 build 一套）
-- ❌ **audio file 接 COS**（PR-D 候选；当前 audio 仍走 cdn-mock + 仍 hardcode 10.0.2.2）
+- ❌ **audio file 接 COS**（PR-D 候选；当前 audio 仍走 cdn-mock + ApiClient 拼）
 - ❌ **server-side cmd_validate HEAD 验证 https**（v0.4 §7.4 性能候选；client checksum 兜底已足够）
+- ❌ **`http://` 远程 URL 进 manifest**（R3 P2：production 必须 HTTPS；plain http 是安全 regression）
 - ❌ **mount `docker.sock` 给 certbot 容器做 nginx reload**（R2#7：攻击面太大；用 acme-companion 替代）
