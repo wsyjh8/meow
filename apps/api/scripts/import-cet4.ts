@@ -149,7 +149,9 @@ async function main() {
     if (!word) return null;
 
     return {
-      id: `cet4-${word.toLowerCase()}`,
+      // PR-D: id is the canonical lowercase word (no prefix), matching
+      // audio_assets.target_id (target_kind='word') for direct JOIN.
+      id: word.toLowerCase(),
       book_id: BOOK_ID,
       word_text: word,
       meaning: extractShortMeaning(translation),
@@ -161,7 +163,7 @@ async function main() {
       tags: tags || null,
       frequency_rank: computeFrequency(bnc, frq),
       word_forms: exchange || null,
-      word_type: 'new',
+      // word_type / sort_order moved to word_book_memberships (migration 005)
       sort_order: computeFrequency(bnc, frq),
     };
   }).filter(Boolean);
@@ -193,11 +195,13 @@ async function main() {
   let imported = 0;
 
   for (const w of words as any[]) {
+    // 1. Upsert word into `words` table (post-migration-005 schema).
     await pool.query(`
-      INSERT INTO words (id, book_id, word_text, meaning, phonetic, translation, definition,
-                         difficulty_level, is_core, tags, frequency_rank, word_forms, word_type, sort_order)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      INSERT INTO words (id, word_text, meaning, phonetic, translation, definition,
+                         difficulty_level, is_core, tags, frequency_rank, word_forms)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       ON CONFLICT (id) DO UPDATE SET
+        word_text = EXCLUDED.word_text,
         meaning = EXCLUDED.meaning,
         phonetic = EXCLUDED.phonetic,
         translation = EXCLUDED.translation,
@@ -207,11 +211,20 @@ async function main() {
         tags = EXCLUDED.tags,
         frequency_rank = EXCLUDED.frequency_rank,
         word_forms = EXCLUDED.word_forms,
-        sort_order = EXCLUDED.sort_order
+        updated_at = NOW()
     `, [
-      w.id, w.book_id, w.word_text, w.meaning, w.phonetic, w.translation, w.definition,
-      w.difficulty_level, w.is_core, w.tags, w.frequency_rank, w.word_forms, w.word_type, w.sort_order,
+      w.id, w.word_text, w.meaning, w.phonetic, w.translation, w.definition,
+      w.difficulty_level, w.is_core, w.tags, w.frequency_rank, w.word_forms,
     ]);
+
+    // 2. Upsert membership into `word_book_memberships` (migration 005).
+    await pool.query(`
+      INSERT INTO word_book_memberships (word_id, book_id, sort_order, source_key)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (word_id, book_id) DO UPDATE SET
+        sort_order = EXCLUDED.sort_order
+    `, [w.id, w.book_id, w.sort_order, 'cet4-csv']);
+
     imported++;
     if (imported % 500 === 0) console.log(`  ...${imported} words imported`);
   }
