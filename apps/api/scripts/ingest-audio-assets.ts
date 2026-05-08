@@ -205,7 +205,10 @@ async function ingestExamples(pool: Pool, rows: ExampleRow[], dryRun: boolean): 
         r.word_id,
         r.sense_label ?? r.sense ?? null,
         r.en,
-        r.cn,
+        r.cn ?? '', // PR-D: examples.json may lack cn (sourced from upstream
+                    // generated_examples_*.json files not all locally avail).
+                    // Default '' so PG accepts row; ON CONFLICT below preserves
+                    // any pre-existing non-empty cn so we don't clobber data.
         r.ordinal ?? 0,
         r.difficulty ?? null,
         r.generator ?? null,
@@ -220,7 +223,10 @@ async function ingestExamples(pool: Pool, rows: ExampleRow[], dryRun: boolean): 
         word_id = EXCLUDED.word_id,
         sense_label = EXCLUDED.sense_label,
         en = EXCLUDED.en,
-        cn = EXCLUDED.cn,
+        -- Only overwrite cn if EXCLUDED has a non-empty value; otherwise keep
+        -- existing PG cn (PR-D: protects 10140 pre-existing translated rows
+        -- from being clobbered by examples.json that lacks cn field).
+        cn = CASE WHEN EXCLUDED.cn = '' THEN examples.cn ELSE EXCLUDED.cn END,
         ordinal = EXCLUDED.ordinal,
         difficulty = EXCLUDED.difficulty,
         generator = EXCLUDED.generator
