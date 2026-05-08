@@ -105,6 +105,32 @@ function md5sumFile(filePath: string): string {
   return hash.digest('hex');
 }
 
+// ---------- retry helper ----------
+// Retries transient network errors (ECONNRESET / socket hang up) up to
+// maxAttempts times with exponential back-off. Non-network errors are
+// re-thrown immediately.
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxAttempts = 4,
+  baseDelayMs = 2000,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      const isTransient = code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ENOTFOUND';
+      if (!isTransient || attempt === maxAttempts) throw err;
+      const delay = baseDelayMs * Math.pow(2, attempt - 1); // 2s, 4s, 8s
+      console.log(`  [retry] attempt ${attempt}/${maxAttempts} after ${delay}ms (${code})`);
+      await new Promise(r => setTimeout(r, delay));
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
 // ---------- main sync entry ----------
 export interface SyncOptions {
   src: string;
@@ -160,8 +186,8 @@ export async function syncDirectoryToCos(
     // multipart here so md5 comparison is safe.
     let needUpload = true;
     try {
-      const head = await client.send(
-        new HeadObjectCommand({ Bucket: creds.bucket, Key: key }),
+      const head = await withRetry(() =>
+        client.send(new HeadObjectCommand({ Bucket: creds.bucket, Key: key })),
       );
       const remoteEtag = (head.ETag || '').replace(/"/g, '');
       const localMd5 = md5sumFile(abs);
@@ -189,16 +215,19 @@ export async function syncDirectoryToCos(
     // R4 P1-2: stream the body. Reading multi-GB into memory is OOM-prone.
     // ContentLength is required when Body is a Readable stream because S3
     // cannot infer length from a stream.
-    await client.send(
-      new PutObjectCommand({
-        Bucket: creds.bucket,
-        Key: key,
-        Body: fs.createReadStream(abs),
-        ContentLength: size,
-        ContentType: opts.contentType,
-        CacheControl: opts.cacheControl,
-        ACL: 'public-read',
-      }),
+    // withRetry: recreate ReadStream on each attempt (stream can only be read once).
+    await withRetry(() =>
+      client.send(
+        new PutObjectCommand({
+          Bucket: creds.bucket,
+          Key: key,
+          Body: fs.createReadStream(abs),
+          ContentLength: size,
+          ContentType: opts.contentType,
+          CacheControl: opts.cacheControl,
+          ACL: 'public-read',
+        }),
+      ),
     );
     uploaded++;
     if (uploaded % 50 === 0) {
