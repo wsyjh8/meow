@@ -1,0 +1,14 @@
+node_modules
+dist
+coverage
+.env
+.env.*
+npm-debug.log*
+
+audio-pipeline-staging/*
+!audio-pipeline-staging/.gitkeep
+cdn-mock/audio
+data
+
+scripts/content_pipeline/.env
+scripts/content_pipeline/.env.*

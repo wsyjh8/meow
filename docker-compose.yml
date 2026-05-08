@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: meow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-meow_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-meow_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-meow_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    image: meow-api:latest
+    container_name: meow-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      PERSISTENCE_BACKEND: pg
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-meow_password}@postgres:5432/${POSTGRES_DB:-meow_dev}}
+      AUDIO_CDN_ORIGIN: ${AUDIO_CDN_ORIGIN:-https://your-bucket.cos.ap-shanghai.myqcloud.com}
+      PRONUNCIATION_CDN_ORIGIN: ${PRONUNCIATION_CDN_ORIGIN:-https://your-bucket.cos.ap-shanghai.myqcloud.com}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    command: ["sh", "-c", "node dist/infrastructure/postgres/migrate.js up && node dist/main.js"]
+
+volumes:
+  pg_data:

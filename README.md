@@ -46,6 +46,23 @@ npm run start:dev
 
 访问 `http://localhost:3000/api/v1/health` 验证。
 
+### Docker
+
+```bash
+docker compose up --build
+```
+
+启动 NestJS API 和 PostgreSQL。API 会等待 PostgreSQL 就绪，自动执行
+pending migrations，然后监听 `http://localhost:3000`。
+
+常用命令：
+
+```bash
+docker compose logs -f api
+docker compose down
+docker compose down -v
+```
+
 ### Mobile (Flutter)
 
 ```bash
