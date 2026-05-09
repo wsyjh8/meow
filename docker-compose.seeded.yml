@@ -1,0 +1,7 @@
+services:
+  postgres:
+    build:
+      context: ./docker/postgres-seed
+      dockerfile: Dockerfile
+    image: meow-postgres-seeded:local
+
