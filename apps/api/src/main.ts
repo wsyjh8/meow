@@ -4,8 +4,12 @@ import { AppModule } from './app.module';
 import { loggingMiddleware } from './middleware/logging.middleware';
 import { errorFilter } from './middleware/error.filter';
 import { PersistenceFailureFilter } from './middleware/persistence-failure.filter';
+import { assertProductionAuthEnforce } from './auth/auth.guard';
 
 async function bootstrap() {
+  // 需求 23 D13: 生产环境必须开启 AUTH_ENFORCE
+  assertProductionAuthEnforce();
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Global prefix for API versioning (does NOT affect static assets)

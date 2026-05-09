@@ -1,11 +1,13 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule } from './config/config.module';
 import { RoutesModule } from './routes/routes.module';
+import { AuthModule } from './auth/auth.module';
 import { MaintenanceGuardMiddleware } from './middleware/maintenance.guard';
 
 @Module({
   imports: [
     ConfigModule,
+    AuthModule,
     RoutesModule,
   ],
   controllers: [],

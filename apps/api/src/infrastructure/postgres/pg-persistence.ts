@@ -404,10 +404,12 @@ export class PgDevStorePersistence implements IDevStorePersistence {
       }
 
       // Idempotency keys
+      // 需求 23 / migration 009: PK changed from (key) to (user_id, key).
+      // ON CONFLICT target must match the new PK columns.
       for (const [key, record] of Object.entries<any>(snapshot.idempotencyKeys || {})) {
         await client.query(
           `INSERT INTO idempotency_keys (key, user_id, path, response, created_at)
-           VALUES ($1,$2,$3,$4,$5) ON CONFLICT (key) DO UPDATE SET response=$4`,
+           VALUES ($1,$2,$3,$4,$5) ON CONFLICT (user_id, key) DO UPDATE SET response=$4`,
           [record.key || key, record.user_id || DEV_USER_ID, record.path || '', JSON.stringify(record.response || {}), record.created_at || new Date().toISOString()],
         );
       }
