@@ -16,13 +16,21 @@ import * as path from 'path';
 /**
  * Persistence adapter interface.
  * Any backend (JSON file, PostgreSQL, etc.) must implement this.
+ *
+ * 需求 23 Phase A4-β.5: load/save/clear accept an optional userId.
+ *   - PG backend uses it to scope queries (load only that user's data,
+ *     save only that user's slice).
+ *   - JSON backend ignores it (single-file dev fallback).
+ * Default param is DEV_USER_ID for back-compat with single-user dev mode.
  */
 export interface IDevStorePersistence {
   load(): DevStoreSnapshot | null;
   save(snapshot: DevStoreSnapshot): void;
   /** Async save — returns a promise that rejects if persistence fails. */
-  saveAsync?(snapshot: DevStoreSnapshot): Promise<void>;
-  clear(): void;
+  saveAsync?(snapshot: DevStoreSnapshot, userId?: string): Promise<void>;
+  /** Async load (PG only) — loads a single user's snapshot. */
+  loadAsync?(userId?: string): Promise<DevStoreSnapshot | null>;
+  clear(userId?: string): void;
 }
 
 export interface DevStoreSnapshot {

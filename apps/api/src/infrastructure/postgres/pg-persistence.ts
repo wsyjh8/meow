@@ -12,12 +12,18 @@
 import { Pool } from 'pg';
 import type { IDevStorePersistence, DevStoreSnapshot } from '../../domain/persistence';
 
-// 需求 23 Phase A4-α: pg-persistence still loads / saves a single user's
-// snapshot (this constant). Multi-user load/save requires partitioning the
-// in-memory DevStore state by userId — that's A4-β scope. Under permissive
-// AUTH_ENFORCE=false, every request resolves to DEV_USER_ID anyway, so the
-// effective behavior is correct. Under AUTH_ENFORCE=true with multiple
-// users, A4-β must change this to load/save per-user snapshots on demand.
+// 需求 23 Phase A4-β.5: load / save / clear all accept an optional userId
+// parameter. Default falls back to DEV_USER_ID for back-compat with single-
+// user dev mode (AUTH_ENFORCE=false). When AUTH_ENFORCE=true callers pass
+// the actual userId so that each user's slice is loaded/saved independently.
+//
+// β.5 limitation: lazy-load on first withUser of an unseen user is NOT
+// implemented — startup loadAsync only restores DEV_USER_ID's bucket.
+// Other users' state lives in memory after their first request and gets
+// persisted via saveAsync(snapshot, userId). After server restart, those
+// users start with an empty in-memory bucket; PG row truth still per-user
+// correct, but in-memory cache must be re-warmed. Full lazy-load is
+// β.5b / Phase E1 切流前置 work.
 const DEV_USER_ID = 'dev-user-001';
 
 export class PgDevStorePersistence implements IDevStorePersistence {
@@ -39,12 +45,13 @@ export class PgDevStorePersistence implements IDevStorePersistence {
   }
 
   /**
-   * Async load — reconstructs DevStoreSnapshot from PG tables.
+   * Async load — reconstructs DevStoreSnapshot for a single user from PG.
+   * 需求 23 Phase A4-β.5: userId param replaces hardcoded DEV_USER_ID.
    */
-  async loadAsync(): Promise<DevStoreSnapshot | null> {
+  async loadAsync(userId: string = DEV_USER_ID): Promise<DevStoreSnapshot | null> {
     try {
       // Check if user exists
-      const userCheck = await this.pool.query('SELECT id FROM users WHERE id = $1', [DEV_USER_ID]);
+      const userCheck = await this.pool.query('SELECT id FROM users WHERE id = $1', [userId]);
       if (userCheck.rows.length === 0) return null;
 
       const [
@@ -54,22 +61,22 @@ export class PgDevStorePersistence implements IDevStorePersistence {
         dailyGoalR, feedEventsR, walletR, ownedItemsR,
         equipmentR, idempotencyR,
       ] = await Promise.all([
-        this.pool.query('SELECT * FROM study_attempts WHERE user_id = $1 ORDER BY created_at', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM review_groups WHERE user_id = $1 ORDER BY created_at', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM review_attempts WHERE user_id = $1 ORDER BY created_at', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM reward_source_events WHERE user_id = $1 ORDER BY created_at', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM reward_ledger WHERE user_id = $1 ORDER BY created_at', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM settlements WHERE user_id = $1 ORDER BY created_at', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM session_records WHERE user_id = $1 ORDER BY created_at', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM check_in_records WHERE user_id = $1 ORDER BY created_at', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM streak_records WHERE user_id = $1', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM learning_day_facts WHERE user_id = $1', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM daily_goal_progress WHERE user_id = $1', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM feed_events WHERE user_id = $1 ORDER BY created_at', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM secondary_wallets WHERE user_id = $1', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM inventory_items WHERE user_id = $1', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM equipment_slots WHERE user_id = $1', [DEV_USER_ID]),
-        this.pool.query('SELECT * FROM idempotency_keys WHERE user_id = $1', [DEV_USER_ID]),
+        this.pool.query('SELECT * FROM study_attempts WHERE user_id = $1 ORDER BY created_at', [userId]),
+        this.pool.query('SELECT * FROM review_groups WHERE user_id = $1 ORDER BY created_at', [userId]),
+        this.pool.query('SELECT * FROM review_attempts WHERE user_id = $1 ORDER BY created_at', [userId]),
+        this.pool.query('SELECT * FROM reward_source_events WHERE user_id = $1 ORDER BY created_at', [userId]),
+        this.pool.query('SELECT * FROM reward_ledger WHERE user_id = $1 ORDER BY created_at', [userId]),
+        this.pool.query('SELECT * FROM settlements WHERE user_id = $1 ORDER BY created_at', [userId]),
+        this.pool.query('SELECT * FROM session_records WHERE user_id = $1 ORDER BY created_at', [userId]),
+        this.pool.query('SELECT * FROM check_in_records WHERE user_id = $1 ORDER BY created_at', [userId]),
+        this.pool.query('SELECT * FROM streak_records WHERE user_id = $1', [userId]),
+        this.pool.query('SELECT * FROM learning_day_facts WHERE user_id = $1', [userId]),
+        this.pool.query('SELECT * FROM daily_goal_progress WHERE user_id = $1', [userId]),
+        this.pool.query('SELECT * FROM feed_events WHERE user_id = $1 ORDER BY created_at', [userId]),
+        this.pool.query('SELECT * FROM secondary_wallets WHERE user_id = $1', [userId]),
+        this.pool.query('SELECT * FROM inventory_items WHERE user_id = $1', [userId]),
+        this.pool.query('SELECT * FROM equipment_slots WHERE user_id = $1', [userId]),
+        this.pool.query('SELECT * FROM idempotency_keys WHERE user_id = $1', [userId]),
       ]);
 
       // Map review groups with items
@@ -97,7 +104,7 @@ export class PgDevStorePersistence implements IDevStorePersistence {
       for (const dg of dailyGoalR.rows) {
         const dateKey = typeof dg.local_date === 'string' ? dg.local_date : dg.local_date.toISOString().split('T')[0];
         todayStates[dateKey] = {
-          user_id: DEV_USER_ID,
+          user_id: userId,
           local_date: dateKey,
           current_book_name: 'CET-4',
           today_new_target: dg.new_target,
@@ -233,16 +240,24 @@ export class PgDevStorePersistence implements IDevStorePersistence {
     });
   }
 
-  async saveAsync(snapshot: DevStoreSnapshot): Promise<void> {
+  /**
+   * Persist a single user's slice of the snapshot.
+   * 需求 23 Phase A4-β.5: userId param replaces hardcoded DEV_USER_ID.
+   * Each entity collection is filtered to only the rows matching userId
+   * (other users' rows in the snapshot are untouched in PG, since DELETE
+   * is also scoped to userId).
+   */
+  async saveAsync(snapshot: DevStoreSnapshot, userId: string = DEV_USER_ID): Promise<void> {
     const client = await this.pool.connect();
+    const ownedBy = (row: any) => (row.user_id ?? DEV_USER_ID) === userId;
     try {
       await client.query('BEGIN');
 
-      // Clear user-state tables (order: reverse FK dependencies)
-      // Delete review_group_items via parent join (no user_id column)
+      // Clear THIS USER's state tables (order: reverse FK dependencies).
+      // Other users' rows in PG are untouched.
       await client.query(
         `DELETE FROM review_group_items WHERE review_group_id IN (SELECT id FROM review_groups WHERE user_id = $1)`,
-        [DEV_USER_ID],
+        [userId],
       );
 
       const clearTables = [
@@ -254,11 +269,11 @@ export class PgDevStorePersistence implements IDevStorePersistence {
         'review_groups', 'study_attempts',
       ];
       for (const table of clearTables) {
-        await client.query(`DELETE FROM ${table} WHERE user_id = $1`, [DEV_USER_ID]);
+        await client.query(`DELETE FROM ${table} WHERE user_id = $1`, [userId]);
       }
       // These tables need special handling (UPDATE instead of DELETE for seeded rows)
-      await client.query(`UPDATE streak_records SET current_streak=0, last_check_in_date=NULL, updated_at=NOW() WHERE user_id=$1`, [DEV_USER_ID]);
-      await client.query(`UPDATE secondary_wallets SET coins_spent=0, feed_mood_accumulated=0, feed_exp_accumulated=0, feed_bond_accumulated=0, updated_at=NOW() WHERE user_id=$1`, [DEV_USER_ID]);
+      await client.query(`UPDATE streak_records SET current_streak=0, last_check_in_date=NULL, updated_at=NOW() WHERE user_id=$1`, [userId]);
+      await client.query(`UPDATE secondary_wallets SET coins_spent=0, feed_mood_accumulated=0, feed_exp_accumulated=0, feed_bond_accumulated=0, updated_at=NOW() WHERE user_id=$1`, [userId]);
 
       // Re-insert all state
       // Helper: try insert with savepoint (FK violations don't abort the transaction)
@@ -273,19 +288,19 @@ export class PgDevStorePersistence implements IDevStorePersistence {
         }
       };
 
-      for (const sa of snapshot.studyAttempts || []) {
+      for (const sa of (snapshot.studyAttempts || []).filter(ownedBy)) {
         await tryInsert(
           `INSERT INTO study_attempts (id, user_id, word_id, book_id, study_type, action_result, created_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
-          [sa.id, sa.user_id || DEV_USER_ID, sa.word_id, sa.book_id, sa.study_type, sa.action_result, sa.created_at],
+          [sa.id, userId, sa.word_id, sa.book_id, sa.study_type, sa.action_result, sa.created_at],
         );
       }
 
-      for (const rg of snapshot.reviewGroups || []) {
+      for (const rg of (snapshot.reviewGroups || []).filter(ownedBy)) {
         await tryInsert(
           `INSERT INTO review_groups (id, user_id, group_status, group_completed, created_at, completed_at)
            VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING`,
-          [rg.review_group_id, rg.user_id || DEV_USER_ID, rg.group_status, rg.group_completed, rg.created_at, rg.completed_at || null],
+          [rg.review_group_id, userId, rg.group_status, rg.group_completed, rg.created_at, rg.completed_at || null],
         );
         for (const item of rg.items || []) {
           await tryInsert(
@@ -296,127 +311,143 @@ export class PgDevStorePersistence implements IDevStorePersistence {
         }
       }
 
-      for (const ra of snapshot.reviewAttempts || []) {
+      for (const ra of (snapshot.reviewAttempts || []).filter(ownedBy)) {
         await tryInsert(
           `INSERT INTO review_attempts (id, user_id, review_group_id, word_id, action_result, created_at)
            VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING`,
-          [ra.id, ra.user_id || DEV_USER_ID, ra.review_group_id, ra.word_id, ra.action_result, ra.created_at],
+          [ra.id, userId, ra.review_group_id, ra.word_id, ra.action_result, ra.created_at],
         );
       }
 
-      for (const se of snapshot.sourceEvents || []) {
+      for (const se of (snapshot.sourceEvents || []).filter(ownedBy)) {
         await tryInsert(
           `INSERT INTO reward_source_events (id, user_id, event_type, source_ref_id, created_at)
            VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
-          [se.source_event_id, se.user_id || DEV_USER_ID, se.source_event_type, se.source_ref_id, se.created_at],
+          [se.source_event_id, userId, se.source_event_type, se.source_ref_id, se.created_at],
         );
       }
 
-      for (const ri of snapshot.rewardLedgerItems || []) {
+      for (const ri of (snapshot.rewardLedgerItems || []).filter(ownedBy)) {
         await tryInsert(
           `INSERT INTO reward_ledger (id, source_event_id, user_id, reward_type, amount, reward_status, created_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
-          [ri.reward_item_id, ri.source_event_id, ri.user_id || DEV_USER_ID, ri.reward_type, ri.amount, ri.reward_status, ri.created_at],
+          [ri.reward_item_id, ri.source_event_id, userId, ri.reward_type, ri.amount, ri.reward_status, ri.created_at],
         );
       }
 
-      for (const st of snapshot.settlements || []) {
+      for (const st of (snapshot.settlements || []).filter(ownedBy)) {
         await tryInsert(
           `INSERT INTO settlements (id, source_event_id, user_id, settlement_status, created_at, updated_at)
            VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING`,
-          [st.settlement_id, st.source_event_id, st.user_id || DEV_USER_ID, st.reward_settlement_status, st.created_at, st.updated_at],
+          [st.settlement_id, st.source_event_id, userId, st.reward_settlement_status, st.created_at, st.updated_at],
         );
       }
 
-      for (const s of snapshot.sessions || []) {
+      for (const s of (snapshot.sessions || []).filter(ownedBy)) {
         await client.query(
           `INSERT INTO session_records (id, user_id, session_status, validation_status, minutes_target, started_at, ended_at, actual_minutes, effective_learning_count, effective_review_count)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING`,
-          [s.session_id, s.user_id || DEV_USER_ID, s.session_status, s.session_validation_status, s.session_minutes_target, s.started_at, s.ended_at || null, s.actual_minutes || null, s.effective_learning_count, s.effective_review_count],
+          [s.session_id, userId, s.session_status, s.session_validation_status, s.session_minutes_target, s.started_at, s.ended_at || null, s.actual_minutes || null, s.effective_learning_count, s.effective_review_count],
         );
       }
 
-      for (const ci of snapshot.checkIns || []) {
+      for (const ci of (snapshot.checkIns || []).filter(ownedBy)) {
         await client.query(
           `INSERT INTO check_in_records (id, user_id, local_date, status, created_at)
            VALUES ($1,$2,$3,$4,$5) ON CONFLICT (user_id, local_date) DO NOTHING`,
-          [ci.check_in_id, ci.user_id || DEV_USER_ID, ci.local_date, ci.check_in_status, ci.created_at],
+          [ci.check_in_id, userId, ci.local_date, ci.check_in_status, ci.created_at],
         );
       }
 
-      for (const ld of snapshot.learningDays || []) {
+      for (const ld of (snapshot.learningDays || []).filter(ownedBy)) {
         await client.query(
           `INSERT INTO learning_day_facts (user_id, local_date, is_learning_day, effective_learning_count, effective_review_count, updated_at)
            VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id, local_date) DO UPDATE SET is_learning_day=$3, effective_learning_count=$4, effective_review_count=$5, updated_at=$6`,
-          [ld.user_id || DEV_USER_ID, ld.local_date, ld.learning_day, ld.effective_learning_count, ld.effective_review_count, ld.updated_at],
+          [userId, ld.local_date, ld.learning_day, ld.effective_learning_count, ld.effective_review_count, ld.updated_at],
         );
       }
 
-      if (snapshot.streakRecord) {
+      // streakRecord: snapshot's primary streak only applies to userId if
+      // it belongs to userId. Otherwise skip (we DELETE'd already above).
+      if (snapshot.streakRecord && ownedBy(snapshot.streakRecord)) {
         await client.query(
           `INSERT INTO streak_records (user_id, current_streak, streak_basis_type, last_check_in_date, updated_at)
            VALUES ($1,$2,$3,$4,$5) ON CONFLICT (user_id) DO UPDATE SET current_streak=$2, streak_basis_type=$3, last_check_in_date=$4, updated_at=$5`,
-          [snapshot.streakRecord.user_id || DEV_USER_ID, snapshot.streakRecord.current_streak, snapshot.streakRecord.streak_basis_type, snapshot.streakRecord.last_check_in_date || null, snapshot.streakRecord.updated_at],
+          [userId, snapshot.streakRecord.current_streak, snapshot.streakRecord.streak_basis_type, snapshot.streakRecord.last_check_in_date || null, snapshot.streakRecord.updated_at],
         );
       }
 
+      // todayStates: snapshot's todayStates Record<date, state> uses
+      // date-only keys — only persist entries whose user_id matches.
       for (const [date, state] of Object.entries<any>(snapshot.todayStates || {})) {
+        if (!ownedBy(state)) continue;
         await client.query(
           `INSERT INTO daily_goal_progress (user_id, local_date, new_target, new_completed, review_target, review_pending, review_completed, goal_status, active_review_group_id)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (user_id, local_date) DO UPDATE SET new_target=$3, new_completed=$4, review_target=$5, review_pending=$6, review_completed=$7, goal_status=$8, active_review_group_id=$9`,
-          [DEV_USER_ID, date, state.today_new_target, state.today_new_completed, state.today_review_target, state.today_review_pending, state.today_review_completed, state.daily_goal_status, state.active_review_group_id],
+          [userId, date, state.today_new_target, state.today_new_completed, state.today_review_target, state.today_review_pending, state.today_review_completed, state.daily_goal_status, state.active_review_group_id],
         );
       }
 
-      for (const fe of snapshot.feedRecords || []) {
+      for (const fe of (snapshot.feedRecords || []).filter(ownedBy)) {
         await client.query(
           `INSERT INTO feed_events (id, user_id, feed_item_type, consumed_amount, mood_delta, exp_delta, bond_delta, local_date, created_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
-          [fe.feed_id, fe.user_id || DEV_USER_ID, fe.feed_item_type, fe.consumed_amount, fe.mood_delta, fe.exp_delta, fe.bond_delta, fe.local_date, fe.created_at],
+          [fe.feed_id, userId, fe.feed_item_type, fe.consumed_amount, fe.mood_delta, fe.exp_delta, fe.bond_delta, fe.local_date, fe.created_at],
         );
       }
 
-      // Secondary wallet
-      await client.query(
-        `INSERT INTO secondary_wallets (user_id, coins_spent, feed_mood_accumulated, feed_exp_accumulated, feed_bond_accumulated, updated_at)
-         VALUES ($1,$2,$3,$4,$5,NOW()) ON CONFLICT (user_id) DO UPDATE SET coins_spent=$2, feed_mood_accumulated=$3, feed_exp_accumulated=$4, feed_bond_accumulated=$5, updated_at=NOW()`,
-        [DEV_USER_ID, snapshot.coinsSpent || 0, snapshot.feedMoodAccumulated || 0, snapshot.feedExpAccumulated || 0, snapshot.feedBondAccumulated || 0],
-      );
-
-      for (const oi of snapshot.ownedItems || []) {
+      // Secondary wallet (single-row per user; snapshot accumulators reflect
+      // the primary user — for current user only).
+      // β.5 limitation: dev-store snapshot.coinsSpent etc. is the primary
+      // user's view, not necessarily this userId's. β.5b will add per-user
+      // accumulator columns to snapshot. For now, only update wallet for
+      // the primary user (DEV_USER_ID under permissive AUTH_ENFORCE=false).
+      if (userId === DEV_USER_ID) {
         await client.query(
-          `INSERT INTO inventory_items (user_id, item_id, item_type, slot, equipped, owned_at)
-           VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id, item_id) DO UPDATE SET equipped=$5`,
-          [DEV_USER_ID, oi.item_id, oi.item_type, oi.slot, oi.equipped || false, oi.owned_at],
+          `INSERT INTO secondary_wallets (user_id, coins_spent, feed_mood_accumulated, feed_exp_accumulated, feed_bond_accumulated, updated_at)
+           VALUES ($1,$2,$3,$4,$5,NOW()) ON CONFLICT (user_id) DO UPDATE SET coins_spent=$2, feed_mood_accumulated=$3, feed_exp_accumulated=$4, feed_bond_accumulated=$5, updated_at=NOW()`,
+          [userId, snapshot.coinsSpent || 0, snapshot.feedMoodAccumulated || 0, snapshot.feedExpAccumulated || 0, snapshot.feedBondAccumulated || 0],
         );
       }
 
-      // Equipment slots
-      for (const [slot, itemId] of Object.entries(snapshot.equippedOutfit || {})) {
-        if (itemId) {
+      // ownedItems: legacy snapshot has no user_id field — only persist
+      // for the primary user (DEV_USER_ID). β.5b will add user_id column.
+      if (userId === DEV_USER_ID) {
+        for (const oi of snapshot.ownedItems || []) {
           await client.query(
-            `INSERT INTO equipment_slots (user_id, slot, item_type, item_id) VALUES ($1,$2,'outfit',$3) ON CONFLICT (user_id, slot, item_type) DO UPDATE SET item_id=$3, updated_at=NOW()`,
-            [DEV_USER_ID, slot, itemId],
+            `INSERT INTO inventory_items (user_id, item_id, item_type, slot, equipped, owned_at)
+             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id, item_id) DO UPDATE SET equipped=$5`,
+            [userId, oi.item_id, oi.item_type, oi.slot, oi.equipped || false, oi.owned_at],
           );
         }
-      }
-      for (const [slot, itemId] of Object.entries(snapshot.equippedRoom || {})) {
-        if (itemId) {
-          await client.query(
-            `INSERT INTO equipment_slots (user_id, slot, item_type, item_id) VALUES ($1,$2,'room_item',$3) ON CONFLICT (user_id, slot, item_type) DO UPDATE SET item_id=$3, updated_at=NOW()`,
-            [DEV_USER_ID, slot, itemId],
-          );
+
+        // Equipment slots — same single-user limit
+        for (const [slot, itemId] of Object.entries(snapshot.equippedOutfit || {})) {
+          if (itemId) {
+            await client.query(
+              `INSERT INTO equipment_slots (user_id, slot, item_type, item_id) VALUES ($1,$2,'outfit',$3) ON CONFLICT (user_id, slot, item_type) DO UPDATE SET item_id=$3, updated_at=NOW()`,
+              [userId, slot, itemId],
+            );
+          }
+        }
+        for (const [slot, itemId] of Object.entries(snapshot.equippedRoom || {})) {
+          if (itemId) {
+            await client.query(
+              `INSERT INTO equipment_slots (user_id, slot, item_type, item_id) VALUES ($1,$2,'room_item',$3) ON CONFLICT (user_id, slot, item_type) DO UPDATE SET item_id=$3, updated_at=NOW()`,
+              [userId, slot, itemId],
+            );
+          }
         }
       }
 
       // Idempotency keys
       // 需求 23 / migration 009: PK changed from (key) to (user_id, key).
-      // ON CONFLICT target must match the new PK columns.
       for (const [key, record] of Object.entries<any>(snapshot.idempotencyKeys || {})) {
+        if (!ownedBy(record)) continue;
         await client.query(
           `INSERT INTO idempotency_keys (key, user_id, path, response, created_at)
            VALUES ($1,$2,$3,$4,$5) ON CONFLICT (user_id, key) DO UPDATE SET response=$4`,
-          [record.key || key, record.user_id || DEV_USER_ID, record.path || '', JSON.stringify(record.response || {}), record.created_at || new Date().toISOString()],
+          [record.key || key, userId, record.path || '', JSON.stringify(record.response || {}), record.created_at || new Date().toISOString()],
         );
       }
 
@@ -429,17 +460,17 @@ export class PgDevStorePersistence implements IDevStorePersistence {
     }
   }
 
-  clear(): void {
-    this.clearAsync().catch(err => {
+  clear(userId: string = DEV_USER_ID): void {
+    this.clearAsync(userId).catch(err => {
       console.error('[PgPersistence] Clear failed:', err);
     });
   }
 
-  async clearAsync(): Promise<void> {
+  async clearAsync(userId: string = DEV_USER_ID): Promise<void> {
     // review_group_items has no user_id — delete via parent join
     await this.pool.query(
       `DELETE FROM review_group_items WHERE review_group_id IN (SELECT id FROM review_groups WHERE user_id = $1)`,
-      [DEV_USER_ID],
+      [userId],
     ).catch(() => {});
 
     const clearTables = [
@@ -451,16 +482,16 @@ export class PgDevStorePersistence implements IDevStorePersistence {
       'review_groups', 'study_attempts',
     ];
     for (const table of clearTables) {
-      await this.pool.query(`DELETE FROM ${table} WHERE user_id = $1`, [DEV_USER_ID]).catch(() => {});
+      await this.pool.query(`DELETE FROM ${table} WHERE user_id = $1`, [userId]).catch(() => {});
     }
     // Reset wallet + streak to defaults
     await this.pool.query(
       `UPDATE secondary_wallets SET coins_spent=0, feed_mood_accumulated=0, feed_exp_accumulated=0, feed_bond_accumulated=0 WHERE user_id=$1`,
-      [DEV_USER_ID],
+      [userId],
     ).catch(() => {});
     await this.pool.query(
       `UPDATE streak_records SET current_streak=0, last_check_in_date=NULL WHERE user_id=$1`,
-      [DEV_USER_ID],
+      [userId],
     ).catch(() => {});
   }
 

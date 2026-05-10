@@ -144,41 +144,156 @@ import { createPersistence } from './persistence-factory';
  * to the active persistence backend (PostgreSQL by default, JSON fallback).
  */
 export class DevStore {
-  // 需求 23 Phase A4-α: userId is now bound per-request via public method
-  // entry. Each public method writes `this.userId = userIdParam` at top,
-  // and downstream `this.userId` references read it. Single-threaded
-  // Node.js makes this safe under permissive AUTH_ENFORCE=false (where all
-  // requests resolve to DEV_FALLBACK_USER_ID anyway). When AUTH_ENFORCE=true,
-  // A4-β must replace this with per-user state buckets.
+  // 需求 23 Phase A4-β.3: in-memory state is now PARTITIONED per-user via
+  // *ByUser maps. The current "bound" user (`this.userId`) is still set
+  // at the top of every public method via withUser; legacy method bodies
+  // continue to read `this.studyAttempts`, `this.coinsSpent`, etc. — those
+  // are now TypeScript getters that resolve to the current user's bucket.
+  //
+  // Hydrate / serialize keep flat shapes (compatible with PG schema and
+  // pre-β.3 JSON snapshots).
   private userId: string = DEV_USER_ID;
 
   // Persistence adapter (PG or JSON, determined by factory)
   private persistence: IDevStorePersistence;
 
-  // State storage
-  private todayStates: Map<string, TodayState> = new Map();
-  private studyAttempts: StudyAttempt[] = [];
-  private reviewGroups: ReviewGroup[] = [];
-  private reviewAttempts: ReviewAttempt[] = [];
-  private idempotencyKeys: Map<string, IdempotencyKeyRecord> = new Map();
-  
-  // Phase 2: Reward settlement storage
-  private sourceEvents: RewardSourceEvent[] = [];
-  private rewardLedgerItems: RewardLedgerItem[] = [];
-  private settlements: Settlement[] = [];
-  
-  // Phase 3: Session / Check-in / Streak storage
-  private sessions: Session[] = [];
-  private checkIns: CheckInRecord[] = [];
-  private streakRecord: StreakRecord | null = null;
-  private learningDays: LearningDayRecord[] = [];
+  // ========== Per-user partitioned state ==========
+  // (the public legacy fields are getters defined below)
 
-  // Phase 2A: Feed storage
-  private feedRecords: FeedRecord[] = [];
-  // Accumulated mood/exp deltas from feeding (separate from reward-derived values)
-  private feedMoodAccumulated = 0;
-  private feedExpAccumulated = 0;
-  private feedBondAccumulated = 0;
+  private studyAttemptsByUser: Map<string, StudyAttempt[]> = new Map();
+  private reviewGroupsByUser: Map<string, ReviewGroup[]> = new Map();
+  private reviewAttemptsByUser: Map<string, ReviewAttempt[]> = new Map();
+  private todayStatesByUser: Map<string, Map<string, TodayState>> = new Map();
+  private idempotencyKeysByUser: Map<string, Map<string, IdempotencyKeyRecord>> = new Map();
+  private sourceEventsByUser: Map<string, RewardSourceEvent[]> = new Map();
+  private rewardLedgerItemsByUser: Map<string, RewardLedgerItem[]> = new Map();
+  private settlementsByUser: Map<string, Settlement[]> = new Map();
+  private sessionsByUser: Map<string, Session[]> = new Map();
+  private checkInsByUser: Map<string, CheckInRecord[]> = new Map();
+  private streakRecordByUser: Map<string, StreakRecord> = new Map();
+  private learningDaysByUser: Map<string, LearningDayRecord[]> = new Map();
+  private feedRecordsByUser: Map<string, FeedRecord[]> = new Map();
+  private feedMoodAccumulatedByUser: Map<string, number> = new Map();
+  private feedExpAccumulatedByUser: Map<string, number> = new Map();
+  private feedBondAccumulatedByUser: Map<string, number> = new Map();
+  private ownedItemsByUser: Map<string, OwnedItem[]> = new Map();
+  private coinsSpentByUser: Map<string, number> = new Map();
+  private equippedOutfitByUser: Map<string, Record<string, string | null>> = new Map();
+  private equippedRoomByUser: Map<string, Record<string, string | null>> = new Map();
+  private fishingTasksByUser: Map<string, Map<string, DailyFishingTask>> = new Map();
+  private fishingAttemptsByUser: Map<string, FishingAttempt[]> = new Map();
+  private lotteryBoxesByUser: Map<string, LotteryBox[]> = new Map();
+
+  // ========== Bucket helpers ==========
+
+  private bucketArr<T>(map: Map<string, T[]>, userId: string = this.userId): T[] {
+    let arr = map.get(userId);
+    if (!arr) { arr = []; map.set(userId, arr); }
+    return arr;
+  }
+
+  private bucketMap<K, V>(
+    outer: Map<string, Map<K, V>>,
+    userId: string = this.userId,
+  ): Map<K, V> {
+    let inner = outer.get(userId);
+    if (!inner) { inner = new Map(); outer.set(userId, inner); }
+    return inner;
+  }
+
+  // ========== Legacy field facades (getters/setters route to current bucket) ==========
+
+  private get studyAttempts(): StudyAttempt[] {
+    return this.bucketArr(this.studyAttemptsByUser);
+  }
+  private get reviewGroups(): ReviewGroup[] {
+    return this.bucketArr(this.reviewGroupsByUser);
+  }
+  private get reviewAttempts(): ReviewAttempt[] {
+    return this.bucketArr(this.reviewAttemptsByUser);
+  }
+  private get todayStates(): Map<string, TodayState> {
+    return this.bucketMap(this.todayStatesByUser);
+  }
+  private get idempotencyKeys(): Map<string, IdempotencyKeyRecord> {
+    return this.bucketMap(this.idempotencyKeysByUser);
+  }
+  private get sourceEvents(): RewardSourceEvent[] {
+    return this.bucketArr(this.sourceEventsByUser);
+  }
+  private get rewardLedgerItems(): RewardLedgerItem[] {
+    return this.bucketArr(this.rewardLedgerItemsByUser);
+  }
+  private get settlements(): Settlement[] {
+    return this.bucketArr(this.settlementsByUser);
+  }
+  private get sessions(): Session[] {
+    return this.bucketArr(this.sessionsByUser);
+  }
+  private get checkIns(): CheckInRecord[] {
+    return this.bucketArr(this.checkInsByUser);
+  }
+  private get learningDays(): LearningDayRecord[] {
+    return this.bucketArr(this.learningDaysByUser);
+  }
+  private get feedRecords(): FeedRecord[] {
+    return this.bucketArr(this.feedRecordsByUser);
+  }
+  private get ownedItems(): OwnedItem[] {
+    return this.bucketArr(this.ownedItemsByUser);
+  }
+  private get fishingTasks(): Map<string, DailyFishingTask> {
+    return this.bucketMap(this.fishingTasksByUser);
+  }
+  private get fishingAttempts(): FishingAttempt[] {
+    return this.bucketArr(this.fishingAttemptsByUser);
+  }
+  private get lotteryBoxes(): LotteryBox[] {
+    return this.bucketArr(this.lotteryBoxesByUser);
+  }
+
+  // Single-value field facades (must support both read & write)
+  private get streakRecord(): StreakRecord | null {
+    return this.streakRecordByUser.get(this.userId) ?? null;
+  }
+  private set streakRecord(v: StreakRecord | null) {
+    if (v === null) this.streakRecordByUser.delete(this.userId);
+    else this.streakRecordByUser.set(this.userId, v);
+  }
+  private get coinsSpent(): number {
+    return this.coinsSpentByUser.get(this.userId) ?? 0;
+  }
+  private set coinsSpent(v: number) {
+    this.coinsSpentByUser.set(this.userId, v);
+  }
+  private get feedMoodAccumulated(): number {
+    return this.feedMoodAccumulatedByUser.get(this.userId) ?? 0;
+  }
+  private set feedMoodAccumulated(v: number) {
+    this.feedMoodAccumulatedByUser.set(this.userId, v);
+  }
+  private get feedExpAccumulated(): number {
+    return this.feedExpAccumulatedByUser.get(this.userId) ?? 0;
+  }
+  private set feedExpAccumulated(v: number) {
+    this.feedExpAccumulatedByUser.set(this.userId, v);
+  }
+  private get feedBondAccumulated(): number {
+    return this.feedBondAccumulatedByUser.get(this.userId) ?? 0;
+  }
+  private set feedBondAccumulated(v: number) {
+    this.feedBondAccumulatedByUser.set(this.userId, v);
+  }
+  private get equippedOutfit(): Record<string, string | null> {
+    let r = this.equippedOutfitByUser.get(this.userId);
+    if (!r) { r = {}; this.equippedOutfitByUser.set(this.userId, r); }
+    return r;
+  }
+  private get equippedRoom(): Record<string, string | null> {
+    let r = this.equippedRoomByUser.get(this.userId);
+    if (!r) { r = {}; this.equippedRoomByUser.set(this.userId, r); }
+    return r;
+  }
 
   // Assumption (temporary, not frozen):
   // Minimal dev-only cat profile defaults for P2 bridge layer.
@@ -188,25 +303,11 @@ export class DevStore {
     baseBond: 0,
   };
 
-  // Phase 2D: Inventory
-  private ownedItems: OwnedItem[] = [];
-  private coinsSpent = 0;
-
-  // Phase 3: Equipped state — slot -> item_id
-  private equippedOutfit: Record<string, string | null> = {};
-  private equippedRoom: Record<string, string | null> = {};
-
-  // P3.2 — Cloud backup storage (persisted, last-write-wins).
-  // 需求 23 Phase A4-β.2: per-user buckets. Each user has at most one
-  // most-recent backup (last-write-wins within their own slot). Was a
-  // single global slot in α — that leaked across users.
+  // P3.2 — Cloud backup storage (persisted, last-write-wins, per-user).
+  // 需求 23 Phase A4-β.2: per-user buckets. Methods take userId as
+  // first arg directly (no withUser wrapping needed).
   private latestBackupByUser: Map<string, any> = new Map();
   private backupSnapshotByUser: Map<string, any> = new Map();
-
-  // Phase D: Fishing + Lottery
-  private fishingTasks: Map<string, DailyFishingTask> = new Map(); // key: "ft-{taskDate}"
-  private fishingAttempts: FishingAttempt[] = [];
-  private lotteryBoxes: LotteryBox[] = [];
 
   // Prize pool: seeded inline — mirrors lottery_drops_config seed data
   private readonly lotteryDropsConfig: LotteryDropConfig[] = [
@@ -287,7 +388,10 @@ export class DevStore {
   async initAsync(): Promise<void> {
     const pg = this.persistence as any;
     if (typeof pg.loadAsync === 'function') {
-      const snapshot = await pg.loadAsync();
+      // β.5 startup: load only DEV_USER_ID's slice. Other users' state
+      // restores on demand via lazyLoad (β.5b — currently a stub: data
+      // for non-dev users will only exist after their first request).
+      const snapshot = await pg.loadAsync(DEV_USER_ID);
       if (snapshot) {
         this.hydrate(snapshot);
         console.log('[DevStore] State restored from PostgreSQL.');
@@ -301,86 +405,181 @@ export class DevStore {
 
   /**
    * Serialize all mutable state to a snapshot for persistence.
+   *
+   * 需求 23 Phase A4-β.3: in-memory state is per-user. Snapshot keeps the
+   * flat shape (compatible with PG schema + pre-β.3 JSON snapshots).
+   * We flatten across all user buckets — each entity row has its own
+   * user_id field which is the source of truth on hydrate.
    */
   serialize(): DevStoreSnapshot {
+    const flat = <T>(map: Map<string, T[]>): T[] => {
+      const out: T[] = [];
+      for (const arr of map.values()) out.push(...arr);
+      return out;
+    };
+
+    // β.3 limitation: pg-persistence still operates on single-user snapshots
+    // (β.5 fixes that). For Map<key, T>-shaped fields where the key is NOT
+    // the userId (e.g. local_date, idempotency key string, fishing task id),
+    // dump only the DEV_USER_ID bucket — other users' Map data stays
+    // in-memory until β.5 lands.
+    //
+    // Array fields (studyAttempts etc.) DO flatten across all users —
+    // pg-persistence inserts each row using its own `user_id` column.
+    const primaryForMaps = DEV_USER_ID;
     const todayStatesObj: Record<string, any> = {};
-    for (const [k, v] of this.todayStates.entries()) {
-      todayStatesObj[k] = v;
+    const todayMap = this.todayStatesByUser.get(primaryForMaps);
+    if (todayMap) {
+      for (const [date, state] of todayMap.entries()) {
+        todayStatesObj[date] = state;
+      }
     }
     const idempotencyKeysObj: Record<string, any> = {};
-    for (const [k, v] of this.idempotencyKeys.entries()) {
-      idempotencyKeysObj[k] = v;
+    const idemMap = this.idempotencyKeysByUser.get(primaryForMaps);
+    if (idemMap) {
+      for (const [k, v] of idemMap.entries()) {
+        idempotencyKeysObj[k] = v;
+      }
     }
     const fishingTasksObj: Record<string, any> = {};
-    for (const [k, v] of this.fishingTasks.entries()) {
-      fishingTasksObj[k] = v;
+    const ftMap = this.fishingTasksByUser.get(primaryForMaps);
+    if (ftMap) {
+      for (const [tid, task] of ftMap.entries()) {
+        fishingTasksObj[tid] = task;
+      }
     }
+
+    // Single-value per-user fields collapse to a primary-user view for the
+    // legacy flat snapshot fields (backward compat). The new *ByUser
+    // records are the truth; legacy fields kept for old hydrate paths.
+    const primary = DEV_USER_ID;
     return {
-      studyAttempts: this.studyAttempts,
-      reviewGroups: this.reviewGroups,
-      reviewAttempts: this.reviewAttempts,
-      sourceEvents: this.sourceEvents,
-      rewardLedgerItems: this.rewardLedgerItems,
-      settlements: this.settlements,
-      sessions: this.sessions,
-      checkIns: this.checkIns,
-      streakRecord: this.streakRecord,
-      learningDays: this.learningDays,
+      studyAttempts: flat(this.studyAttemptsByUser),
+      reviewGroups: flat(this.reviewGroupsByUser),
+      reviewAttempts: flat(this.reviewAttemptsByUser),
+      sourceEvents: flat(this.sourceEventsByUser),
+      rewardLedgerItems: flat(this.rewardLedgerItemsByUser),
+      settlements: flat(this.settlementsByUser),
+      sessions: flat(this.sessionsByUser),
+      checkIns: flat(this.checkInsByUser),
+      streakRecord: this.streakRecordByUser.get(primary) ?? null,
+      learningDays: flat(this.learningDaysByUser),
       todayStates: todayStatesObj,
-      feedRecords: this.feedRecords,
-      feedMoodAccumulated: this.feedMoodAccumulated,
-      feedExpAccumulated: this.feedExpAccumulated,
-      feedBondAccumulated: this.feedBondAccumulated,
-      ownedItems: this.ownedItems,
-      coinsSpent: this.coinsSpent,
-      equippedOutfit: this.equippedOutfit,
-      equippedRoom: this.equippedRoom,
+      feedRecords: flat(this.feedRecordsByUser),
+      feedMoodAccumulated: this.feedMoodAccumulatedByUser.get(primary) ?? 0,
+      feedExpAccumulated: this.feedExpAccumulatedByUser.get(primary) ?? 0,
+      feedBondAccumulated: this.feedBondAccumulatedByUser.get(primary) ?? 0,
+      ownedItems: flat(this.ownedItemsByUser),
+      coinsSpent: this.coinsSpentByUser.get(primary) ?? 0,
+      equippedOutfit: this.equippedOutfitByUser.get(primary) ?? {},
+      equippedRoom: this.equippedRoomByUser.get(primary) ?? {},
       idempotencyKeys: idempotencyKeysObj,
       // β.2: per-user backup buckets serialized as Record<userId, ...>.
-      // Legacy single-slot fields removed from output (still readable on
-      // hydrate for backward-compat with pre-β.2 snapshots).
       latestBackupsByUser: Object.fromEntries(this.latestBackupByUser.entries()),
       backupSnapshotsByUser: Object.fromEntries(this.backupSnapshotByUser.entries()),
       fishingTasks: fishingTasksObj,
-      fishingAttempts: this.fishingAttempts,
-      lotteryBoxes: this.lotteryBoxes,
+      fishingAttempts: flat(this.fishingAttemptsByUser),
+      lotteryBoxes: flat(this.lotteryBoxesByUser),
     };
   }
 
   /**
    * Hydrate in-memory state from a snapshot.
+   *
+   * 需求 23 Phase A4-β.3: each entity row is bucketed by its own
+   * `user_id` field. Legacy snapshots without user_id (extremely rare
+   * dev-only) get assigned to DEV_USER_ID.
    */
   hydrate(snapshot: DevStoreSnapshot): void {
-    this.studyAttempts = snapshot.studyAttempts ?? [];
-    this.reviewGroups = snapshot.reviewGroups ?? [];
-    this.reviewAttempts = snapshot.reviewAttempts ?? [];
-    this.sourceEvents = snapshot.sourceEvents ?? [];
-    this.rewardLedgerItems = snapshot.rewardLedgerItems ?? [];
-    this.settlements = snapshot.settlements ?? [];
-    this.sessions = snapshot.sessions ?? [];
-    this.checkIns = snapshot.checkIns ?? [];
-    this.streakRecord = snapshot.streakRecord ?? null;
-    this.learningDays = snapshot.learningDays ?? [];
-    this.feedRecords = snapshot.feedRecords ?? [];
-    this.feedMoodAccumulated = snapshot.feedMoodAccumulated ?? 0;
-    this.feedExpAccumulated = snapshot.feedExpAccumulated ?? 0;
-    this.feedBondAccumulated = snapshot.feedBondAccumulated ?? 0;
-    this.ownedItems = snapshot.ownedItems ?? [];
-    this.coinsSpent = snapshot.coinsSpent ?? 0;
-    this.equippedOutfit = snapshot.equippedOutfit ?? {};
-    this.equippedRoom = snapshot.equippedRoom ?? {};
+    const bucketize = <T extends { user_id?: string }>(
+      flat: T[] | undefined,
+      target: Map<string, T[]>,
+    ) => {
+      target.clear();
+      for (const row of flat ?? []) {
+        const uid = row.user_id ?? DEV_USER_ID;
+        let arr = target.get(uid);
+        if (!arr) { arr = []; target.set(uid, arr); }
+        arr.push(row);
+      }
+    };
 
-    // Restore Maps
-    this.todayStates.clear();
+    bucketize(snapshot.studyAttempts, this.studyAttemptsByUser);
+    bucketize(snapshot.reviewGroups, this.reviewGroupsByUser);
+    bucketize(snapshot.reviewAttempts, this.reviewAttemptsByUser);
+    bucketize(snapshot.sourceEvents as any, this.sourceEventsByUser);
+    bucketize(snapshot.rewardLedgerItems as any, this.rewardLedgerItemsByUser);
+    bucketize(snapshot.settlements as any, this.settlementsByUser);
+    bucketize(snapshot.sessions as any, this.sessionsByUser);
+    bucketize(snapshot.checkIns as any, this.checkInsByUser);
+    bucketize(snapshot.learningDays as any, this.learningDaysByUser);
+    bucketize(snapshot.feedRecords as any, this.feedRecordsByUser);
+    bucketize(snapshot.fishingAttempts as any ?? [], this.fishingAttemptsByUser);
+    bucketize(snapshot.lotteryBoxes as any ?? [], this.lotteryBoxesByUser);
+
+    // ownedItems has no user_id field — assign all to DEV_USER_ID for now
+    // (β.3 limitation noted in plan; type doesn't carry owner). PG seed
+    // does have user_id on inventory_items rows, so this matters mostly
+    // for json-mode tests where multi-user data might exist.
+    this.ownedItemsByUser.clear();
+    if (snapshot.ownedItems && snapshot.ownedItems.length > 0) {
+      this.ownedItemsByUser.set(DEV_USER_ID, [...snapshot.ownedItems]);
+    }
+
+    // Single-value per-user fields hydrate to DEV_USER_ID bucket
+    // (legacy snapshot has only one user's view).
+    const primary = DEV_USER_ID;
+    this.streakRecordByUser.clear();
+    if (snapshot.streakRecord) {
+      const sr = snapshot.streakRecord as StreakRecord;
+      this.streakRecordByUser.set(sr.user_id ?? primary, sr);
+    }
+    this.feedMoodAccumulatedByUser.clear();
+    this.feedMoodAccumulatedByUser.set(primary, snapshot.feedMoodAccumulated ?? 0);
+    this.feedExpAccumulatedByUser.clear();
+    this.feedExpAccumulatedByUser.set(primary, snapshot.feedExpAccumulated ?? 0);
+    this.feedBondAccumulatedByUser.clear();
+    this.feedBondAccumulatedByUser.set(primary, snapshot.feedBondAccumulated ?? 0);
+    this.coinsSpentByUser.clear();
+    this.coinsSpentByUser.set(primary, snapshot.coinsSpent ?? 0);
+    this.equippedOutfitByUser.clear();
+    this.equippedOutfitByUser.set(primary, snapshot.equippedOutfit ?? {});
+    this.equippedRoomByUser.clear();
+    this.equippedRoomByUser.set(primary, snapshot.equippedRoom ?? {});
+
+    // todayStates: snapshot uses date-only keys (β.3 single-user persistence
+    // limit; β.5 will introduce per-user persistence). Each value's
+    // user_id field is the source of truth for partitioning.
+    this.todayStatesByUser.clear();
     if (snapshot.todayStates) {
-      for (const [k, v] of Object.entries(snapshot.todayStates)) {
-        this.todayStates.set(k, v);
+      for (const [date, v] of Object.entries(snapshot.todayStates)) {
+        const uid = (v as any)?.user_id ?? primary;
+        let inner = this.todayStatesByUser.get(uid);
+        if (!inner) { inner = new Map(); this.todayStatesByUser.set(uid, inner); }
+        inner.set(date, v as TodayState);
       }
     }
-    this.idempotencyKeys.clear();
+
+    this.idempotencyKeysByUser.clear();
     if (snapshot.idempotencyKeys) {
-      for (const [k, v] of Object.entries(snapshot.idempotencyKeys)) {
-        this.idempotencyKeys.set(k, v);
+      for (const [key, v] of Object.entries(snapshot.idempotencyKeys)) {
+        const rec = v as any;
+        const uid = rec?.user_id ?? primary;
+        let inner = this.idempotencyKeysByUser.get(uid);
+        if (!inner) { inner = new Map(); this.idempotencyKeysByUser.set(uid, inner); }
+        inner.set(key, { ...rec, key, user_id: uid });
+      }
+    }
+
+    // fishingTasks: each task has user_id field.
+    this.fishingTasksByUser.clear();
+    if (snapshot.fishingTasks) {
+      for (const [tid, v] of Object.entries(snapshot.fishingTasks)) {
+        const task = v as DailyFishingTask;
+        const uid = task.user_id ?? primary;
+        let inner = this.fishingTasksByUser.get(uid);
+        if (!inner) { inner = new Map(); this.fishingTasksByUser.set(uid, inner); }
+        inner.set(tid, task);
       }
     }
 
@@ -405,15 +604,8 @@ export class DevStore {
       this.backupSnapshotByUser.set(DEV_USER_ID, snapshot.backupSnapshot);
     }
 
-    // Phase D: Fishing + Lottery (optional — backward compat)
-    this.fishingTasks.clear();
-    if (snapshot.fishingTasks) {
-      for (const [k, v] of Object.entries(snapshot.fishingTasks)) {
-        this.fishingTasks.set(k, v as DailyFishingTask);
-      }
-    }
-    this.fishingAttempts = snapshot.fishingAttempts ?? [];
-    this.lotteryBoxes = snapshot.lotteryBoxes ?? [];
+    // Phase D fishingAttempts / lotteryBoxes already bucketized above.
+    // fishingTasks Map already populated above.
   }
 
   // Serialized save chain — only one PG save runs at a time
@@ -428,9 +620,10 @@ export class DevStore {
   saveToDisk(): void {
     if (this.persistence.saveAsync) {
       const snapshot = this.serialize();
+      const userIdAtSave = this.userId; // capture bound user
       this.saveError = null;
       this.saveChain = this.saveChain
-        .then(() => this.persistence.saveAsync!(snapshot))
+        .then(() => this.persistence.saveAsync!(snapshot, userIdAtSave))
         .catch(err => {
           this.saveError = err;
           console.error('[DevStore] PG save failed:', err?.message || err);
@@ -1299,36 +1492,37 @@ export class DevStore {
   /**
    * Reset store (for testing).
    * Clears both in-memory state and persisted file.
+   *
+   * 需求 23 Phase A4-β.3: clear all *ByUser buckets (was per-field
+   * single-state in α/pre-β).
    */
   reset(): void {
-    this.todayStates.clear();
-    this.studyAttempts = [];
-    this.reviewGroups = [];
-    this.reviewAttempts = [];
-    this.idempotencyKeys.clear();
-    this.sourceEvents = [];
-    this.rewardLedgerItems = [];
-    this.settlements = [];
-    // Phase 3
-    this.sessions = [];
-    this.checkIns = [];
-    this.streakRecord = null;
-    this.learningDays = [];
-    // Phase 2A
-    this.feedRecords = [];
-    this.feedMoodAccumulated = 0;
-    this.feedExpAccumulated = 0;
-    this.feedBondAccumulated = 0;
-    // Phase 2D
-    this.ownedItems = [];
-    this.coinsSpent = 0;
-    // Phase 3
-    this.equippedOutfit = {};
-    this.equippedRoom = {};
-    // Phase D
-    this.fishingTasks.clear();
-    this.fishingAttempts = [];
-    this.lotteryBoxes = [];
+    this.studyAttemptsByUser.clear();
+    this.reviewGroupsByUser.clear();
+    this.reviewAttemptsByUser.clear();
+    this.todayStatesByUser.clear();
+    this.idempotencyKeysByUser.clear();
+    this.sourceEventsByUser.clear();
+    this.rewardLedgerItemsByUser.clear();
+    this.settlementsByUser.clear();
+    this.sessionsByUser.clear();
+    this.checkInsByUser.clear();
+    this.streakRecordByUser.clear();
+    this.learningDaysByUser.clear();
+    this.feedRecordsByUser.clear();
+    this.feedMoodAccumulatedByUser.clear();
+    this.feedExpAccumulatedByUser.clear();
+    this.feedBondAccumulatedByUser.clear();
+    this.ownedItemsByUser.clear();
+    this.coinsSpentByUser.clear();
+    this.equippedOutfitByUser.clear();
+    this.equippedRoomByUser.clear();
+    this.fishingTasksByUser.clear();
+    this.fishingAttemptsByUser.clear();
+    this.lotteryBoxesByUser.clear();
+    // β.2: backup buckets
+    this.latestBackupByUser.clear();
+    this.backupSnapshotByUser.clear();
     // Phase 4: clear persistence
     this.persistence.clear();
   }
