@@ -18,6 +18,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:meow_mobile/core/api/api_client.dart';
 import 'package:meow_mobile/core/auth/auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -30,7 +31,7 @@ class _SecureChannelStub {
     const channel = MethodChannel(
       'plugins.it_nomads.com/flutter_secure_storage',
     );
-    TestDefaultBinaryMessengerBinding.instance!.defaultBinaryMessenger
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
       final args = call.arguments as Map?;
       final key = args?['key'] as String?;
@@ -238,7 +239,7 @@ void main() {
       expect(controller.currentUser?.id, 'user-existing');
     });
 
-    test('offline (network throws) without token → offlineGuest state',
+    test('offline (network throws) without token → offlineGuest state + persisted placeholder',
         () async {
       final prefs = await SharedPreferences.getInstance();
       final storage = AuthStorage(
@@ -259,13 +260,44 @@ void main() {
       );
 
       expect(controller.status, AuthStatus.offlineGuest);
-      // currentUserId placeholder used for downstream local queries
       expect(controller.currentUserId, AuthStorage.pendingLocalGuestUserId);
+      // Phase B fix-5: placeholder is PERSISTED to SP per plan v2 §6.3
+      // so drift migration (Phase C) has a stable user_id source.
+      expect(storage.readUserId(), AuthStorage.pendingLocalGuestUserId);
+      expect(storage.readAccountType(), AccountType.guest);
+    });
+
+    test('Phase B fix-4: network error with registered token → keeps registered status (NOT tokenExpired)',
+        () async {
+      final prefs = await SharedPreferences.getInstance();
+      final storage = AuthStorage(
+        secure: const FlutterSecureStorage(),
+        prefs: prefs,
+      );
+      await storage.writeToken('tok-net');
+      await storage.writeUserId('user-existing');
+      await storage.writeAccountType(AccountType.registered);
+
+      // Server returns 503 (5xx, not 401) — transient network failure.
+      final fakeClient = _FakeHttpClient(
+        statusFn: (r) => 503,
+        bodyFn: (r) => '{"statusCode":503,"message":"upstream timeout"}',
+      );
+      final api = AuthApi(client: fakeClient);
+      final controller = AuthController(storage: storage, api: api);
+
+      await controller.bootstrap(deviceId: 'dev-net');
+
+      // Registered user with network error should NOT be told "登录已过期".
+      expect(controller.status, AuthStatus.authedRegistered);
+      // Token is preserved (might still work on next retry); not cleared.
+      expect(await storage.readToken(), 'tok-net');
     });
   });
 
   group('AuthController actions', () {
-    test('logout clears storage and transitions to offlineGuest', () async {
+    test('logout without bootstrap → offlineGuest (no deviceId to re-attach)',
+        () async {
       final prefs = await SharedPreferences.getInstance();
       final storage = AuthStorage(
         secure: const FlutterSecureStorage(),
@@ -281,14 +313,76 @@ void main() {
       );
       final api = AuthApi(client: fakeClient);
       final controller = AuthController(storage: storage, api: api);
-      // Skip bootstrap; set state manually for the test
-      // by using internal _commitSession path via login mock
-      // (we don't have direct field setter — just call logout)
+      // No bootstrap → no _boundDeviceId. logout falls back to offlineGuest.
       await controller.logout();
 
       expect(controller.status, AuthStatus.offlineGuest);
       expect(await storage.readToken(), isNull);
       expect(storage.readUserId(), isNull);
+    });
+
+    test('Phase B fix-3: logout AFTER bootstrap re-attaches as guest', () async {
+      final prefs = await SharedPreferences.getInstance();
+      final storage = AuthStorage(
+        secure: const FlutterSecureStorage(),
+        prefs: prefs,
+      );
+
+      // Programmable responses: bootstrap calls /auth/guest → returns guest;
+      // login calls /auth/login → returns registered;
+      // logout calls /auth/logout then /auth/guest (re-attach).
+      var callIndex = 0;
+      final fakeClient = _FakeHttpClient(
+        statusFn: (r) => 200,
+        bodyFn: (r) {
+          callIndex++;
+          if (r.url.path.endsWith('/auth/logout')) {
+            return '{"status":"ok"}';
+          }
+          if (r.url.path.endsWith('/auth/login')) {
+            return json.encode({
+              'user': {
+                'id': 'user-reg-1',
+                'email': 'x@b.com',
+                'nickname': 'X',
+                'account_type': 'registered',
+                'created_at': '2026-05-10T00:00:00Z',
+              },
+              'token': 'tok-reg',
+              'expires_at': 9999999999,
+            });
+          }
+          // /auth/guest — first call returns guest-1, second (post-logout)
+          // returns guest-2 (different device wouldn't change ID, but for
+          // the test we just want a distinct token to prove re-attach).
+          return json.encode({
+            'user': {
+              'id': callIndex == 1 ? 'guest-1' : 'guest-2',
+              'email': null,
+              'nickname': 'Learner',
+              'account_type': 'guest',
+              'created_at': '2026-05-10T00:00:00Z',
+            },
+            'token': callIndex == 1 ? 'tok-g1' : 'tok-g2',
+            'expires_at': 9999999999,
+          });
+        },
+      );
+      final api = AuthApi(client: fakeClient);
+      final controller = AuthController(storage: storage, api: api);
+
+      // Bootstrap as guest, then login as registered, then logout.
+      await controller.bootstrap(deviceId: 'dev-abc');
+      expect(controller.status, AuthStatus.authedGuest);
+      await controller.login(email: 'x@b.com', password: 'pw12345678');
+      expect(controller.status, AuthStatus.authedRegistered);
+
+      await controller.logout();
+
+      // After logout: re-attached as guest (NOT offlineGuest).
+      expect(controller.status, AuthStatus.authedGuest);
+      expect(await storage.readToken(), 'tok-g2');
+      expect(storage.readUserId(), 'guest-2');
     });
 
     test('epoch increments on session commit and logout', () async {
@@ -325,6 +419,8 @@ void main() {
       expect(e2, greaterThan(e1));
     });
   });
+
+  _registerIntegrationTests();
 
   group('AuthHttpClient interceptor', () {
     test('injects Authorization header when token in storage', () async {
@@ -395,4 +491,124 @@ class SocketExceptionLike implements Exception {
   const SocketExceptionLike();
   @override
   String toString() => 'SocketExceptionLike';
+}
+
+/// Phase B fix-7 (评审采纳): integration test proving ApiClient actually
+/// uses the AuthHttpClient set via setDefaultHttpClient. Review 1+2 P1
+/// flagged that AuthHttpClient was an "orphan class" with 18 ApiClient
+/// call sites still using bare http. This test exercises the wiring end
+/// to end so a future regression that disconnects them is caught.
+void _registerIntegrationTests() {
+  group('ApiClient ↔ AuthHttpClient wiring (Phase B fix-7)', () {
+    tearDown(() {
+      // Clean up the process-wide default so other tests don't inherit
+      // an AuthHttpClient + stale storage.
+      ApiClient.setDefaultHttpClient(null);
+    });
+
+    test(
+        'ApiClient with no explicit client picks up the default AuthHttpClient '
+        '→ Authorization header is injected', () async {
+      final prefs = await SharedPreferences.getInstance();
+      final storage = AuthStorage(
+        secure: const FlutterSecureStorage(),
+        prefs: prefs,
+      );
+      await storage.writeToken('tok-integration-1');
+
+      final inner = _FakeHttpClient(
+        statusFn: (r) => 200,
+        bodyFn: (r) => json.encode({
+          'current_book_name': 'CET-4',
+          'today_new_target': 20,
+          'today_new_completed': 0,
+          'today_review_target': 0,
+          'today_review_pending': 0,
+          'today_review_completed': 0,
+          'daily_goal_status': 'not_started',
+          'active_review_group_id': null,
+          'active_review_group_status': null,
+          'active_review_group_remaining': 0,
+          'sync_status': 'healthy',
+        }),
+      );
+      final controller = AuthController(
+        storage: storage,
+        api: AuthApi(client: inner),
+      );
+      final authClient = AuthHttpClient(
+        storage: storage,
+        controller: controller,
+        inner: inner,
+      );
+
+      // The wiring under test: install authClient as process-wide default.
+      ApiClient.setDefaultHttpClient(authClient);
+
+      // Call ApiClient with NO explicit client arg. This is the shape
+      // used by ~18 existing call sites (`ApiClient()` zero-arg).
+      final client = ApiClient(baseUrl: 'http://x.test/api/v1');
+      await client.getToday();
+
+      // Critical assertion: the underlying request carried the token.
+      expect(inner.sent.length, 1);
+      expect(
+        inner.sent[0].headers['Authorization'],
+        'Bearer tok-integration-1',
+        reason: 'ApiClient zero-arg must inherit the auth-aware default '
+            'http.Client; otherwise AUTH_ENFORCE=true would 401 every '
+            '/me/* call. Review 1+2 P1 hot-fix.',
+      );
+    });
+
+    test('explicit client: still wins over default', () async {
+      final prefs = await SharedPreferences.getInstance();
+      final storage = AuthStorage(
+        secure: const FlutterSecureStorage(),
+        prefs: prefs,
+      );
+      await storage.writeToken('tok-default');
+
+      final defaultInner = _FakeHttpClient(
+        statusFn: (r) => 200,
+        bodyFn: (r) => '{}',
+      );
+      final controller = AuthController(
+        storage: storage,
+        api: AuthApi(client: defaultInner),
+      );
+      ApiClient.setDefaultHttpClient(AuthHttpClient(
+        storage: storage,
+        controller: controller,
+        inner: defaultInner,
+      ));
+
+      // Explicit override should bypass the default (used in tests).
+      final explicitInner = _FakeHttpClient(
+        statusFn: (r) => 200,
+        bodyFn: (r) => json.encode({
+          'current_book_name': 'CET-4',
+          'today_new_target': 20,
+          'today_new_completed': 0,
+          'today_review_target': 0,
+          'today_review_pending': 0,
+          'today_review_completed': 0,
+          'daily_goal_status': 'not_started',
+          'active_review_group_id': null,
+          'active_review_group_status': null,
+          'active_review_group_remaining': 0,
+          'sync_status': 'healthy',
+        }),
+      );
+      final client = ApiClient(
+        baseUrl: 'http://x.test/api/v1',
+        client: explicitInner,
+      );
+      await client.getToday();
+
+      expect(explicitInner.sent.length, 1);
+      expect(defaultInner.sent, isEmpty,
+          reason: 'default must not be used when explicit client passed');
+    });
+  });
 }

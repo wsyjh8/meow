@@ -15,6 +15,8 @@
 /// the controller's current epoch on response and drops stale responses.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'auth_api.dart';
@@ -29,6 +31,18 @@ class AuthController extends ChangeNotifier {
   AuthStatus _status = AuthStatus.loading;
   int _epoch = 0;
 
+  /// Bound deviceId captured at bootstrap. Used by [logout] to re-attach
+  /// a fresh guest session per plan v2 §6.5 («logout 后切到游客上下文»).
+  String? _boundDeviceId;
+
+  /// Phase B fix-2 doc clarification: epoch is incremented on user-switch
+  /// events (`_commitSession`, `logout`) BUT the in-flight request drop
+  /// mechanism (plan v2 §6.6) is NOT yet wired into ApiClient — that's
+  /// Phase F work (registered ↔ guest switching during bind). Under Phase B
+  /// permissive mode + Phase A4-β same-row bind, no actual cross-user
+  /// data crossover happens at API level.
+  int get epoch => _epoch;
+
   /// Construction does NOT load state — caller must call [bootstrap].
   AuthController({required this.storage, required this.api});
 
@@ -36,7 +50,6 @@ class AuthController extends ChangeNotifier {
 
   AuthUser? get currentUser => _user;
   AuthStatus get status => _status;
-  int get epoch => _epoch;
 
   /// Convenience: the currently bound user_id (from storage or in-memory).
   /// Returns [AuthStorage.pendingLocalGuestUserId] only when no server-issued
@@ -73,6 +86,7 @@ class AuthController extends ChangeNotifier {
     required String deviceId,
     Duration networkTimeout = const Duration(seconds: 8),
   }) async {
+    _boundDeviceId = deviceId;
     _status = AuthStatus.loading;
     notifyListeners();
 
@@ -108,14 +122,20 @@ class AuthController extends ChangeNotifier {
           notifyListeners();
           return;
         }
-        // Network / 5xx → continue offline with the stored user_id.
+        // 5xx / other server errors: treat as offline (B-fix-4: do NOT
+        // misreport as tokenExpired).
+      } on TimeoutException catch (_) {
+        // Timeout: offline. Fall through.
       } catch (_) {
-        // Timeout / connectivity. Treat as offline.
+        // Other connectivity errors (SocketException etc.): offline.
       }
-      // If we get here, we have storedUserId but no working token. Try a
-      // guest re-attach as long as we have a token-free identity to fall
-      // back to. If the user was registered, we surface tokenExpired
-      // instead (re-login needed, NOT silent guest switch).
+
+      // Phase B fix-4 (评审采纳): network/5xx is NOT tokenExpired.
+      // - registered user with stored token but no server reach → keep
+      //   the registered user view (UI shows offline indicator; data
+      //   still queries by their user_id locally). Status stays as
+      //   `authedRegistered` so UI doesn't prompt re-login.
+      // - guest user → fall through to step 2 (try /auth/guest re-attach).
       if (storedAccountType == AccountType.registered) {
         _user = AuthUser(
           id: storedUserId,
@@ -124,22 +144,34 @@ class AuthController extends ChangeNotifier {
           accountType: AccountType.registered,
           createdAt: '',
         );
-        _status = AuthStatus.tokenExpired;
+        _status = AuthStatus.authedRegistered;
         notifyListeners();
         return;
       }
     }
 
     // Step 2: bring up a guest session (idempotent per device_id)
+    await _attachGuest(deviceId: deviceId, networkTimeout: networkTimeout);
+  }
+
+  /// Attempt /auth/guest; on failure, persist `pending-local-guest`
+  /// placeholder per plan v2 §6.3. Used by both [bootstrap] and [logout].
+  Future<void> _attachGuest({
+    required String deviceId,
+    required Duration networkTimeout,
+  }) async {
     try {
       final res = await api.guest(deviceId: deviceId).timeout(networkTimeout);
       await _commitSession(res);
       return;
     } catch (_) {
-      // Step 3: offline — fall back to pending-local-guest placeholder.
-      // We DO NOT write a placeholder user_id to storage; storage stays
-      // empty until a real guest token is obtained. currentUserId getter
-      // returns the placeholder for downstream queries.
+      // Phase B fix-5 (评审采纳): plan v2 §6.3 / §7.4.5 / sp-keys-audit §5.1
+      // require auth_current_user_id to be a stable readable value so
+      // downstream code (drift migration in Phase C) has a single source
+      // of truth. Persist the placeholder; remove it once a real guest
+      // token is obtained.
+      await storage.writeUserId(AuthStorage.pendingLocalGuestUserId);
+      await storage.writeAccountType(AccountType.guest);
       _user = null;
       _status = AuthStatus.offlineGuest;
       notifyListeners();
@@ -196,9 +228,13 @@ class AuthController extends ChangeNotifier {
   ///   - Clear token + user_id + account_type
   ///   - **Never** touch drift / SP progress / settings — that's user
   ///     data and a re-login may restore it
-  ///   - Re-enter offlineGuest state; AuthBootstrap's next run (or an
-  ///     explicit guest-restart) will bring up a fresh guest session.
-  Future<void> logout() async {
+  ///   - **Re-enter guest context** by attaching a fresh /auth/guest
+  ///     session (Phase B fix-3 评审采纳: plan v2 §6.5 «logout → 切到
+  ///     游客上下文 → 走 §6.3 启动流程»). Was incorrectly stopping at
+  ///     offlineGuest before, leaving the app token-less in-session.
+  Future<void> logout({
+    Duration networkTimeout = const Duration(seconds: 8),
+  }) async {
     final token = await storage.readToken();
     if (token != null) {
       try {
@@ -210,8 +246,16 @@ class AuthController extends ChangeNotifier {
     await storage.clearSession();
     _user = null;
     _epoch++;
-    _status = AuthStatus.offlineGuest;
-    notifyListeners();
+    // Try to re-attach as a guest using the same deviceId captured at
+    // bootstrap. If we never bootstrapped or are offline, _attachGuest
+    // falls back to offlineGuest + pendingLocalGuestUserId placeholder.
+    final deviceId = _boundDeviceId;
+    if (deviceId != null) {
+      await _attachGuest(deviceId: deviceId, networkTimeout: networkTimeout);
+    } else {
+      _status = AuthStatus.offlineGuest;
+      notifyListeners();
+    }
   }
 
   /// Marks the controller as token-expired. Called by ApiClient on 401.

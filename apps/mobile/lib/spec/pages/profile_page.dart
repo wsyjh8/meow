@@ -197,6 +197,9 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
         sublabel = '绑定后可在新设备上找回进度';
         ctaLabel = '绑定账号';
         onCta = () => _openAuth(AuthFormMode.bind);
+        // Phase B fix-6 (评审采纳): guest 用户也需要"已有账号登录"入口。
+        // 否则换手机/重装的老用户没办法回到自己账号下。Sub-CTA 渲染
+        // 在主 CTA 旁边（详见 build 末尾的 secondary link）。
         break;
       case AuthStatus.offlineGuest:
         label = '游客模式（离线）';
@@ -227,45 +230,72 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
           color: SpecBg.card,
           borderRadius: BorderRadius.circular(18),
         ),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: SpecTypo.medium,
-                      color: SpecText.primary,
-                    ),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: SpecTypo.medium,
+                          color: SpecText.primary,
+                        ),
+                      ),
+                      if (sublabel != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          sublabel,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: SpecText.secondary,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                  if (sublabel != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      sublabel,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: SpecText.secondary,
+                ),
+                if (ctaLabel != null && onCta != null)
+                  GestureDetector(
+                    onTap: onCta,
+                    child: Text(
+                      '$ctaLabel →',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: SpecTypo.medium,
+                        color: ctaColor,
                       ),
                     ),
-                  ],
-                ],
-              ),
+                  ),
+              ],
             ),
-            if (ctaLabel != null && onCta != null)
+            // Phase B fix-6 (评审采纳): guest 状态（在线 / 离线）都需要
+            // "已有账号马上登录"入口。覆盖换手机 / 重装场景。
+            if (status == AuthStatus.authedGuest ||
+                status == AuthStatus.offlineGuest) ...[
+              const SizedBox(height: 10),
               GestureDetector(
-                onTap: onCta,
+                onTap: status == AuthStatus.offlineGuest
+                    ? null  // 离线不能登录，避免误点
+                    : () => _openAuth(AuthFormMode.login),
                 child: Text(
-                  '$ctaLabel →',
+                  status == AuthStatus.offlineGuest
+                      ? '已有账号？联网后可登录'
+                      : '已有账号？登录 →',
                   style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: SpecTypo.medium,
-                    color: ctaColor,
+                    fontSize: 12,
+                    color: status == AuthStatus.offlineGuest
+                        ? SpecText.tertiary
+                        : SpecText.purple,
                   ),
                 ),
               ),
+            ],
           ],
         ),
       ),

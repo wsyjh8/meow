@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app.dart';
+import 'core/api/api_client.dart';
 import 'core/auth/auth.dart';
 import 'core/device/device_info_service.dart';
 import 'core/manifest/content_package_service.dart';
@@ -135,6 +136,12 @@ void main() async {
     prefs: prefs,
     deviceInfoService: DeviceInfoService(),
   );
+
+  // 需求 23 Phase B fix-1: install the auth-aware http.Client as the
+  // process-wide default. Every existing `ApiClient()` zero-arg call site
+  // (~18 locations) now auto-injects Authorization headers and reports
+  // 401s back to AuthController. AUTH_ENFORCE=true切流前置.
+  ApiClient.setDefaultHttpClient(authBoot.httpClient);
 
   await LocalDatabase.initialize();
 
