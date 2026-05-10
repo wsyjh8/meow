@@ -10,6 +10,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app.dart';
+import 'core/auth/auth.dart';
+import 'core/device/device_info_service.dart';
 import 'core/manifest/content_package_service.dart';
 import 'core/memory/wordbook_loader.dart';
 import 'core/services/enrichment_bootstrap.dart';
@@ -119,6 +121,21 @@ Future<void> runManifestSyncIfEnabled({
 /// catches up. Failures are silent — UI just shows empty modules.
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 需求 23 Phase B: bootstrap auth BEFORE database init.
+  // sp-keys-audit §7.3 target startup order:
+  //   1. SharedPreferences
+  //   2. AuthBootstrap (resolves current user_id; may call /auth/guest)
+  //   3. LocalDatabase / drift migration (will read user_id in Phase C)
+  // Phase C will add the SP namespace migration + drift v13 user_id
+  // column based on the resolved user_id. Phase B just establishes the
+  // user binding; downstream code keeps reading global keys.
+  final prefs = await SharedPreferences.getInstance();
+  final authBoot = await AuthBootstrap.run(
+    prefs: prefs,
+    deviceInfoService: DeviceInfoService(),
+  );
+
   await LocalDatabase.initialize();
 
   final appDb = AppDatabase();
@@ -159,5 +176,5 @@ void main() async {
   // PR-B2 in those cases (v0.2 #1 R1#1 + R2#P2 review-adopted).
   unawaited(runManifestSyncIfEnabled(db: appDb));
 
-  runApp(const MeowApp());
+  runApp(MeowApp(authController: authBoot.controller));
 }
