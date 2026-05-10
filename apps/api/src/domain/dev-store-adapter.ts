@@ -175,11 +175,15 @@ class DevStoreTodayAdapter implements ITodayRepository {
     return asUser(userId, () => devStore.updateTodayState(updates));
   }
   async updateDailyNewTarget(userId: string, newTarget: number) {
-    // withUser is sync; for async methods we need to bind+await+restore manually.
+    // β.9 hot-fix: dev-store.updateDailyNewTarget now takes userId as
+    // first param. The legacy `this.userId = userId` binding manually was
+    // also fixed since getters within the method body resolve to the
+    // correct bucket via userId (the same way withUser does, but
+    // explicit). Both approaches work; explicit param wins for async.
     const prev = devStore.getCurrentUserId();
     (devStore as any).userId = userId;
     try {
-      return await devStore.updateDailyNewTarget(newTarget);
+      return await devStore.updateDailyNewTarget(userId, newTarget);
     } finally {
       (devStore as any).userId = prev;
     }

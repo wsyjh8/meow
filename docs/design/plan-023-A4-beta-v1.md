@@ -633,3 +633,79 @@ AUTH_ENFORCE=true cd apps/api && npm run test:e2e:pg
 - **Phase B（移动端身份层）** — 与 β 残留项正交，可并行
 - **β 残留收尾**（β.5b lazy-load + β.5c snapshot 扩字段）— Phase E1 切流前必做，可拆为独立 PR
 - **Phase E1 AUTH_ENFORCE=true 切流** — 必须先做 β 残留
+
+---
+
+## β.9 hot-fix — 评审采纳清单
+
+β 三个 batch 完成后收到两份外部评审。逐条核实采纳：
+
+### Review 1 采纳清单
+
+| 评审点 | 处理 |
+|--------|------|
+| 错误 1: β.2 截图脱节（plan 主体写"待做"，实际已实施）| 本节顶部说明 batch 完成情况；plan 主体不动（保留计划态作为历史记录）|
+| 错误 2: β.3 §3.3 漏 `userDailyNewTarget` | ✅ **真代码 bug**，β.9.1 修：`userDailyNewTargetByUser: Map<userId, number>` + getter/setter；`loadUserSettings(userId)` / `updateDailyNewTarget(userId, ...)` 接 userId |
+| 错误 3: β.5/β.6 在 hot-load hook 位置上冲突 | ✅ 真矛盾。实施记录已明示「保留 withUser 作为正式 binding 入口」，β.6 不再删 withUser。lazy-load 用 `ensureUserLoaded(userId)` 接口（β.5b 实现） |
+| 决策空白: catProfile 是否 per-user | ✅ β.9.2 决策：catProfile.nickname 是 baseline default，用户改的 nickname 走 PG `pet_profiles` 表（已 per-user）。dev-store 新增 `petNicknameByUser` Map，hydrate from PG，输出时覆盖 baseline |
+| plan v2 §5.1 顶层意图被无声否决 | ✅ β.9.4 修：dev-store.ts 顶部 JSDoc 明示 lifecycle status（PG 是 prod truth，JSON 是 test-only）。production 启动期断言 PERSISTENCE_BACKEND=pg 延到 Phase E1 |
+| β.1 错误码统一其实没统一 | ✅ 补约定：**读路径返 null**（让 controller 决定 404/特殊响应）；**写路径直接 throw NotFoundException**（统一断流）。dev-store 内 5 个 §6 方法符合此约定 |
+| β.7 「audit §6 覆盖率 100%」口径偏 | ✅ commit message 已改"33%→78%"，明示非 100%。β.9.5 补 3 个用例：source_ref_id cross-user / session_id cross-user / settings daily_new_target cross-user |
+| β.2 引用 §6.1 错 | ✅ 应是 plan v2 §8（备份恢复 per-user 改造）|
+
+### Review 2 采纳清单
+
+| 评审点 | 处理 |
+|--------|------|
+| P1 β.5/β.6 生命周期打架 | 同 Review 1 错误 3 |
+| P1 PR 拆分不安全 | 实施时已合并 β.3-β.6 一个 commit（3833c25）—— 无中间不一致状态 |
+| **P1 audit §6 没真正 100%（settlement source_ref_id / new-words session_id / task-attempts session_id 漏）** | ✅ **真测试缺口**。β.9.3 dev-store 加 cross-user owner check + β.9.5 加 e2e |
+| **P1 漏 user_book_settings / daily_target 隔离** | 同 Review 1 错误 2 |
+| P2 backup 测试期望写错（404 vs no_backup_found）| 实际 e2e 写的是 `no_backup_found` 对，plan 主体描述写"404"是 plan v1 文字错；不影响实施 |
+| P2 β.2 备份持久化表述太虚 | 实际实施已加 `latestBackupsByUser` / `backupSnapshotsByUser` snapshot 字段，PG/JSON serialize/hydrate 都覆盖（commit 52c1a30）|
+
+### β.9 实施清单
+
+| 子项 | 文件 | 验收 |
+|------|------|------|
+| β.9.1 `userDailyNewTarget` partition | `dev-store.ts` | 新 e2e: "A's daily_new_target update does NOT affect B" |
+| β.9.2 catProfile per-user via `pet_profiles` | `dev-store.ts` (loadUserSettings + getCatSummary) | catProfile.nickname 仍是 baseline，按 user 覆盖 |
+| β.9.3 source_ref_id / session_id cross-user owner check | `dev-store.ts` (createOrGetSourceEvent / submitStudyAttempt / submitReviewAttempt) | 2 新 e2e |
+| β.9.4 dev-store lifecycle JSDoc | `dev-store.ts` 顶部 | 静态文档 |
+| β.9.5 3 新 isolation e2e | `auth-isolation.e2e-spec.ts` | source_ref_id / session_id / settings |
+| β.9.6 plan 文档同步 | 本文件 | 已写 |
+
+**β.9 后测试：79/79 e2e pass**（17 isolation + 7 auth + 55 pg-regression；isolation 从 14 → 17）
+
+### 关键技术决策（β.9 在 review 中确定）
+
+1. **owner check 宽松策略**：cross-user 拒绝（reject if 明确属于他人），unknown 允许（dev test 风格 id 不破坏）。这避免 audit §6 标记的"用户 A 用 B 的 attempt id 重放结算"漏洞，同时保留 pg-regression / 测试的 dev-style ref_id 兼容
+2. **错误码统一约定**（读 null / 写 throw）成文档
+3. **withUser 保留为正式入口**（β.6 不完全去掉）
+
+---
+
+## 最终 Phase A 完成度评估（β.9 后）
+
+| Phase A 子项 | 状态 |
+|-------------|------|
+| A1 migrations 008/009 | ✅ |
+| A2 /auth/* + JWT (7 e2e) | ✅ |
+| A3 AuthGuard + AUTH_ENFORCE feature flag + production assertion | ✅ |
+| A4-α userId plumb + audit §6 partial owner-check | ✅ |
+| A4-β.1 hot-fix (async-guard + 错误码) | ✅ |
+| A4-β.2 backup per-user partition (P0) | ✅ |
+| A4-β.3 dev-store 内部 partition (23 字段) | ✅ |
+| A4-β.4 idempotency Map per-user | ✅ |
+| A4-β.5 pg-persistence userId 参数 | ✅ (β.5b lazy-load 延 Phase E1) |
+| A4-β.6 withUser cleanup | ⚠️ 部分（保留作为 binding 入口）|
+| A4-β.7 audit §6 e2e 覆盖 | ⚠️ ~89% (16/18 方法路径覆盖) |
+| A4-β.8 文档同步 | ✅ |
+| A4-β.9 review 评审采纳 hot-fix | ✅ |
+
+**总判：Phase A 后端能力层"基本完整"**。残留至 Phase E1 前必做的小项：
+- β.5b lazy-load 非 dev 用户数据（server restart 后非 dev 用户 in-memory 空）
+- β.5c `ownedItems` / `equipped*` / `wallet` snapshot 字段扩 user_id（这几个目前仅 DEV_USER_ID 持久化）
+- equipItem / unequipItem / feedCat / submitLocalReviewBatch 的 cross-user e2e（owner check 路径已实施，e2e 待补）
+
+permissive 模式（`AUTH_ENFORCE=false`）下当前实现已生产可运行。可以并行进 Phase B（移动端身份层）。

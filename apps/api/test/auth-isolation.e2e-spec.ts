@@ -537,6 +537,118 @@ describeIfPg('Cross-user isolation (AUTH_ENFORCE=true, audit §6)', () => {
     }
   });
 
+  // β.9 hot-fix: cross-user owner check on source_ref_id
+  // (audit §6 line 226 — review identified this as a leak)
+  it('User B cannot submit settlement using User A\'s study_attempt id → 404', async () => {
+    // A creates a real study attempt; its id ends up in A's bucket
+    const studyRes = await request(app.getHttpServer())
+      .post('/api/v1/me/new-words')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Idempotency-Key', `iso-source-A-${Date.now()}`)
+      .send({
+        word_id: 'abandon',
+        book_id: 'book-001',
+        study_type: 'new',
+        action_result: 'know',
+      });
+    expect(studyRes.status).toBe(200);
+    const attemptId = studyRes.body?.settlement?.source_event_id
+      ? studyRes.body.settlement.source_event_id.replace('se-', 'sa-')
+      : null;
+
+    // Find A's actual study_attempt id via the API. Since the response
+    // doesn't expose it directly, derive from /api/v1/me/today reading
+    // back attempts — but study attempt ids aren't surfaced through public
+    // API. For this test we use a known-pattern: A's first study attempt
+    // gets a deterministic-shape id. As fallback, skip if unable.
+    //
+    // Alternative: insert a study_attempt directly into A's bucket via
+    // multiple POSTs and grab an id from PG.
+    const pool = getPool();
+    const rows = await pool.query(
+      `SELECT id FROM study_attempts WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [userAId],
+    );
+    if (rows.rows.length === 0) {
+      console.log('[skip] User A has no study_attempts in PG');
+      return;
+    }
+    const aAttemptId = rows.rows[0].id;
+
+    // B tries to settle using A's attempt id → 404
+    const cross = await request(app.getHttpServer())
+      .post('/api/v1/settlements/learning-rounds')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Idempotency-Key', `iso-source-cross-${Date.now()}`)
+      .send({
+        source_event_type: 'effective_new_word',
+        source_ref_id: aAttemptId,
+      });
+    expect(cross.status).toBe(404);
+  });
+
+  // β.9 hot-fix: cross-user owner check on session_id
+  // (audit §6 line 230/231 — review identified these)
+  it('User B cannot submit study attempt with User A\'s session_id → 404', async () => {
+    // A starts a session
+    const start = await request(app.getHttpServer())
+      .post('/api/v1/sessions')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Idempotency-Key', `iso-sess-X-${Date.now()}`)
+      .send({ session_minutes_target: 15 });
+    expect(start.status).toBe(200);
+    const aSessionId = start.body.session_id;
+
+    // B tries to attribute their study attempt to A's session → 404
+    const cross = await request(app.getHttpServer())
+      .post('/api/v1/me/new-words')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Idempotency-Key', `iso-sess-cross-${Date.now()}`)
+      .send({
+        word_id: 'abandon',
+        book_id: 'book-001',
+        study_type: 'new',
+        action_result: 'know',
+        session_id: aSessionId,
+      });
+    expect(cross.status).toBe(404);
+  });
+
+  // β.9 hot-fix: per-user daily new target (was a shared single field
+  // — A changing daily goal affected B)
+  it('User A\'s daily_new_target update does NOT affect User B', async () => {
+    // A sets daily_new_target = 30
+    const aUpdate = await request(app.getHttpServer())
+      .put('/api/v1/me/settings/daily-goal')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ daily_new_target: 30 });
+    expect(aUpdate.status).toBe(200);
+    expect(aUpdate.body.daily_new_target).toBe(30);
+
+    // B reads their today state — target should NOT be A's 30
+    // (B's target is whatever they have set, or default 20)
+    const bToday = await request(app.getHttpServer())
+      .get('/api/v1/me/today')
+      .set('Authorization', `Bearer ${tokenB}`);
+    expect(bToday.status).toBe(200);
+    expect(bToday.body.today_new_target).not.toBe(30);
+
+    // B sets their own to 50
+    const bUpdate = await request(app.getHttpServer())
+      .put('/api/v1/me/settings/daily-goal')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .send({ daily_new_target: 50 });
+    expect(bUpdate.status).toBe(200);
+    expect(bUpdate.body.daily_new_target).toBe(50);
+
+    // A's target remains 30 (not overwritten by B's update)
+    const aToday = await request(app.getHttpServer())
+      .get('/api/v1/me/today')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(aToday.status).toBe(200);
+    expect(aToday.body.today_new_target).toBe(30);
+  });
+
   // β.7 — fishing task cross-user owner-check (using A's fishing task that
   // /me/daily-tasks creates lazily on first access)
   it('User B cannot submit attempt to User A\'s fishing task → 404', async () => {

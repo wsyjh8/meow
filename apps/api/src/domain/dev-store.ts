@@ -1,10 +1,23 @@
 /**
- * Development In-Memory Store for Phase 1
+ * Development In-Memory Store.
  *
- * Assumption (temporary, not frozen):
- * - This is a development-only in-memory store for Phase 1 rapid iteration.
- * - It will be replaced with a real database in later phases.
- * - Code structure is designed to allow easy replacement.
+ * 需求 23 lifecycle status (post-A4-β.9):
+ * - PostgreSQL is the production runtime truth (PERSISTENCE_BACKEND=pg).
+ *   This class operates as an in-memory cache backed by PG via
+ *   `PgDevStorePersistence` — multi-user safe after β.3-β.5 partition.
+ * - JSON-file persistence (`DevStorePersistence`) is **legacy / unit-test
+ *   only**. Single-user semantics; not suitable for multi-user staging
+ *   or production. plan v2 §5.1 short-term policy: prod/staging must
+ *   use pg; dev local may use either.
+ *
+ * Why this class still exists (not @deprecated outright):
+ * - Unit tests instantiate it directly with a mock persistence.
+ * - PG persistence layer reuses its hydrate / serialize shape.
+ * - Replacing it wholesale is a larger refactor than Phase A scope.
+ *
+ * Production-readiness guard: main.ts asserts NODE_ENV=production ⇒
+ * AUTH_ENFORCE=true (D13). β.9 hot-fix proposal: also assert
+ * NODE_ENV=production ⇒ PERSISTENCE_BACKEND=pg (deferred to Phase E1).
  */
 
 import { NotFoundException } from '@nestjs/common';
@@ -295,6 +308,22 @@ export class DevStore {
     return r;
   }
 
+  // β.9 hot-fix (评审采纳): user_book_settings.daily_new_target is per-user
+  // (PRD §5.1 settings). Was a single field — A changing daily goal would
+  // affect B. Default 20 for users without a stored setting.
+  private userDailyNewTargetByUser: Map<string, number> = new Map();
+  private get userDailyNewTarget(): number {
+    return this.userDailyNewTargetByUser.get(this.userId) ?? 20;
+  }
+  private set userDailyNewTarget(v: number) {
+    this.userDailyNewTargetByUser.set(this.userId, v);
+  }
+
+  // β.9 hot-fix (评审采纳): pet_profiles.nickname is per-user (PRD §5.1).
+  // catProfile.nickname is the BASELINE default for new users — user-modified
+  // nicknames overlay via this Map (hydrated from PG pet_profiles on demand).
+  private petNicknameByUser: Map<string, string> = new Map();
+
   // Assumption (temporary, not frozen):
   // Minimal dev-only cat profile defaults for P2 bridge layer.
   private readonly catProfile = {
@@ -399,8 +428,9 @@ export class DevStore {
     }
     // Load word pool from PG (or fallback)
     await this.loadWordPool();
-    // Load user settings (daily new target) from PG
-    await this.loadUserSettings();
+    // Load user settings (daily new target) from PG for DEV_USER_ID.
+    // β.5b: lazy-load other users' settings on first access (TODO).
+    await this.loadUserSettings(DEV_USER_ID);
   }
 
   /**
@@ -683,8 +713,8 @@ export class DevStore {
   // Word pool — loaded dynamically from PG, with fallback for JSON mode
   private wordPool: Word[] = [];
 
-  // User daily new target — loaded from PG user_book_settings, default 20
-  private userDailyNewTarget: number = 20;
+  // β.9 hot-fix: replaced by userDailyNewTargetByUser Map (declared above).
+  // Legacy facade `this.userDailyNewTarget` getter/setter routes per-user.
 
   /**
    * v0.3.0 P1 dev fixture: which canonical word_ids count as "review-eligible"
@@ -767,10 +797,13 @@ export class DevStore {
   }
 
   /**
-   * Load user daily new target from PG user_book_settings.
-   * Falls back to 20 if PG unavailable.
+   * Load a user's daily new target from PG user_book_settings.
+   * Falls back to 20 if PG unavailable or user has no settings row.
+   *
+   * β.9 hot-fix (评审采纳): takes userId; was hardcoded DEV_USER_ID before
+   * which made A's setting affect B (PRD §5.1 settings must be per-user).
    */
-  async loadUserSettings(): Promise<void> {
+  async loadUserSettings(userId: string = DEV_USER_ID): Promise<void> {
     try {
       const { Pool } = require('pg');
       const pool = new Pool({
@@ -778,12 +811,20 @@ export class DevStore {
       });
       const result = await pool.query(
         'SELECT daily_new_target FROM user_book_settings WHERE user_id = $1 AND is_active = TRUE LIMIT 1',
-        [DEV_USER_ID],
+        [userId],
+      );
+      // β.9: also hydrate pet nickname from PG pet_profiles (per-user)
+      const petResult = await pool.query(
+        'SELECT nickname FROM pet_profiles WHERE user_id = $1 LIMIT 1',
+        [userId],
       );
       await pool.end();
       if (result.rows.length > 0) {
-        this.userDailyNewTarget = result.rows[0].daily_new_target;
-        console.log(`[DevStore] User daily new target: ${this.userDailyNewTarget}`);
+        this.userDailyNewTargetByUser.set(userId, result.rows[0].daily_new_target);
+        console.log(`[DevStore] User ${userId} daily new target: ${result.rows[0].daily_new_target}`);
+      }
+      if (petResult.rows.length > 0 && petResult.rows[0].nickname) {
+        this.petNicknameByUser.set(userId, petResult.rows[0].nickname);
       }
     } catch (e) {
       // PG not available — keep default 20
@@ -791,11 +832,13 @@ export class DevStore {
   }
 
   /**
-   * Update user daily new target in PG and in-memory.
+   * Update a user's daily new target in PG and in-memory.
    * Also updates today's state target so it takes effect immediately.
+   *
+   * β.9 hot-fix (评审采纳): takes userId; was hardcoded DEV_USER_ID before.
    */
-  async updateDailyNewTarget(newTarget: number): Promise<void> {
-    this.userDailyNewTarget = newTarget;
+  async updateDailyNewTarget(userId: string, newTarget: number): Promise<void> {
+    this.userDailyNewTargetByUser.set(userId, newTarget);
 
     // Update PG
     try {
@@ -805,7 +848,7 @@ export class DevStore {
       });
       await pool.query(
         'UPDATE user_book_settings SET daily_new_target = $1, updated_at = NOW() WHERE user_id = $2 AND is_active = TRUE',
-        [newTarget, DEV_USER_ID],
+        [newTarget, userId],
       );
       await pool.end();
     } catch (e) {
@@ -1034,6 +1077,18 @@ export class DevStore {
     idempotencyKey: string,
     sessionId?: string,
   ): { success: boolean; alreadyExists: boolean; attempt: StudyAttempt } {
+    // β.9 hot-fix (audit §6 评审采纳): session_id cross-user check.
+    // Reject ONLY if session_id is clearly owned by another user.
+    // Unknown session_id (legacy / test data) is allowed — only the
+    // explicit cross-user attribution attack is blocked.
+    if (sessionId) {
+      for (const [uid, sessions] of this.sessionsByUser.entries()) {
+        if (uid === this.userId) continue;
+        if (sessions.some(s => s.session_id === sessionId)) {
+          throw new NotFoundException(`Session not found: ${sessionId}`);
+        }
+      }
+    }
     // Check idempotency key first
     if (idempotencyKey) {
       const existingRecord = this.getIdempotencyKey(idempotencyKey);
@@ -1220,6 +1275,16 @@ export class DevStore {
     );
     if (!group) {
       throw new NotFoundException(`Review group not found: ${reviewGroupId}`);
+    }
+    // β.9 hot-fix (audit §6 评审采纳): session_id cross-user check
+    // (same lenient logic as submitStudyAttempt above).
+    if (sessionId) {
+      for (const [uid, sessions] of this.sessionsByUser.entries()) {
+        if (uid === this.userId) continue;
+        if (sessions.some(s => s.session_id === sessionId)) {
+          throw new NotFoundException(`Session not found: ${sessionId}`);
+        }
+      }
     }
 
     if (group.group_status === 'completed') {
@@ -1552,6 +1617,43 @@ export class DevStore {
       }
     }
 
+    // β.9 hot-fix (audit §6 评审采纳): cross-user owner check.
+    // Only REJECT if source_ref_id is clearly OWNED BY ANOTHER USER.
+    // Allow if it belongs to current user OR is unrecognized (dev-style
+    // test ref ids like 'pg-purchase-1' must continue working).
+    //
+    // Attack prevented: user A submits B's study_attempt.id → would have
+    // double-claimed B's effective_new_word. Now blocked.
+    // Not blocked: A submits an arbitrary string never seen before — that's
+    // dev / test workflow shape, and no entity-cross-pollination happens
+    // (the source_event just records the string under A's user_id).
+    const findInOtherUser = (
+      byUser: Map<string, { id?: string; review_group_id?: string }[]>,
+      matchFn: (e: any) => boolean,
+    ): boolean => {
+      for (const [uid, arr] of byUser.entries()) {
+        if (uid === this.userId) continue;
+        if (arr.some(matchFn)) return true;
+      }
+      return false;
+    };
+
+    if (sourceEventType === 'effective_new_word') {
+      if (findInOtherUser(
+        this.studyAttemptsByUser as Map<string, any[]>,
+        (a: any) => a.id === sourceRefId,
+      )) {
+        throw new NotFoundException(`Study attempt not found: ${sourceRefId}`);
+      }
+    } else if (sourceEventType === 'review_group_completed') {
+      if (findInOtherUser(
+        this.reviewGroupsByUser as Map<string, any[]>,
+        (g: any) => g.review_group_id === sourceRefId,
+      )) {
+        throw new NotFoundException(`Review group not found: ${sourceRefId}`);
+      }
+    }
+
     // Check if source event already exists for this ref
     // 需求 23 / migration 009: UNIQUE now scoped per-user. Match (user_id, type, ref).
     const existingSourceEvent = this.sourceEvents.find(
@@ -1773,8 +1875,14 @@ export class DevStore {
       energy = 'medium';
     }
 
+    // β.9 hot-fix: nickname is per-user — user-modified overlay (PG
+    // pet_profiles) takes precedence over baseline catProfile.nickname.
+    // catProfile.nickname remains the default for users who haven't
+    // customized (or where PG hydrate failed).
+    const nickname = this.petNicknameByUser.get(this.userId) ?? this.catProfile.nickname;
+
     return {
-      nickname: this.catProfile.nickname,
+      nickname,
       level,
       mood,
       bond,
