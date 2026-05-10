@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
 import { HealthController } from '../controllers/health.controller';
 import { TodayController } from '../controllers/today.controller';
 import { StudyAttemptsController } from '../controllers/study-attempts.controller';
@@ -27,6 +28,7 @@ import {
 import { ContentManifestController } from '../controllers/content-manifest.controller';
 
 @Module({
+  imports: [AuthModule],
   controllers: [
     HealthController,
     TodayController,

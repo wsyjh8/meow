@@ -9,21 +9,21 @@ import {
 /**
  * Fishing mini-game repository (Phase D).
  *
- * Covers daily fishing task lifecycle: get task status, start a round,
- * submit a guess. Daily reset uses Beijing time (UTC+8) at 05:00.
+ * 需求 23 Phase A4-α: all methods take userId as first param.
  *
  * §3.2 discipline: rewards (fish_treats / lottery boxes) never feed
  * back into learning progress. They are装扮副机制.
  */
 export interface IFishingRepository {
   /** Get or create today's fishing task (lazy creation). */
-  getDailyFishingTask(): DailyFishingTask;
+  getDailyFishingTask(userId: string): DailyFishingTask;
 
   /** Start the next fishing round, or return null if exhausted / no studied words yet. */
-  startFishingRound(): FishingRoundQuestion | null;
+  startFishingRound(userId: string): FishingRoundQuestion | null;
 
-  /** Submit the user's choice. Idempotent. */
+  /** Submit the user's choice. Idempotent. Owner-checked. */
   submitFishingAttempt(
+    userId: string,
     taskId: string,
     chosenWordId: string,
     idempotencyKey: string,
@@ -44,15 +44,17 @@ export interface IFishingRepository {
 /**
  * Lottery (blind box) repository (Phase D).
  *
- * Boxes are earned by completing all 3 fishing rounds in one day.
- * Opening a box draws a coin reward via weighted random.
+ * 需求 23 Phase A4-α: all methods take userId as first param.
+ * Owner-check (audit §6): openLotteryBox throws NotFound if box doesn't
+ * belong to userId.
  */
 export interface ILotteryRepository {
-  /** All unopened lottery boxes for current user. */
-  getLotteryBoxes(): LotteryBox[];
+  /** All unopened lottery boxes for the given user. */
+  getLotteryBoxes(userId: string): LotteryBox[];
 
   /** Open a specific box. Idempotent. Awards coins via reward ledger. */
   openLotteryBox(
+    userId: string,
     boxId: string,
     idempotencyKey: string,
   ): {

@@ -3,8 +3,11 @@ import {
   Get,
   Param,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { repositories } from '../domain';
+import { AuthGuard, RequestUser } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 /**
  * Per-user word-scoped queries.
@@ -22,12 +25,16 @@ import { repositories } from '../domain';
  * The shape returned here is `accepted` cloud history only. Local
  * pending/unsynced records are queried client-side from the on-device
  * review log; the debug page composes the two views.
+ *
+ * 需求 23 Phase A4-α: AuthGuard required; review history filtered by user.
  */
 @Controller('me/words')
+@UseGuards(AuthGuard)
 export class MeWordsController {
   @Get(':wordId/review-history')
   getReviewHistory(
     @Param('wordId') wordId: string,
+    @CurrentUser() user: RequestUser,
     @Query('limit') limitStr?: string,
   ) {
     const parsed = parseInt(limitStr || '20', 10);
@@ -35,7 +42,7 @@ export class MeWordsController {
       ? Math.min(parsed, 200)
       : 20;
 
-    const attempts = repositories.review.getReviewAttemptsForWord(wordId, limit);
+    const attempts = repositories.review.getReviewAttemptsForWord(user.id, wordId, limit);
 
     return {
       word_id: wordId,

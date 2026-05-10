@@ -12,6 +12,12 @@
 import { Pool } from 'pg';
 import type { IDevStorePersistence, DevStoreSnapshot } from '../../domain/persistence';
 
+// 需求 23 Phase A4-α: pg-persistence still loads / saves a single user's
+// snapshot (this constant). Multi-user load/save requires partitioning the
+// in-memory DevStore state by userId — that's A4-β scope. Under permissive
+// AUTH_ENFORCE=false, every request resolves to DEV_USER_ID anyway, so the
+// effective behavior is correct. Under AUTH_ENFORCE=true with multiple
+// users, A4-β must change this to load/save per-user snapshots on demand.
 const DEV_USER_ID = 'dev-user-001';
 
 export class PgDevStorePersistence implements IDevStorePersistence {

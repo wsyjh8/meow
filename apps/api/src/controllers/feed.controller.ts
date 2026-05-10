@@ -6,8 +6,11 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  UseGuards,
 } from '@nestjs/common';
 import { repositories } from '../domain';
+import { AuthGuard, RequestUser } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 export interface FeedDto {
   feed_item_type: 'fish_treat';
@@ -26,12 +29,10 @@ export interface FeedDto {
  * - front-end must not locally pre-deduct
  * - level must be computed by backend, not client
  *
- * Assumption (temporary, not frozen):
- * - Only fish_treat is supported as feed_item_type.
- * - current feed uses +4 mood and +2 exp as a minimal development rule.
- * - level thresholds follow the current MVP secondary numbers draft for Lv1-Lv10.
+ * 需求 23 Phase A4-α: AuthGuard required.
  */
 @Controller('me/feed')
+@UseGuards(AuthGuard)
 export class FeedController {
   /**
    * POST /api/v1/me/feed
@@ -42,6 +43,7 @@ export class FeedController {
   @HttpCode(HttpStatus.OK)
   async feed(
     @Body() dto: FeedDto,
+    @CurrentUser() user: RequestUser,
     @Headers('x-idempotency-key') idempotencyKey?: string,
   ) {
     if (!idempotencyKey) {
@@ -52,7 +54,7 @@ export class FeedController {
       throw new BadRequestException('feed_item_type must be "fish_treat"');
     }
 
-    const result = repositories.feed.feedCat(dto.feed_item_type, idempotencyKey);
+    const result = repositories.feed.feedCat(user.id, dto.feed_item_type, idempotencyKey);
 
     if (result.status === 'insufficient_resource') {
       return {
@@ -63,12 +65,12 @@ export class FeedController {
           consumed_amount: 0,
         },
         growth_feedback: null,
-        secondary_summary: repositories.secondarySummary.getSecondarySummary(),
+        secondary_summary: repositories.secondarySummary.getSecondarySummary(user.id),
       };
     }
 
     // Save idempotency key with feed_id for replay
-    repositories.idempotency.setIdempotencyKey(idempotencyKey, 'me/feed', {
+    repositories.idempotency.setIdempotencyKey(user.id, idempotencyKey, 'me/feed', {
       feed_id: result.feedRecord!.feed_id,
     });
 
@@ -97,7 +99,7 @@ export class FeedController {
         already_exists: result.alreadyExists,
       },
       growth_feedback: growthFeedback,
-      secondary_summary: repositories.secondarySummary.getSecondarySummary(),
+      secondary_summary: repositories.secondarySummary.getSecondarySummary(user.id),
     };
   }
 }

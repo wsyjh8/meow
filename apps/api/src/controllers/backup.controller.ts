@@ -1,5 +1,7 @@
-import { Controller, Get, Post, Body } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
 import { devStore, repositories } from '../domain';
+import { AuthGuard, RequestUser } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 /**
  * P3.1 Phase 3 — Backup controller.
@@ -15,11 +17,17 @@ import { devStore, repositories } from '../domain';
  *
  * Multi-device conflict policy: last-write-wins.
  * device_id and device_model are informational only — no merge logic.
+ *
+ * 需求 23 Phase A4-α: AuthGuard required; backup state bound to current
+ * user via devStore.withUser. Note: dev-store currently has a single
+ * `latestBackup` slot shared across users — under AUTH_ENFORCE=true this
+ * is a bug to be fixed by A4-β (partition backup state per-user).
  */
 @Controller('me/backup')
+@UseGuards(AuthGuard)
 export class BackupController {
   @Post()
-  async uploadBackup(@Body() body: any) {
+  async uploadBackup(@Body() body: any, @CurrentUser() user: RequestUser) {
     const snapshot = body?.snapshot;
     const schemaVersion = body?.schema_version;
     const deviceId = body?.device_id as string | undefined;
@@ -43,15 +51,17 @@ export class BackupController {
     const resolvedDeviceModel = deviceModel ?? (snapshot.device?.device_model as string | undefined);
 
     // Persist via devStore (survives server restart)
-    devStore.storeBackup(
-      backupId,
-      resolvedSchema,
-      uploadedAt,
-      snapshotSize,
-      snapshot,
-      resolvedDeviceId,
-      resolvedDeviceModel,
-    );
+    devStore.withUser(user.id, () => {
+      devStore.storeBackup(
+        backupId,
+        resolvedSchema,
+        uploadedAt,
+        snapshotSize,
+        snapshot,
+        resolvedDeviceId,
+        resolvedDeviceModel,
+      );
+    });
 
     await repositories.ensurePersisted();
 
@@ -66,8 +76,8 @@ export class BackupController {
   }
 
   @Get('latest')
-  getLatestBackup() {
-    const meta = devStore.getLatestBackupMeta();
+  getLatestBackup(@CurrentUser() user: RequestUser) {
+    const meta = devStore.withUser(user.id, () => devStore.getLatestBackupMeta());
 
     if (!meta) {
       return {
@@ -91,9 +101,9 @@ export class BackupController {
    * Conflict policy: always returns the latest uploaded snapshot (last-write-wins).
    */
   @Get('latest/snapshot')
-  getLatestSnapshot() {
-    const snapshot = devStore.getBackupSnapshot();
-    const meta = devStore.getLatestBackupMeta();
+  getLatestSnapshot(@CurrentUser() user: RequestUser) {
+    const snapshot = devStore.withUser(user.id, () => devStore.getBackupSnapshot());
+    const meta = devStore.withUser(user.id, () => devStore.getLatestBackupMeta());
 
     if (!snapshot || !meta) {
       return {

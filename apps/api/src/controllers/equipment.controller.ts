@@ -7,8 +7,11 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  UseGuards,
 } from '@nestjs/common';
 import { repositories } from '../domain';
+import { AuthGuard, RequestUser } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 export interface EquipDto {
   item_id: string;
@@ -24,8 +27,11 @@ export interface EquipDto {
  * - Only owned items can be equipped
  * - One item per slot
  * - Idempotency key prevents duplicate side effects
+ *
+ * 需求 23 Phase A4-α: AuthGuard required.
  */
 @Controller('me/equipment')
+@UseGuards(AuthGuard)
 export class EquipmentController {
   /**
    * GET /api/v1/me/equipment
@@ -33,9 +39,9 @@ export class EquipmentController {
    * Returns the current equipped snapshot.
    */
   @Get()
-  getEquipment() {
+  getEquipment(@CurrentUser() user: RequestUser) {
     return {
-      equipped_snapshot: repositories.equipment.getEquippedSnapshot(),
+      equipped_snapshot: repositories.equipment.getEquippedSnapshot(user.id),
     };
   }
 
@@ -48,6 +54,7 @@ export class EquipmentController {
   @HttpCode(HttpStatus.OK)
   async equip(
     @Body() dto: EquipDto,
+    @CurrentUser() user: RequestUser,
     @Headers('x-idempotency-key') idempotencyKey?: string,
   ) {
     if (!idempotencyKey) {
@@ -57,7 +64,7 @@ export class EquipmentController {
       throw new BadRequestException('item_id is required');
     }
 
-    const result = repositories.equipment.equipItem(dto.item_id, idempotencyKey);
+    const result = repositories.equipment.equipItem(user.id, dto.item_id, idempotencyKey);
 
     if (result.status === 'failed') {
       return {
@@ -66,13 +73,13 @@ export class EquipmentController {
           error_code: result.errorCode,
           item_id: dto.item_id,
         },
-        equipped_snapshot: repositories.equipment.getEquippedSnapshot(),
+        equipped_snapshot: repositories.equipment.getEquippedSnapshot(user.id),
       };
     }
 
     // Save idempotency key for replay
     if (!result.alreadyExists) {
-      repositories.idempotency.setIdempotencyKey(idempotencyKey, 'me/equipment/equip', {
+      repositories.idempotency.setIdempotencyKey(user.id, idempotencyKey, 'me/equipment/equip', {
         item_id: dto.item_id,
         slot: result.slot,
         item_type: result.itemType,
@@ -89,7 +96,7 @@ export class EquipmentController {
         item_type: result.itemType,
         already_exists: result.alreadyExists,
       },
-      equipped_snapshot: repositories.equipment.getEquippedSnapshot(),
+      equipped_snapshot: repositories.equipment.getEquippedSnapshot(user.id),
     };
   }
 
@@ -102,6 +109,7 @@ export class EquipmentController {
   @HttpCode(HttpStatus.OK)
   async unequip(
     @Body() dto: EquipDto,
+    @CurrentUser() user: RequestUser,
     @Headers('x-idempotency-key') idempotencyKey?: string,
   ) {
     if (!idempotencyKey) {
@@ -111,7 +119,7 @@ export class EquipmentController {
       throw new BadRequestException('item_id is required');
     }
 
-    const result = repositories.equipment.unequipItem(dto.item_id, idempotencyKey);
+    const result = repositories.equipment.unequipItem(user.id, dto.item_id, idempotencyKey);
 
     if (result.status === 'failed') {
       return {
@@ -120,12 +128,12 @@ export class EquipmentController {
           error_code: result.errorCode,
           item_id: dto.item_id,
         },
-        equipped_snapshot: repositories.equipment.getEquippedSnapshot(),
+        equipped_snapshot: repositories.equipment.getEquippedSnapshot(user.id),
       };
     }
 
     if (!result.alreadyExists) {
-      repositories.idempotency.setIdempotencyKey(idempotencyKey, 'me/equipment/unequip', {
+      repositories.idempotency.setIdempotencyKey(user.id, idempotencyKey, 'me/equipment/unequip', {
         item_id: dto.item_id,
       });
     }
@@ -138,7 +146,7 @@ export class EquipmentController {
         item_id: dto.item_id,
         already_exists: result.alreadyExists,
       },
-      equipped_snapshot: repositories.equipment.getEquippedSnapshot(),
+      equipped_snapshot: repositories.equipment.getEquippedSnapshot(user.id),
     };
   }
 }

@@ -1,12 +1,12 @@
-import { TodayState, DailyGoalStatus } from '../types';
+import { TodayState } from '../types';
 
 /**
  * Today state / daily goal repository interface.
  *
- * Covers: today aggregation, daily goal status.
+ * 需求 23 Phase A4-α: all methods take userId as first param.
  */
 export interface ITodayRepository {
-  getTodayState(): TodayState;
-  updateTodayState(updates: Partial<TodayState>): TodayState;
-  updateDailyNewTarget(newTarget: number): Promise<void>;
+  getTodayState(userId: string): TodayState;
+  updateTodayState(userId: string, updates: Partial<TodayState>): TodayState;
+  updateDailyNewTarget(userId: string, newTarget: number): Promise<void>;
 }

@@ -6,8 +6,11 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  UseGuards,
 } from '@nestjs/common';
 import { repositories } from '../domain';
+import { AuthGuard, RequestUser } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 /**
  * Lottery (blind box) controller (Phase D).
@@ -18,13 +21,17 @@ import { repositories } from '../domain';
  *
  * Boxes are earned by completing fishing rounds. Opening is free.
  * Prize is coins (20/50/100) via weighted random.
+ *
+ * 需求 23 Phase A4-α: AuthGuard required; audit §6 owner-check on
+ * openLotteryBox (dev-store rejects opening another user's box).
  */
 @Controller('me/lottery-boxes')
+@UseGuards(AuthGuard)
 export class LotteryController {
   @Get()
-  getBoxes() {
-    const boxes = repositories.lottery.getLotteryBoxes();
-    const balance = repositories.reward.getBalanceSnapshot();
+  getBoxes(@CurrentUser() user: RequestUser) {
+    const boxes = repositories.lottery.getLotteryBoxes(user.id);
+    const balance = repositories.reward.getBalanceSnapshot(user.id);
     return {
       pending_boxes: boxes.map(b => ({
         id: b.id,
@@ -41,14 +48,15 @@ export class LotteryController {
   @HttpCode(HttpStatus.OK)
   async openBox(
     @Param('id') boxId: string,
+    @CurrentUser() user: RequestUser,
     @Headers('x-idempotency-key') idempotencyKey?: string,
   ) {
     if (idempotencyKey) {
-      const existing = repositories.idempotency.getIdempotencyKey(idempotencyKey);
+      const existing = repositories.idempotency.getIdempotencyKey(user.id, idempotencyKey);
       if (existing) return existing.response;
     }
 
-    const result = repositories.lottery.openLotteryBox(boxId, idempotencyKey || '');
+    const result = repositories.lottery.openLotteryBox(user.id, boxId, idempotencyKey || '');
 
     if (!result.box) {
       const response = {
@@ -59,7 +67,7 @@ export class LotteryController {
       return response;
     }
 
-    const balance = repositories.reward.getBalanceSnapshot();
+    const balance = repositories.reward.getBalanceSnapshot(user.id);
     const response = {
       opened: true,
       already_exists: result.alreadyExists,
@@ -71,7 +79,7 @@ export class LotteryController {
     };
 
     if (idempotencyKey) {
-      repositories.idempotency.setIdempotencyKey(idempotencyKey, '/me/lottery-boxes/open', response);
+      repositories.idempotency.setIdempotencyKey(user.id, idempotencyKey, '/me/lottery-boxes/open', response);
     }
     await repositories.ensurePersisted();
     return response;

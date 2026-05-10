@@ -1,22 +1,27 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 import { repositories } from '../domain';
+import { AuthGuard, RequestUser } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 /**
  * Today controller.
  *
  * Main endpoint for "今日页" aggregation.
+ *
+ * 需求 23 Phase A4-α: AuthGuard required; user_id sourced from token.
  */
 @Controller('me/today')
+@UseGuards(AuthGuard)
 export class TodayController {
   @Get()
-  getToday() {
+  getToday(@CurrentUser() user: RequestUser) {
     const today = new Date().toISOString().split('T')[0];
-    repositories.checkIn.updateLearningDay(today);
+    repositories.checkIn.updateLearningDay(user.id, today);
 
-    const todayState = repositories.today.getTodayState();
+    const todayState = repositories.today.getTodayState(user.id);
 
-    const checkIn = repositories.checkIn.getCheckInForDate(today);
-    const streak = repositories.checkIn.getOrCreateStreak();
+    const checkIn = repositories.checkIn.getCheckInForDate(user.id, today);
+    const streak = repositories.checkIn.getOrCreateStreak(user.id);
 
     return {
       ...todayState,

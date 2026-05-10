@@ -143,8 +143,13 @@ import { createPersistence } from './persistence-factory';
  * to the active persistence backend (PostgreSQL by default, JSON fallback).
  */
 export class DevStore {
-  // Single user for Phase 1 development
-  private readonly userId = DEV_USER_ID;
+  // 需求 23 Phase A4-α: userId is now bound per-request via public method
+  // entry. Each public method writes `this.userId = userIdParam` at top,
+  // and downstream `this.userId` references read it. Single-threaded
+  // Node.js makes this safe under permissive AUTH_ENFORCE=false (where all
+  // requests resolve to DEV_FALLBACK_USER_ID anyway). When AUTH_ENFORCE=true,
+  // A4-β must replace this with per-user state buckets.
+  private userId: string = DEV_USER_ID;
 
   // Persistence adapter (PG or JSON, determined by factory)
   private persistence: IDevStorePersistence;
@@ -218,6 +223,37 @@ export class DevStore {
       this.persistence = createPersistence();
     }
     this.loadFromDisk();
+  }
+
+  /**
+   * 需求 23 Phase A4-α: bind a userId for the duration of the wrapped call.
+   *
+   * Every adapter method routes through this so that downstream
+   * `this.userId` references inside the public method body resolve to
+   * the caller-provided userId (extracted from the request token by
+   * AuthGuard, or DEV_FALLBACK_USER_ID under permissive AUTH_ENFORCE=false).
+   *
+   * Single-threaded Node.js makes this safe under permissive mode where
+   * userId is always DEV_USER_ID. Under AUTH_ENFORCE=true with concurrent
+   * requests, the previous-value restoration prevents stack-style leaks
+   * but in-memory state mutations from one request remain visible to
+   * another. A4-β solves the latter by partitioning state per-user.
+   */
+  withUser<T>(userId: string, fn: () => T): T {
+    const prev = this.userId;
+    this.userId = userId;
+    try {
+      return fn();
+    } finally {
+      this.userId = prev;
+    }
+  }
+
+  /**
+   * Read the currently-bound user id (test/internal use only).
+   */
+  getCurrentUserId(): string {
+    return this.userId;
   }
 
   /**
@@ -937,7 +973,11 @@ export class DevStore {
     idempotencyKey: string,
     sessionId?: string,
   ): { success: boolean; groupCompleted: boolean; alreadyExists: boolean } {
-    const group = this.reviewGroups.find(g => g.review_group_id === reviewGroupId);
+    // 需求 23 audit §6 owner-check: review_group must belong to current user.
+    // Mismatched user → "not found" (returns success=false, no leakage).
+    const group = this.reviewGroups.find(
+      g => g.review_group_id === reviewGroupId && g.user_id === this.userId,
+    );
     if (!group) {
       return { success: false, groupCompleted: false, alreadyExists: false };
     }
@@ -1154,27 +1194,35 @@ export class DevStore {
   }
 
   /**
-   * Get store for testing
+   * Get store for testing.
+   *
+   * 需求 23 Phase A4-α: bulk read methods filter by current user_id to
+   * prevent cross-user data leakage. Defensive — under permissive
+   * AUTH_ENFORCE=false all entities are owned by DEV_USER_ID anyway.
    */
   getStudyAttempts(): StudyAttempt[] {
-    return [...this.studyAttempts];
+    return this.studyAttempts.filter(a => a.user_id === this.userId);
   }
 
   getReviewGroups(): ReviewGroup[] {
-    return [...this.reviewGroups];
+    return this.reviewGroups.filter(g => g.user_id === this.userId);
   }
 
   getReviewAttempts(): ReviewAttempt[] {
-    return [...this.reviewAttempts];
+    return this.reviewAttempts.filter(a => a.user_id === this.userId);
   }
 
   /**
    * Need #10 — Newest-first review history for a single word.
    * Stable sort: created_at DESC, then attempt id DESC as tiebreaker so
    * multiple attempts within the same millisecond are still ordered.
+   *
+   * 需求 23 Phase A4-α: filtered by current user_id.
    */
   getReviewAttemptsForWord(wordId: string, limit: number): ReviewAttempt[] {
-    const matches = this.reviewAttempts.filter(a => a.word_id === wordId);
+    const matches = this.reviewAttempts.filter(
+      a => a.word_id === wordId && a.user_id === this.userId,
+    );
     matches.sort((a, b) => {
       const ca = new Date(a.created_at).getTime();
       const cb = new Date(b.created_at).getTime();
@@ -1186,15 +1234,15 @@ export class DevStore {
   }
 
   getSourceEvents(): RewardSourceEvent[] {
-    return [...this.sourceEvents];
+    return this.sourceEvents.filter(e => e.user_id === this.userId);
   }
 
   getSettlements(): Settlement[] {
-    return [...this.settlements];
+    return this.settlements.filter(s => s.user_id === this.userId);
   }
 
   getRewardLedgerItems(): RewardLedgerItem[] {
-    return [...this.rewardLedgerItems];
+    return this.rewardLedgerItems.filter(r => r.user_id === this.userId);
   }
 
   /**
@@ -1260,8 +1308,11 @@ export class DevStore {
     }
 
     // Check if source event already exists for this ref
+    // 需求 23 / migration 009: UNIQUE now scoped per-user. Match (user_id, type, ref).
     const existingSourceEvent = this.sourceEvents.find(
-      e => e.source_event_type === sourceEventType && e.source_ref_id === sourceRefId
+      e => e.user_id === this.userId
+        && e.source_event_type === sourceEventType
+        && e.source_ref_id === sourceRefId
     );
     if (existingSourceEvent) {
       return { sourceEvent: existingSourceEvent, alreadyExists: true };
@@ -1307,8 +1358,11 @@ export class DevStore {
       return { settlement: existingSettlement, alreadyExists: true };
     }
 
-    // Find source event
-    const sourceEvent = this.sourceEvents.find(e => e.source_event_id === sourceEventId);
+    // 需求 23 audit §6 owner-check: source_event must belong to current user.
+    // Mismatched user → "not found" (404) to avoid ID enumeration.
+    const sourceEvent = this.sourceEvents.find(
+      e => e.source_event_id === sourceEventId && e.user_id === this.userId,
+    );
     if (!sourceEvent) {
       throw new Error(`Source event not found: ${sourceEventId}`);
     }
@@ -1392,16 +1446,30 @@ export class DevStore {
 
   /**
    * Get settlement by source event ID
+   *
+   * 需求 23 audit §6 owner-check: returns null if settlement is not
+   * owned by the currently bound user.
    */
   getSettlementBySourceEventId(sourceEventId: string): Settlement | null {
-    return this.settlements.find(s => s.source_event_id === sourceEventId) || null;
+    return (
+      this.settlements.find(
+        s => s.source_event_id === sourceEventId && s.user_id === this.userId,
+      ) || null
+    );
   }
 
   /**
    * Get settlement by settlement ID
+   *
+   * 需求 23 audit §6 owner-check: returns null if settlement is not
+   * owned by the currently bound user.
    */
   getSettlement(settlementId: string): Settlement | null {
-    return this.settlements.find(s => s.settlement_id === settlementId) || null;
+    return (
+      this.settlements.find(
+        s => s.settlement_id === settlementId && s.user_id === this.userId,
+      ) || null
+    );
   }
 
   getBalanceSnapshot(): BalanceSnapshot {
@@ -1789,17 +1857,24 @@ export class DevStore {
    * - MVP valid criteria: >= 15 minutes AND >= 5 effective attempts total
    */
   finishSession(sessionId: string, idempotencyKey: string): { session: Session; alreadyExists: boolean } {
+    // 需求 23 audit §6 owner-check: only owner may finish.
+    // We resolve session by (id, user_id) below; if mismatch → "not found"
+    // (404) to avoid entity ID enumeration.
     // Check idempotency
     const existingRecord = this.getIdempotencyKey(idempotencyKey);
     if (existingRecord) {
-      const existingSession = this.sessions.find(s => s.session_id === sessionId);
+      const existingSession = this.sessions.find(
+        s => s.session_id === sessionId && s.user_id === this.userId,
+      );
       // Phase 5 closeout: Check for any terminal state (valid/invalid)
       if (existingSession && ['valid', 'invalid'].includes(existingSession.session_status)) {
         return { session: existingSession, alreadyExists: true };
       }
     }
 
-    const session = this.sessions.find(s => s.session_id === sessionId);
+    const session = this.sessions.find(
+      s => s.session_id === sessionId && s.user_id === this.userId,
+    );
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
     }
@@ -1889,9 +1964,16 @@ export class DevStore {
 
   /**
    * Get session by ID
+   *
+   * 需求 23 audit §6 owner-check: returns null if session is not owned
+   * by the currently bound user (prevents cross-user reads).
    */
   getSession(sessionId: string): Session | null {
-    return this.sessions.find(s => s.session_id === sessionId) || null;
+    return (
+      this.sessions.find(
+        s => s.session_id === sessionId && s.user_id === this.userId,
+      ) || null
+    );
   }
 
   /**
@@ -2391,45 +2473,63 @@ export class DevStore {
   }
 
   /**
-   * Get owned items for testing
+   * Get owned items for testing.
+   *
+   * Note (A4-α): OwnedItem has no user_id field, so under multi-user
+   * mode (AUTH_ENFORCE=true) this WILL leak across users. A4-β must
+   * partition `this.ownedItems` per-user. Single-user permissive mode
+   * is unaffected.
    */
   getOwnedItems(): OwnedItem[] {
     return [...this.ownedItems];
   }
 
   /**
-   * Get feed records for testing
+   * Get feed records for testing.
+   *
+   * 需求 23 Phase A4-α: filtered by current user_id.
    */
   getFeedRecords(): FeedRecord[] {
-    return [...this.feedRecords];
+    return this.feedRecords.filter(f => f.user_id === this.userId);
   }
 
   /**
    * Get today's feed count (for testing anti-spam)
+   *
+   * 需求 23 Phase A4-α: filtered by current user_id.
    */
   getTodayFeedCount(): number {
     const today = new Date().toISOString().split('T')[0];
-    return this.feedRecords.filter(f => f.local_date === today).length;
+    return this.feedRecords.filter(
+      f => f.local_date === today && f.user_id === this.userId,
+    ).length;
   }
 
   /**
-   * Get sessions for testing
+   * Get sessions for testing.
+   * 需求 23 Phase A4-α: filtered by current user_id.
    */
   getSessions(): Session[] {
-    return [...this.sessions];
+    return this.sessions.filter(s => s.user_id === this.userId);
   }
 
   /**
-   * Get check-ins for testing
+   * Get check-ins for testing.
+   * 需求 23 Phase A4-α: filtered by current user_id.
    */
   getCheckIns(): CheckInRecord[] {
-    return [...this.checkIns];
+    return this.checkIns.filter(c => c.user_id === this.userId);
   }
 
   /**
-   * Get streak for testing
+   * Get streak for testing.
+   * Note (A4-α): streakRecord is a single field, not a list. It implicitly
+   * belongs to the bound user. Under multi-user mode A4-β must partition.
    */
   getStreak(): StreakRecord | null {
+    if (this.streakRecord && this.streakRecord.user_id !== this.userId) {
+      return null;
+    }
     return this.streakRecord;
   }
 
@@ -2562,8 +2662,9 @@ export class DevStore {
       }
     }
 
+    // 需求 23 audit §6 owner-check: fishing task must belong to current user.
     const task = this.fishingTasks.get(taskId);
-    if (!task || !task.current_round_fish_word_id) {
+    if (!task || task.user_id !== this.userId || !task.current_round_fish_word_id) {
       return { alreadyExists: false, attempt: null, isCorrect: false, fishWord: null, fishTreatsEarned: 0, roundsCompleted: task?.rounds_completed ?? 0, roundsTotal: task?.rounds_total ?? 3, status: task?.status ?? 'available', boxEarned: false, boxId: null };
     }
 
@@ -2642,9 +2743,11 @@ export class DevStore {
 
   // ========== Phase D: Lottery ==========
 
-  /** Get all unopened lottery boxes for this user. */
+  /** Get all unopened lottery boxes for this user.
+   *
+   * 需求 23 audit §6 owner-check: filter by user_id. */
   getLotteryBoxes(): LotteryBox[] {
-    return this.lotteryBoxes.filter(b => !b.opened);
+    return this.lotteryBoxes.filter(b => !b.opened && b.user_id === this.userId);
   }
 
   /**
@@ -2666,7 +2769,11 @@ export class DevStore {
       }
     }
 
-    const box = this.lotteryBoxes.find(b => b.id === boxId);
+    // 需求 23 audit §6 owner-check: box must belong to current user.
+    // Mismatched user → "not found" semantics (return null box).
+    const box = this.lotteryBoxes.find(
+      b => b.id === boxId && b.user_id === this.userId,
+    );
     if (!box || box.opened) {
       return { alreadyExists: false, box: box ?? null, coinsWon: 0 };
     }
