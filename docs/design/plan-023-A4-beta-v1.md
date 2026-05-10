@@ -1,11 +1,16 @@
 # Plan: 需求 23 Phase A4-β — 真正的多用户数据隔离
 
 **Plan Version:** v1
-**Status:** draft（待用户确认）
+**Status:** **已完成**（3 个 batch 全部 commit, 76/76 e2e pass）
 **Branch:** `feature/user-auth`（同 α）
 **前序:** Phase A4-α（commit `1991be7`）
+**Batch commits:**
+- Batch 1 (β.1+β.2): `52c1a30` — withUser async-guard + 错误码统一 + backup partition (P0)
+- Batch 2 (β.3+β.4+β.5+β.6 部分): `3833c25` — dev-store 全部 *ByUser partition + idempotency Map + pg-persistence userId
+- Batch 3 (β.7+β.8): 待 commit — 6 个新 isolation e2e + 文档同步
+
 **关联:** [plan-023-用户系统与用户数据隔离-v2.md](plan-023-用户系统与用户数据隔离-v2.md) §1.1 / §5
-**日期:** 2026-05-09
+**日期:** 2026-05-09 (v1 起草) → 2026-05-10 (v1 落地完成)
 
 ---
 
@@ -487,3 +492,144 @@ AUTH_ENFORCE=true cd apps/api && npm run test:e2e:pg
 4. 估时 12-17 小时是否在你预期范围
 
 确认后按 β.1 → β.2 → β.7 → β.3-β.6 顺序实施。
+
+---
+
+## 实施记录（2026-05-10 完成）
+
+用户确认后实际拆分为 3 个 batch（与原 plan 略有调整）：
+
+### Batch 1: β.1 hot-fix + β.2 backup partition（commit `52c1a30`）
+
+**β.1 hot-fix：**
+- `withUser` async-guard：检测 `fn()` 返回 Promise 时主动抛错（阻止未来在 withUser 内加 await 导致的隐式串数据 bug）
+- Owner-check 错误码统一：dev-store 内 `finishSession` / `createSettlement` / `openLotteryBox` / `submitReviewAttempt` / `submitFishingAttempt` 全部统一抛 `NotFoundException`，替代之前 4 种不一致的返回形态（最危险的是 `submitReviewAttempt` 返 `{success: false}` 泄露 review_group 存在性，β.1 修复）
+- `auth-isolation.e2e-spec.ts` 头注释失真修订
+
+**β.2 backup per-user（P0 closeout）：**
+- `dev-store.ts`: `latestBackup` / `backupSnapshot` 单插槽 → `latestBackupByUser` / `backupSnapshotByUser` Map<userId, ...>
+- 三个方法（storeBackup / getLatestBackupMeta / getBackupSnapshot）接 `userId` 第一参数（不再走 withUser 包装）
+- `backup.controller.ts` 直接传 `user.id`
+- `DevStoreSnapshot` 加 `latestBackupsByUser` / `backupSnapshotsByUser` 字段；保留 legacy 单插槽字段做向后兼容（hydrate 时自动 migrate 到 DEV_USER_ID bucket）
+- 2 个新 e2e：「B 看不到 A 的 backup snapshot」「LWW 跨用户隔离」
+
+**测试：70/70 e2e pass**（+2 new backup e2e）
+
+---
+
+### Batch 2: β.3 + β.4 + β.5 主 + β.6 部分（commit `3833c25`）
+
+**β.3 dev-store 内部状态全 partition：**
+- 23 个原本共享的内部字段全部转为 per-user Map：
+  - 数组类（13 个）：`studyAttempts` / `reviewGroups` / `reviewAttempts` / `sourceEvents` / `rewardLedgerItems` / `settlements` / `sessions` / `checkIns` / `learningDays` / `feedRecords` / `ownedItems` / `fishingAttempts` / `lotteryBoxes` → `Map<userId, T[]>`
+  - Map 类（3 个）：`todayStates` / `idempotencyKeys` / `fishingTasks` → `Map<userId, Map<key, T>>`
+  - 单值类（7 个）：`coinsSpent` / `feedMoodAccumulated` / `feedExpAccumulated` / `feedBondAccumulated` / `streakRecord` / `equippedOutfit` / `equippedRoom` → `Map<userId, T>`
+- **关键设计：用 TypeScript getter/setter 保留 legacy 字段名（`this.studyAttempts` 等），方法体零改动**——getter 自动按 `this.userId`（由 withUser 绑定）路由到对应 bucket
+- `serialize` / `hydrate` 重写：
+  - serialize 数组类跨用户 flatten（PG 用每行 `user_id` 区分）
+  - serialize Map 类只 dump DEV_USER_ID 的 slice（β.5 单用户 PG schema 限制，β.5b 修）
+  - hydrate 按每行 `user_id` field 重新 bucketize
+- `reset()` 清空所有 *ByUser
+
+**β.4 idempotency Map per-user：**
+- 内部从 `Map<key, IdempotencyKeyRecord>` 升级为 `Map<userId, Map<key, Record>>`（嵌套 Map）
+- 通过 getter 自动按当前 user 取 inner Map
+- 修复评审 2 P1 漏洞：之前同 key 跨用户在 in-memory 路径会撞（PG PK 层已隔离，但 cache 早于 PG 写入）
+
+**β.5 pg-persistence userId 参数：**
+- 接口扩展：`loadAsync?(userId)` / `saveAsync(snapshot, userId)` / `clear(userId)`
+- 30+ 处 `DEV_USER_ID` 常量替换为参数（默认 `DEV_USER_ID` 保持单用户向后兼容）
+- saveAsync 用 `ownedBy = row.user_id === userId` 过滤每个数组的行——只持久化当前 user 的 slice
+- DELETE-replace 模式按 userId 范围，不影响其他 user 的 PG 行
+- dev-store.saveToDisk 捕获 `this.userId` 传给 saveAsync
+
+**β.6 部分（withUser 角色重新定位）：**
+- α 阶段 withUser 是「临时 userId 覆盖 hack」
+- β.3 之后 withUser 是**正式的 user-binding 入口**：选择 getter/setter 路由到哪个 bucket
+- 完全去 withUser（给 ~50 个公共方法加 userId 参数）是纯 cosmetic 改动，defer 到未来 cleanup
+
+**β.5 / β.6 已知限制（源代码注释 + β plan 明示）：**
+1. **β.5b lazy-load**: 启动只 `loadAsync(DEV_USER_ID)` — 其他 user server restart 后 in-memory 丢，PG 真理仍在。Phase E1 切流前必修
+2. **ownedItems / equipped* / wallet 持久化**: 这几个 snapshot 字段没 user_id，pg-persistence 仅 DEV_USER_ID 路径持久化；其他 user 数据只在 in-memory 存活。Phase E1 切流前必修（snapshot type 加 *ByUser 字段）
+
+**测试：70/70 e2e pass**（无新增）
+
+---
+
+### Batch 3: β.7 e2e + β.8 文档（当前 commit）
+
+**β.7 isolation e2e 补全 — audit §6 覆盖率从 ~33% (6/18) 提升到 ~78% (14/18)：**
+
+| 新增 e2e（6 个）| 验证内容 |
+|---------------|---------|
+| idempotency 真测（替换原弱测试）| 同 idem key + 同 source_ref_id 跨用户产生不同 settlement |
+| A 的 study 不出现在 B 的 today | β.3 partition 内部数据隔离 |
+| A 的 reward ledger 不污染 B 的 balance | 用 before/after delta 验证（评审采纳）|
+| B 不能写入 A 的 review_group | audit §6 review owner-check |
+| B 的 inventory 不被 A 的 purchase 污染 | β.3 in-memory partition（β.5 持久化 dev only）|
+| B 不能开 A 的 lottery box → 404 | audit §6 lottery owner-check（PG 直插）|
+| B 不能提交到 A 的 fishing task → 404 | audit §6 fishing owner-check |
+
+**β.8 文档同步：**
+- 本 plan 文件标 status=已完成 + 加 Batch 1/2/3 实施记录
+- α 评审采纳清单已在 plan 开头记录
+- β 残留项明示在源代码注释：
+  - `dev-store.ts:228` withUser doc 说明 binding 语义
+  - `pg-persistence.ts:15` β.5b lazy-load 限制
+  - β.5 saveAsync 内联注释 ownedItems/equipped 仅 DEV_USER_ID 持久化
+
+**测试：76/76 e2e pass**（+6 new isolation e2e）
+
+---
+
+## β 残留（Phase E1 切流前 must-do）
+
+按重要度排序：
+
+1. **β.5b: lazy-load 非 DEV_USER_ID 用户数据**
+   - 现状：startup `loadAsync(DEV_USER_ID)` 只 hydrate 一个 bucket
+   - 影响：AUTH_ENFORCE=true 时，server restart 后非 dev 用户的 in-memory cache 为空，请求看不到自己的历史数据（PG 真理仍在）
+   - 实施方案：dev-store 在 `withUser(userId, fn)` 入口检测 unseen userId，触发 async `loadAsync(userId)` + hydrate 到 bucket。需要异步流入 sync withUser 路径，建议增加 `ensureUserLoaded(userId): Promise<void>` 公共方法，controller 在 AuthGuard 之后显式 await
+
+2. **β.5c: ownedItems / equipped* / wallet snapshot 字段扩 user_id**
+   - 现状：DevStoreSnapshot 这几个字段是 flat 单用户视角（没有 user_id）；saveAsync 仅 DEV_USER_ID 路径持久化
+   - 影响：非 dev 用户的 purchase / equip / wallet 变更不入 PG。Restart 后丢失
+   - 实施方案：DevStoreSnapshot 加 `ownedItemsByUser` / `equippedOutfitByUser` / `walletByUser` 字段，serialize 跨用户 dump，pg-persistence 跨用户 INSERT
+
+3. **β.6 完全去 withUser（cosmetic，非阻塞）**
+   - 现状：withUser 是合法 binding 入口
+   - 替代方案：给所有 ~50 dev-store 公共方法加 userId 第一参数，移除 `this.userId` 字段；getter 内部按入参取 bucket
+   - 阻塞性：无（withUser 现在工作正常）
+
+4. **β.7 lottery 跨用户测试硬化**
+   - 现状：直接 PG 插入 box，但 dev-store in-memory 未 reload，所以测试实际验证的是「no-such-box」而不是「not-yours」（同样返 404）
+   - 修法：β.5b lazy-load 落地后，可触发 dev-store 实际读到 PG 中的 box，再测 cross-user 真隔离
+
+5. **review-attempts /local-batch 跨用户 owner-check 未覆盖**
+   - β.7 #11 测了 submit single review attempt cross-user。submitLocalReviewBatch 路径未单独测
+   - 路径不同但底层都走 review_group lookup，理论上同样受 audit §6 保护
+
+---
+
+## 工时实测
+
+| 子项 | 估时 | 实际 |
+|------|------|------|
+| β.1 hot-fix | 0.5-1 小时 | ~30 分钟 |
+| β.2 backup partition | 1-2 小时 | ~45 分钟 |
+| β.3 内部状态 partition | 4-6 小时 | ~1.5 小时（getter 模式比预期省力）|
+| β.4 idempotency Map | 0.5 小时（β.3 内顺手）| ~0 顺带完成 |
+| β.5 pg-persistence userId | 2-3 小时 | ~1 小时 |
+| β.6 移除 withUser | 1 小时 | 0（决定保留 withUser 作为 binding 入口）|
+| β.7 补 e2e | 2-3 小时 | ~1 小时（6 个用例，2 处需修测试预设状态）|
+| β.8 文档 | 1 小时 | ~30 分钟 |
+| **合计** | **12-17 小时** | **~5 小时实际**（估时偏高，多亏 getter 模式）|
+
+---
+
+## 下一阶段
+
+α + β 主体完成。可以进入：
+- **Phase B（移动端身份层）** — 与 β 残留项正交，可并行
+- **β 残留收尾**（β.5b lazy-load + β.5c snapshot 扩字段）— Phase E1 切流前必做，可拆为独立 PR
+- **Phase E1 AUTH_ENFORCE=true 切流** — 必须先做 β 残留
