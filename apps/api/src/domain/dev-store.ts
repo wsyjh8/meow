@@ -1,12 +1,13 @@
 /**
  * Development In-Memory Store for Phase 1
- * 
+ *
  * Assumption (temporary, not frozen):
  * - This is a development-only in-memory store for Phase 1 rapid iteration.
  * - It will be replaced with a real database in later phases.
  * - Code structure is designed to allow easy replacement.
  */
 
+import { NotFoundException } from '@nestjs/common';
 import {
   TodayState,
   StudyAttempt,
@@ -195,9 +196,12 @@ export class DevStore {
   private equippedOutfit: Record<string, string | null> = {};
   private equippedRoom: Record<string, string | null> = {};
 
-  // P3.2 — Cloud backup storage (persisted, last-write-wins)
-  private latestBackup: any | null = null;
-  private backupSnapshot: any | null = null;
+  // P3.2 — Cloud backup storage (persisted, last-write-wins).
+  // 需求 23 Phase A4-β.2: per-user buckets. Each user has at most one
+  // most-recent backup (last-write-wins within their own slot). Was a
+  // single global slot in α — that leaked across users.
+  private latestBackupByUser: Map<string, any> = new Map();
+  private backupSnapshotByUser: Map<string, any> = new Map();
 
   // Phase D: Fishing + Lottery
   private fishingTasks: Map<string, DailyFishingTask> = new Map(); // key: "ft-{taskDate}"
@@ -238,12 +242,32 @@ export class DevStore {
    * requests, the previous-value restoration prevents stack-style leaks
    * but in-memory state mutations from one request remain visible to
    * another. A4-β solves the latter by partitioning state per-user.
+   *
+   * Phase A4-β.1 hot-fix: refuse async fn so that future code adding
+   * an `await` inside the wrapped block can't silently leak userId
+   * across concurrent requests (the resumed continuation would see
+   * `this.userId` already restored to a different caller's value).
+   * Async paths must NOT use withUser — they should be either sync OR
+   * post-A4-β (pass userId explicitly to per-user buckets).
    */
   withUser<T>(userId: string, fn: () => T): T {
     const prev = this.userId;
     this.userId = userId;
     try {
-      return fn();
+      const result = fn();
+      if (
+        result !== null &&
+        typeof result === 'object' &&
+        typeof (result as { then?: unknown }).then === 'function'
+      ) {
+        // Defensive: async fn would resume after `this.userId = prev`
+        // and corrupt state. Caller must restructure to a sync path or
+        // wait for A4-β to expose user-scoped methods.
+        throw new Error(
+          '[withUser] async fn forbidden — see plan-023-A4-beta-v1.md §β.1',
+        );
+      }
+      return result;
     } finally {
       this.userId = prev;
     }
@@ -312,8 +336,11 @@ export class DevStore {
       equippedOutfit: this.equippedOutfit,
       equippedRoom: this.equippedRoom,
       idempotencyKeys: idempotencyKeysObj,
-      latestBackup: this.latestBackup,
-      backupSnapshot: this.backupSnapshot,
+      // β.2: per-user backup buckets serialized as Record<userId, ...>.
+      // Legacy single-slot fields removed from output (still readable on
+      // hydrate for backward-compat with pre-β.2 snapshots).
+      latestBackupsByUser: Object.fromEntries(this.latestBackupByUser.entries()),
+      backupSnapshotsByUser: Object.fromEntries(this.backupSnapshotByUser.entries()),
       fishingTasks: fishingTasksObj,
       fishingAttempts: this.fishingAttempts,
       lotteryBoxes: this.lotteryBoxes,
@@ -357,9 +384,26 @@ export class DevStore {
       }
     }
 
-    // P3.2 backup state (optional fields — may not be present in old snapshots)
-    this.latestBackup = snapshot.latestBackup ?? null;
-    this.backupSnapshot = snapshot.backupSnapshot ?? null;
+    // P3.2 backup state.
+    // β.2: prefer per-user buckets; if a legacy single-slot field is present
+    // (from a pre-β.2 snapshot), migrate it into the DEV_USER_ID bucket.
+    this.latestBackupByUser.clear();
+    this.backupSnapshotByUser.clear();
+    if (snapshot.latestBackupsByUser) {
+      for (const [uid, meta] of Object.entries(snapshot.latestBackupsByUser)) {
+        this.latestBackupByUser.set(uid, meta);
+      }
+    } else if (snapshot.latestBackup) {
+      // legacy single-slot → dev-user bucket (last-write-wins under that user)
+      this.latestBackupByUser.set(DEV_USER_ID, snapshot.latestBackup);
+    }
+    if (snapshot.backupSnapshotsByUser) {
+      for (const [uid, snap] of Object.entries(snapshot.backupSnapshotsByUser)) {
+        this.backupSnapshotByUser.set(uid, snap);
+      }
+    } else if (snapshot.backupSnapshot) {
+      this.backupSnapshotByUser.set(DEV_USER_ID, snapshot.backupSnapshot);
+    }
 
     // Phase D: Fishing + Lottery (optional — backward compat)
     this.fishingTasks.clear();
@@ -974,12 +1018,15 @@ export class DevStore {
     sessionId?: string,
   ): { success: boolean; groupCompleted: boolean; alreadyExists: boolean } {
     // 需求 23 audit §6 owner-check: review_group must belong to current user.
-    // Mismatched user → "not found" (returns success=false, no leakage).
+    // Phase A4-β.1: cross-user review_group access throws 404 (was returning
+    // {success:false} which leaked group existence). Item-not-in-group and
+    // other validation paths still return {success:false} below — only the
+    // owner-mismatch path is hardened here.
     const group = this.reviewGroups.find(
       g => g.review_group_id === reviewGroupId && g.user_id === this.userId,
     );
     if (!group) {
-      return { success: false, groupCompleted: false, alreadyExists: false };
+      throw new NotFoundException(`Review group not found: ${reviewGroupId}`);
     }
 
     if (group.group_status === 'completed') {
@@ -1156,12 +1203,16 @@ export class DevStore {
   }
 
   // ==================== P3.2 Backup Storage ====================
+  //
+  // 需求 23 Phase A4-β.2: per-user buckets. All three methods take userId
+  // as first arg (no `withUser` wrapping needed) for explicit ownership.
 
   /**
-   * Store a backup snapshot (last-write-wins).
+   * Store a backup snapshot for the given user (last-write-wins per user).
    * Persisted via the normal saveToDisk() chain.
    */
   storeBackup(
+    userId: string,
     backupId: string,
     schemaVersion: string,
     uploadedAt: string,
@@ -1170,7 +1221,7 @@ export class DevStore {
     deviceId?: string,
     deviceModel?: string,
   ): void {
-    this.latestBackup = {
+    this.latestBackupByUser.set(userId, {
       backup_id: backupId,
       schema_version: schemaVersion,
       uploaded_at: uploadedAt,
@@ -1178,19 +1229,19 @@ export class DevStore {
       status: 'succeeded',
       device_id: deviceId ?? null,
       device_model: deviceModel ?? null,
-    };
-    this.backupSnapshot = snapshot;
+    });
+    this.backupSnapshotByUser.set(userId, snapshot);
     this.saveToDisk();
   }
 
-  /** Get latest backup metadata. Null if no backup stored. */
-  getLatestBackupMeta(): any | null {
-    return this.latestBackup;
+  /** Get latest backup metadata for the given user. Null if none stored. */
+  getLatestBackupMeta(userId: string): any | null {
+    return this.latestBackupByUser.get(userId) ?? null;
   }
 
-  /** Get the full backup snapshot. Null if no backup stored. */
-  getBackupSnapshot(): any | null {
-    return this.backupSnapshot;
+  /** Get the full backup snapshot for the given user. Null if none stored. */
+  getBackupSnapshot(userId: string): any | null {
+    return this.backupSnapshotByUser.get(userId) ?? null;
   }
 
   /**
@@ -1360,11 +1411,12 @@ export class DevStore {
 
     // 需求 23 audit §6 owner-check: source_event must belong to current user.
     // Mismatched user → "not found" (404) to avoid ID enumeration.
+    // Phase A4-β.1: unified to NotFoundException for clean controller semantics.
     const sourceEvent = this.sourceEvents.find(
       e => e.source_event_id === sourceEventId && e.user_id === this.userId,
     );
     if (!sourceEvent) {
-      throw new Error(`Source event not found: ${sourceEventId}`);
+      throw new NotFoundException(`Source event not found: ${sourceEventId}`);
     }
 
     // Create reward ledger items based on source event type
@@ -1872,11 +1924,13 @@ export class DevStore {
       }
     }
 
+    // Owner-check failure → NotFoundException (404, no leakage of "session
+    // exists but not yours"). 需求 23 Phase A4-β.1: unified error shape.
     const session = this.sessions.find(
       s => s.session_id === sessionId && s.user_id === this.userId,
     );
     if (!session) {
-      throw new Error(`Session not found: ${sessionId}`);
+      throw new NotFoundException(`Session not found: ${sessionId}`);
     }
 
     // Phase 5 closeout: Check for any terminal state
@@ -2663,9 +2717,14 @@ export class DevStore {
     }
 
     // 需求 23 audit §6 owner-check: fishing task must belong to current user.
+    // Phase A4-β.1: split owner-mismatch (→ 404) from "no active round"
+    // (legitimate state; client may need to start a round first).
     const task = this.fishingTasks.get(taskId);
-    if (!task || task.user_id !== this.userId || !task.current_round_fish_word_id) {
-      return { alreadyExists: false, attempt: null, isCorrect: false, fishWord: null, fishTreatsEarned: 0, roundsCompleted: task?.rounds_completed ?? 0, roundsTotal: task?.rounds_total ?? 3, status: task?.status ?? 'available', boxEarned: false, boxId: null };
+    if (!task || task.user_id !== this.userId) {
+      throw new NotFoundException(`Fishing task not found: ${taskId}`);
+    }
+    if (!task.current_round_fish_word_id) {
+      return { alreadyExists: false, attempt: null, isCorrect: false, fishWord: null, fishTreatsEarned: 0, roundsCompleted: task.rounds_completed, roundsTotal: task.rounds_total, status: task.status, boxEarned: false, boxId: null };
     }
 
     const fishWordId = task.current_round_fish_word_id;
@@ -2770,12 +2829,17 @@ export class DevStore {
     }
 
     // 需求 23 audit §6 owner-check: box must belong to current user.
-    // Mismatched user → "not found" semantics (return null box).
+    // Phase A4-β.1: split outcomes for clarity.
+    //   - not found OR not owned → 404 (no enumeration)
+    //   - already opened → idempotent replay (alreadyExists=true)
     const box = this.lotteryBoxes.find(
       b => b.id === boxId && b.user_id === this.userId,
     );
-    if (!box || box.opened) {
-      return { alreadyExists: false, box: box ?? null, coinsWon: 0 };
+    if (!box) {
+      throw new NotFoundException(`Lottery box not found: ${boxId}`);
+    }
+    if (box.opened) {
+      return { alreadyExists: true, box, coinsWon: 0 };
     }
 
     // Weighted random draw

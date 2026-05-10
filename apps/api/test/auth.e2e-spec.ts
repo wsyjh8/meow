@@ -42,6 +42,12 @@ import { getPool } from '../src/infrastructure/postgres/client';
 const hasPg = !!process.env.DATABASE_URL;
 const describeIfPg = hasPg ? describe : describe.skip;
 
+// Phase A4-β.2: PG ops slow down once auth-isolation suite runs first
+// (more rows in users / settlements / backup tables). Default 5s test
+// timeout is too tight for AppModule init + PG round-trips. Bump to 15s
+// per-test (was 5s default).
+jest.setTimeout(15000);
+
 describeIfPg('/auth/* e2e (PG)', () => {
   let app: INestApplication;
   // Track ids inserted by tests so we can clean up after.

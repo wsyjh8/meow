@@ -52,9 +52,14 @@ export interface DevStoreSnapshot {
   // Idempotency keys
   idempotencyKeys: Record<string, any>;
 
-  // P3.2 Backup persistence — optional for backward compat with existing state files
-  latestBackup?: any | null;
-  backupSnapshot?: any | null;
+  // P3.2 Backup persistence
+  // α: single global slot fields (kept here for backward-compat hydration of
+  // pre-β.2 snapshots — old data gets migrated into the dev-user-001 bucket).
+  // β.2+: per-user records, keyed by userId.
+  latestBackup?: any | null;          // legacy single slot — read-only after β.2
+  backupSnapshot?: any | null;        // legacy single slot — read-only after β.2
+  latestBackupsByUser?: Record<string, any>;
+  backupSnapshotsByUser?: Record<string, any>;
 
   // Phase D: Fishing + Lottery — optional for backward compat
   fishingTasks?: Record<string, any>;

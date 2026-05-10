@@ -18,10 +18,9 @@ import { CurrentUser } from '../auth/current-user.decorator';
  * Multi-device conflict policy: last-write-wins.
  * device_id and device_model are informational only — no merge logic.
  *
- * 需求 23 Phase A4-α: AuthGuard required; backup state bound to current
- * user via devStore.withUser. Note: dev-store currently has a single
- * `latestBackup` slot shared across users — under AUTH_ENFORCE=true this
- * is a bug to be fixed by A4-β (partition backup state per-user).
+ * 需求 23 Phase A4-β.2: per-user backup buckets — User A's snapshot is
+ * not visible to User B. Was a single global slot in α (P0 leakage,
+ * fixed here).
  */
 @Controller('me/backup')
 @UseGuards(AuthGuard)
@@ -50,18 +49,16 @@ export class BackupController {
     const resolvedDeviceId = deviceId ?? (snapshot.device?.device_id as string | undefined);
     const resolvedDeviceModel = deviceModel ?? (snapshot.device?.device_model as string | undefined);
 
-    // Persist via devStore (survives server restart)
-    devStore.withUser(user.id, () => {
-      devStore.storeBackup(
-        backupId,
-        resolvedSchema,
-        uploadedAt,
-        snapshotSize,
-        snapshot,
-        resolvedDeviceId,
-        resolvedDeviceModel,
-      );
-    });
+    devStore.storeBackup(
+      user.id,
+      backupId,
+      resolvedSchema,
+      uploadedAt,
+      snapshotSize,
+      snapshot,
+      resolvedDeviceId,
+      resolvedDeviceModel,
+    );
 
     await repositories.ensurePersisted();
 
@@ -77,7 +74,7 @@ export class BackupController {
 
   @Get('latest')
   getLatestBackup(@CurrentUser() user: RequestUser) {
-    const meta = devStore.withUser(user.id, () => devStore.getLatestBackupMeta());
+    const meta = devStore.getLatestBackupMeta(user.id);
 
     if (!meta) {
       return {
@@ -102,8 +99,8 @@ export class BackupController {
    */
   @Get('latest/snapshot')
   getLatestSnapshot(@CurrentUser() user: RequestUser) {
-    const snapshot = devStore.withUser(user.id, () => devStore.getBackupSnapshot());
-    const meta = devStore.withUser(user.id, () => devStore.getLatestBackupMeta());
+    const snapshot = devStore.getBackupSnapshot(user.id);
+    const meta = devStore.getLatestBackupMeta(user.id);
 
     if (!snapshot || !meta) {
       return {

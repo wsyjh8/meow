@@ -56,24 +56,18 @@ export class LotteryController {
       if (existing) return existing.response;
     }
 
+    // Phase A4-β.1: openLotteryBox now throws NotFoundException for
+    // "not found / not owned" (let it propagate → 404). Already-opened
+    // returns alreadyExists=true with coinsWon=0 for idempotent replay.
     const result = repositories.lottery.openLotteryBox(user.id, boxId, idempotencyKey || '');
-
-    if (!result.box) {
-      const response = {
-        opened: false,
-        already_exists: result.alreadyExists,
-        reason: 'box_not_found_or_already_opened',
-      };
-      return response;
-    }
 
     const balance = repositories.reward.getBalanceSnapshot(user.id);
     const response = {
-      opened: true,
+      opened: !result.alreadyExists,
       already_exists: result.alreadyExists,
-      box_id: result.box.id,
-      prize_type: result.box.prize_type,
-      prize_ref: result.box.prize_ref,
+      box_id: result.box!.id,
+      prize_type: result.box!.prize_type,
+      prize_ref: result.box!.prize_ref,
       coins_won: result.coinsWon,
       coins_balance: balance.coins,
     };

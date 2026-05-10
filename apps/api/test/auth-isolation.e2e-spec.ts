@@ -1,10 +1,19 @@
 /**
- * 需求 23 Phase A4-α — Cross-user isolation tests
+ * 需求 23 Phase A4-α/β — Cross-user isolation tests
  *
- * Verifies audit §6 owner-check enforcement:
- *   - User A creates a session → User B cannot finish A's session
- *   - User A's settlement source_event → User B cannot read it
- *   - User A's lottery box → User B cannot open it
+ * Verifies audit §6 owner-check enforcement.
+ *
+ * α coverage (this file):
+ *   - 401 for missing/invalid token (AUTH_ENFORCE=true)
+ *   - User B cannot read User A's session → 404
+ *   - User B cannot finish User A's session → 404
+ *   - User B cannot read User A's settlement → 404
+ *   - Idempotency keys are scoped per-user
+ *
+ * β.7 coverage (added later):
+ *   - lottery / fishing / equipment / feed / review-batch / backup
+ *     cross-user → 404
+ *   - balance / today-state / next-new-word do NOT leak across users
  *
  * AUTH_ENFORCE=true so that fake/missing tokens are rejected with 401
  * (instead of falling back to dev-user-001).
@@ -211,5 +220,97 @@ describeIfPg('Cross-user isolation (AUTH_ENFORCE=true, audit §6)', () => {
     // settlements should be distinct
     expect(aRes.body.settlement_id).not.toBe(bRes.body.settlement_id);
     expect(aRes.body.source_ref_id).not.toBe(bRes.body.source_ref_id);
+  });
+
+  // 需求 23 Phase A4-β.2: backup per-user partition.
+  // Was a P0 leak in α — single global slot served same snapshot to all users.
+  it('User B does NOT see User A\'s backup snapshot', async () => {
+    const aSnapshot = {
+      schema_version: 'iso-test-v1',
+      progress: { word_records: [{ marker: 'belongs-to-A' }] },
+    };
+
+    const upload = await request(app.getHttpServer())
+      .post('/api/v1/me/backup')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ snapshot: aSnapshot, schema_version: 'iso-test-v1' });
+    expect(upload.status).toBe(201);
+    expect(upload.body.status).toBe('succeeded');
+
+    // A reads their own backup → has the snapshot
+    const ownMeta = await request(app.getHttpServer())
+      .get('/api/v1/me/backup/latest')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(ownMeta.status).toBe(200);
+    expect(ownMeta.body.schema_version).toBe('iso-test-v1');
+
+    const ownSnap = await request(app.getHttpServer())
+      .get('/api/v1/me/backup/latest/snapshot')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(ownSnap.status).toBe(200);
+    expect(ownSnap.body.status).toBe('available');
+    expect(ownSnap.body.snapshot.progress.word_records[0].marker).toBe(
+      'belongs-to-A',
+    );
+
+    // B reads their own backup → no_backup_yet (B never uploaded)
+    const bMeta = await request(app.getHttpServer())
+      .get('/api/v1/me/backup/latest')
+      .set('Authorization', `Bearer ${tokenB}`);
+    expect(bMeta.status).toBe(200);
+    expect(bMeta.body.status).toBe('no_backup_yet');
+
+    const bSnap = await request(app.getHttpServer())
+      .get('/api/v1/me/backup/latest/snapshot')
+      .set('Authorization', `Bearer ${tokenB}`);
+    expect(bSnap.status).toBe(200);
+    expect(bSnap.body.status).toBe('no_backup_found');
+    expect(bSnap.body.snapshot).toBeNull();
+  });
+
+  it('backup last-write-wins is scoped per-user (User A\'s second upload doesn\'t affect User B)', async () => {
+    // A uploads v1
+    const v1 = await request(app.getHttpServer())
+      .post('/api/v1/me/backup')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        snapshot: { schema_version: 'lww-A-v1', tag: 'A1' },
+        schema_version: 'lww-A-v1',
+      });
+    expect(v1.status).toBe(201);
+
+    // B uploads their own v1
+    const bUpload = await request(app.getHttpServer())
+      .post('/api/v1/me/backup')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .send({
+        snapshot: { schema_version: 'lww-B-v1', tag: 'B1' },
+        schema_version: 'lww-B-v1',
+      });
+    expect(bUpload.status).toBe(201);
+
+    // A overwrites with v2
+    const v2 = await request(app.getHttpServer())
+      .post('/api/v1/me/backup')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        snapshot: { schema_version: 'lww-A-v2', tag: 'A2' },
+        schema_version: 'lww-A-v2',
+      });
+    expect(v2.status).toBe(201);
+
+    // B's backup must still be B1, NOT overwritten by A's v2
+    const bSnap = await request(app.getHttpServer())
+      .get('/api/v1/me/backup/latest/snapshot')
+      .set('Authorization', `Bearer ${tokenB}`);
+    expect(bSnap.status).toBe(200);
+    expect(bSnap.body.snapshot.tag).toBe('B1');
+
+    // A sees their own A2
+    const aSnap = await request(app.getHttpServer())
+      .get('/api/v1/me/backup/latest/snapshot')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(aSnap.status).toBe(200);
+    expect(aSnap.body.snapshot.tag).toBe('A2');
   });
 });
