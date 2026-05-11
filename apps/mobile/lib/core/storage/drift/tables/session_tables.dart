@@ -6,6 +6,8 @@
 /// v13 (need 23 Phase C PR-C-α): both tables gain `user_id` for partition
 /// (plan-023-C-v2 §4.2). UNIQUE not changed — sessions.id is uuid and
 /// review_records.id is autoincrement, both already user-unique.
+library;
+
 import 'package:drift/drift.dart';
 
 @TableIndex(name: 'idx_sessions_user', columns: {#userId})

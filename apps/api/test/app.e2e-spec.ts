@@ -147,6 +147,14 @@ describe('Meow API (e2e)', () => {
 
   describe('POST /api/v1/review-attempts', () => {
     let reviewGroupId: string;
+    // The first word_id actually present in the active review group items.
+    // Pre-A4-β this was hardcoded to 'background' assuming dev-seed sort_order
+    // landed it in slot 21 → first 3 review-eligible. Once the full CET-4
+    // wordbook was imported into PG (`Loaded 3850 words from PG.`), sort_order
+    // shifted and 'background' is no longer guaranteed to be in the first 3.
+    // Capturing the actual first item makes the test state-resilient and
+    // mirrors `should mark group as completed` two tests below.
+    let firstReviewWordId: string;
 
     beforeEach(async () => {
       // Create a review group first
@@ -154,6 +162,7 @@ describe('Meow API (e2e)', () => {
         .get('/api/v1/me/review-groups/next')
         .expect(200);
       reviewGroupId = res.body.review_group_id;
+      firstReviewWordId = res.body.items[0].word_id;
     });
 
     it('should accept review attempt and update progress', () => {
@@ -161,7 +170,7 @@ describe('Meow API (e2e)', () => {
         .post('/api/v1/review-attempts')
         .send({
           review_group_id: reviewGroupId,
-          word_id: 'background',
+          word_id: firstReviewWordId,
           action_result: 'correct',
         })
         .set('X-Idempotency-Key', 'review-key-001')
@@ -179,7 +188,7 @@ describe('Meow API (e2e)', () => {
         .post('/api/v1/review-attempts')
         .send({
           review_group_id: reviewGroupId,
-          word_id: 'background',
+          word_id: firstReviewWordId,
           action_result: 'correct',
         })
         .set('X-Idempotency-Key', idempotencyKey)
@@ -191,7 +200,7 @@ describe('Meow API (e2e)', () => {
             .post('/api/v1/review-attempts')
             .send({
               review_group_id: reviewGroupId,
-              word_id: 'background',
+              word_id: firstReviewWordId,
               action_result: 'correct',
             })
             .set('X-Idempotency-Key', idempotencyKey)

@@ -4,6 +4,8 @@
 ///   - card_states: per-word FSRS card scheduling state
 ///   - review_logs: immutable review history (INSERT-ONLY, never update/delete)
 ///   - cached_words: local word pool cache for offline study
+library;
+
 import 'package:drift/drift.dart';
 
 // ==================== card_states ====================

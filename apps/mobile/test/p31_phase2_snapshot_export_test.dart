@@ -1,4 +1,6 @@
 /// P3.1 Phase 2 — Snapshot export tests (updated for SQLite-first).
+library;
+
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';

@@ -7,6 +7,8 @@
 /// - 留存曲线桶边界
 /// - 掌握等级分布 stability 阈值边界 (7, 30)
 /// - 顽固词排序 + lapses=0 不入榜
+library;
+
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';

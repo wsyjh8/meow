@@ -34,6 +34,8 @@
 ///   vocabulary_notebook: id INTEGER PK AUTO, user_id TEXT NOT NULL,
 ///                        word TEXT, meaning TEXT nullable, note TEXT
 ///                        nullable, created_at TEXT
+library;
+
 import 'package:drift/drift.dart';
 
 // ==================== word_records ====================
