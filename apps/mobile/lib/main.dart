@@ -200,6 +200,35 @@ void main() async {
   // properly. Detecting at boot turns a subtle data bug into a loud crash.
   await _assertUserIdColumns(appDb);
 
+  // 需求 23 Phase C PR-C-γ (plan-023-C-v2 §4.6): one-time pending-local-guest
+  // → real id cleanup pass. Catches the Day-2-online scenario where
+  // Day-1-offline wrote rows tagged with `pending-local-guest` and
+  // Day-2-online's bootstrap just resolved a real `server_guest_id`.
+  //
+  // Idempotent — subsequent launches find no `pending-local-guest`
+  // rows and the call returns a no-op MigrationOutcome.
+  //
+  // Also wires the same migrator into AuthController so any runtime
+  // `_commitSession` that moves the user off `pending-local-guest`
+  // (e.g. mid-session network recovery) re-tags drift / SP rows on
+  // the spot.
+  final guestMigrator = PendingGuestMigrator(db: appDb, prefs: prefs);
+  authBoot.controller.attachGuestMigrator(guestMigrator);
+
+  final boundUserId = authBoot.controller.currentUserId;
+  if (boundUserId != AuthStorage.pendingLocalGuestUserId) {
+    final outcome = await guestMigrator.migrate(
+      from: AuthStorage.pendingLocalGuestUserId,
+      to: boundUserId,
+    );
+    if (!outcome.isNoop) {
+      debugPrint(
+        '[main] pending-local-guest migration: drift rows=${outcome.driftRowsAffected}, '
+        'sp keys=${outcome.spKeysRenamed}, error=${outcome.error}',
+      );
+    }
+  }
+
   // v0.3.0 P1: unified content layer for all preset books.
   // Each loadIfNeeded check skips work when content_version matches.
   final wordbookLoader = WordbookLoader(db: appDb);

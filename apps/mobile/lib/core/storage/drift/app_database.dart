@@ -41,6 +41,23 @@ part 'app_database.g.dart';
 ///                         daily_checkins.(user_id, date),
 ///                         card_states.(user_id, word_id).
 ///                       Public/content/cache tables (11) untouched.
+// 需求 23 Phase C PR-C-γ §4.5 regression note (评审 2 弱覆盖 4):
+//
+// drift exposes a `.watch()` API on queries that emits a Stream of result
+// updates whenever underlying tables change. As of PR-C-γ implementation,
+// `grep -rn '\.watch()\|Stream<' lib/` returns ZERO drift stream usages
+// (only audio player state streams). The Phase C account-switch story
+// (`AuthHttpClient.send` epoch check + page-level didChangeDependencies
+// reset) does NOT propagate a "stop emitting" signal to live drift
+// streams.
+//
+// If a future feature adopts drift `.watch()` (e.g., a live-updating
+// FSRS due-count badge on Today), it MUST also subscribe / unsubscribe
+// against AuthController.epoch — otherwise user A's stream will keep
+// pushing rows into user B's UI after a switch. Likely shape:
+//   * Page acquires the stream via a per-user repository.
+//   * On didChangeDependencies epoch change, cancel the stream and
+//     re-subscribe via a new per-user repository.
 @DriftDatabase(tables: [
   // Legacy tables (v1, migrated from raw sqflite)
   WordRecords,

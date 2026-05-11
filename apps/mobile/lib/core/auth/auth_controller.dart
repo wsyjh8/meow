@@ -22,6 +22,7 @@ import 'package:flutter/foundation.dart';
 import 'auth_api.dart';
 import 'auth_storage.dart';
 import 'auth_types.dart';
+import 'pending_guest_migrator.dart';
 
 class AuthController extends ChangeNotifier {
   final AuthStorage storage;
@@ -30,6 +31,19 @@ class AuthController extends ChangeNotifier {
   AuthUser? _user;
   AuthStatus _status = AuthStatus.loading;
   int _epoch = 0;
+
+  /// 需求 23 Phase C PR-C-γ (plan §4.6): cross-storage migrator wired
+  /// in by main.dart AFTER drift opens. When [_commitSession] sees the
+  /// bound user transition out of `pending-local-guest`, it invokes
+  /// this migrator so any rows / SP keys still tagged with the
+  /// placeholder are re-tagged with the just-issued real user_id.
+  ///
+  /// Optional: when null (legacy / test path / pre-drift bootstrap),
+  /// the migration step short-circuits. main.dart also runs a separate
+  /// one-time migration pass after drift opens that covers the
+  /// cold-start scenario where _commitSession ran during bootstrap()
+  /// before this migrator was attached.
+  PendingGuestMigrator? _guestMigrator;
 
   /// Bound deviceId captured at bootstrap. Used by [logout] to re-attach
   /// a fresh guest session per plan v2 §6.5 («logout 后切到游客上下文»).
@@ -45,6 +59,13 @@ class AuthController extends ChangeNotifier {
 
   /// Construction does NOT load state — caller must call [bootstrap].
   AuthController({required this.storage, required this.api});
+
+  /// PR-C-γ §4.6: wire the cross-storage migrator. Call from main.dart
+  /// after drift opens. Subsequent [_commitSession] calls that move
+  /// the user_id out of `pending-local-guest` will trigger migration.
+  void attachGuestMigrator(PendingGuestMigrator migrator) {
+    _guestMigrator = migrator;
+  }
 
   // ========== Public observable state ==========
 
@@ -269,10 +290,41 @@ class AuthController extends ChangeNotifier {
 
   /// Apply an /auth/* response: persist token + metadata, update state,
   /// bump epoch so any in-flight pre-switch requests get dropped.
+  ///
+  /// PR-C-γ §4.6: when the bound user_id transitions out of
+  /// `pending-local-guest`, hand off to [PendingGuestMigrator] (if
+  /// wired) to re-tag any drift / SP rows still labelled with the
+  /// placeholder. Idempotent — running twice is a no-op so the
+  /// main.dart safety net doesn't conflict.
   Future<void> _commitSession(AuthResponse res) async {
+    // Snapshot the previous user_id BEFORE we overwrite SP — that's
+    // the value the migrator needs as the `from` side.
+    final previousUserId = storage.readUserId();
+
     await storage.writeToken(res.token);
     await storage.writeUserId(res.user.id);
     await storage.writeAccountType(res.user.accountType);
+
+    // PR-C-γ §4.6 migration hook. Two guards:
+    //   1. previousUserId must be pending-local-guest (the only safe
+    //      from-side per plan; any other id implies we'd be claiming
+    //      another user's rows).
+    //   2. The new id must be different (typically a server_guest_id
+    //      or registered user id).
+    if (previousUserId == AuthStorage.pendingLocalGuestUserId &&
+        res.user.id != AuthStorage.pendingLocalGuestUserId) {
+      final migrator = _guestMigrator;
+      if (migrator != null) {
+        // Best-effort: don't let migration failure prevent session commit.
+        // The next launch's main.dart pass will retry.
+        // ignore: unawaited_futures
+        migrator.migrate(
+          from: AuthStorage.pendingLocalGuestUserId,
+          to: res.user.id,
+        );
+      }
+    }
+
     _user = res.user;
     _epoch++;
     _status = res.user.accountType == AccountType.registered

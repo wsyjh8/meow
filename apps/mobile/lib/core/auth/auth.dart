@@ -7,3 +7,4 @@ export 'auth_scope.dart';
 export 'auth_storage.dart';
 export 'auth_types.dart';
 export 'sp_migrator.dart'; // Phase C PR-C-β
+export 'pending_guest_migrator.dart'; // Phase C PR-C-γ
