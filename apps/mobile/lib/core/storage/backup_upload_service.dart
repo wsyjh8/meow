@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../api/api_client.dart';
 import 'snapshot_export_service.dart';
 
 /// P3.1 Phase 3 — Backup upload service.
@@ -12,6 +14,17 @@ import 'snapshot_export_service.dart';
 /// keys are now `u_<userId>_backup_latest_*`. Construction takes userId so
 /// a switch-account doesn't leak the previous user's backup metadata.
 ///
+/// 需求 23 Phase D PR-D-α (plan-023-D-v2 §4.1 / Review 2 P0-1):
+/// constructor now accepts `http.Client client` so the upload request
+/// routes through the [AuthHttpClient] installed by AuthBootstrap and
+/// auto-injects `Authorization: Bearer <token>`. Pre-D the service
+/// called `http.post(...)` statically — under AUTH_ENFORCE=true that
+/// would 401; under permissive mode the server fell through to
+/// DEV_FALLBACK_USER_ID and wrote every user's backup to one bucket.
+/// Default-arg resolves to [ApiClient.defaultHttpClient] (whatever
+/// AuthBootstrap installed) so existing call sites need only `client:`
+/// when they want to override for tests.
+///
 /// IMPORTANT semantic boundaries:
 /// - upload success = snapshot sent to cloud container successfully
 /// - upload success != sync success (not a concept in P3.1)
@@ -21,13 +34,16 @@ class BackupUploadService {
   final String baseUrl;
   final SharedPreferences _prefs;
   final String _userId;
+  final http.Client _client;
 
   BackupUploadService({
     required this.baseUrl,
     required SharedPreferences prefs,
     required String userId,
+    http.Client? client,
   })  : _prefs = prefs,
-        _userId = userId;
+        _userId = userId,
+        _client = client ?? ApiClient.defaultHttpClient ?? http.Client();
 
   // PR-C-β: per-user SP namespace. Suffixes exported for [SpMigrator].
   static const _kLatestStatusSuffix = 'backup_latest_status';
@@ -61,7 +77,9 @@ class BackupUploadService {
     await _setLocalStatus(BackupUploadStatus.uploadInProgress);
 
     try {
-      final response = await http.post(
+      // PR-D-α: route through injected client so AuthHttpClient adds
+      // the Authorization header. (Was `http.post` — bypassed auth.)
+      final response = await _client.post(
         Uri.parse('$baseUrl/me/backup'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({

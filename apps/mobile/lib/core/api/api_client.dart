@@ -34,6 +34,14 @@ class ApiClient {
     _defaultHttpClient = client;
   }
 
+  /// 需求 23 Phase D PR-D-α: read the current default http client so
+  /// non-`ApiClient` HTTP consumers (BackupUploadService /
+  /// BackupRestoreService) can route through the AuthHttpClient that
+  /// AuthBootstrap installed at startup. Returns null when AuthBootstrap
+  /// hasn't wired one yet (legacy / pre-bootstrap path); callers should
+  /// fall back to a fresh `http.Client()` in that case.
+  static http.Client? get defaultHttpClient => _defaultHttpClient;
+
   ApiClient({
     this.baseUrl = apiV1Base,
     http.Client? client,

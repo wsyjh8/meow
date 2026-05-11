@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+
+import '../api/api_client.dart';
 import 'local_settings_service.dart';
 import 'local_database.dart';
 import 'snapshot_export_service.dart';
@@ -13,6 +15,15 @@ import 'snapshot_export_service.dart';
 /// SQLite. The PR-A-era LocalProgressRepository was deleted; the
 /// restore path now writes each progress entity directly to its SQLite
 /// table via [LocalDatabase], scoped to the current [userId].
+///
+/// 需求 23 Phase D PR-D-α (plan-023-D-v2 §4.1 / Review 2 P0-1):
+/// constructor accepts `http.Client client`; both pre-check fetch and
+/// the snapshot fetch now route through the [AuthHttpClient]
+/// AuthBootstrap installed, so requests carry `Authorization:
+/// Bearer <token>`. Pre-D the fetches went out as `http.get` (no
+/// auth) — the server hit the permissive fallback and pulled
+/// DEV_FALLBACK_USER_ID's backup regardless of who was actually
+/// signed in.
 ///
 /// IMPORTANT semantic boundaries:
 /// - restore success = current device local data updated from backup
@@ -31,15 +42,18 @@ class BackupRestoreService {
   final LocalSettingsService _settings;
   final LocalDatabase _db;
   final String _userId;
+  final http.Client _client;
 
   BackupRestoreService({
     required this.baseUrl,
     required LocalSettingsService settings,
     required LocalDatabase db,
     required String userId,
+    http.Client? client,
   })  : _settings = settings,
         _db = db,
-        _userId = userId;
+        _userId = userId,
+        _client = client ?? ApiClient.defaultHttpClient ?? http.Client();
 
   /// Accepted schema versions for restore.
   static const _acceptedSchemas = {
@@ -50,7 +64,9 @@ class BackupRestoreService {
   /// Pre-check: is there a restorable backup?
   Future<RestorePreCheckResult> preCheck() async {
     try {
-      final response = await http.get(
+      // PR-D-α: route through injected client so the request is
+      // authorized as the current user (not the permissive fallback).
+      final response = await _client.get(
         Uri.parse('$baseUrl/me/backup/latest/snapshot'),
       );
 
@@ -93,8 +109,8 @@ class BackupRestoreService {
   /// MUST be called only after preCheck() returns restorable AND user confirms.
   Future<RestoreResult> restore() async {
     try {
-      // Fetch snapshot
-      final response = await http.get(
+      // PR-D-α: route through injected client (auth header).
+      final response = await _client.get(
         Uri.parse('$baseUrl/me/backup/latest/snapshot'),
       );
 
