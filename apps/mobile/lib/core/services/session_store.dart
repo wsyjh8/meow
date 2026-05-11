@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../api/api_client.dart';
+import '../auth/auth_storage.dart';
 import '../storage/drift/app_database.dart';
 
 /// Need #8 — Local-first Session lifecycle.
@@ -47,9 +48,14 @@ class SessionStore {
 
     final id = _uuid.v4();
     final startedAt = DateTime.now().toUtc().toIso8601String();
+    // PR-C-α transitional bridge — PR-C-β will thread userId through
+    // SessionStore's constructor via the repository pattern
+    // (plan-023-C-v2 §4.4).
+    final userId = await AuthStorage.readBoundUserIdOrPlaceholder();
     await _db.into(_db.sessions).insert(
           SessionsCompanion.insert(
             id: id,
+            userId: userId,
             kind: kind,
             startedAt: startedAt,
             sessionMinutesTarget: const Value(_defaultMinutesTarget),

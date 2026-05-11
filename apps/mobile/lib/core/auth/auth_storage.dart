@@ -29,10 +29,22 @@ class AuthStorage {
   static const _spPendingDriftMigration = 'auth_pending_local_drift_migration';
   static const _spPendingSqfliteMigration =
       'auth_pending_local_sqflite_migration';
+  static const _spFreshInstallMarkerDone =
+      'auth_fresh_install_marker_done';
 
   /// Placeholder user_id used when the app starts offline and the server
   /// hasn't issued a guest token yet. plan v2 §6.3 single-ID design.
   static const pendingLocalGuestUserId = 'pending-local-guest';
+
+  /// SP keys probed by [markFreshInstallIfNeeded] to detect "this device
+  /// already has pre-C-build user data" (plan-023-C-v2 §4.0 / D3). Two
+  /// representative keys are enough — both `progress_*` and `settings_*`
+  /// are populated only after the user actually does something in the
+  /// pre-C app, so absence means truly fresh install.
+  static const _legacyDetectionKeys = <String>[
+    'settings_daily_goal',
+    'progress_word_records',
+  ];
 
   final FlutterSecureStorage _secure;
   final SharedPreferences _prefs;
@@ -110,6 +122,69 @@ class AuthStorage {
 
   Future<bool> writePendingSqfliteMigration(bool v) =>
       _prefs.setBool(_spPendingSqfliteMigration, v);
+
+  // ========== Phase C: fresh-install detection ==========
+
+  /// 需求 23 Phase C PR-C-α (plan-023-C-v2 §4.0 / D3): classify this
+  /// device as **fresh install** vs **existing user upgrading to a C
+  /// build** exactly once, and pre-seed the three pending-migration
+  /// flags accordingly.
+  ///
+  /// Detection signal: any pre-existing user-scoped SP key (probed via
+  /// [_legacyDetectionKeys]) means we're an upgrade and the SP / drift /
+  /// sqflite migration paths will need to run when their PRs land
+  /// (PR-C-β / PR-C-γ). Absence means truly fresh install — no
+  /// migration needed, flags stay false.
+  ///
+  /// Idempotent via [_spFreshInstallMarkerDone]: subsequent calls
+  /// short-circuit so a successful β migration that flips
+  /// [_spPendingSpMigration] back to false isn't re-toggled to true on
+  /// the next launch.
+  ///
+  /// Call site: main.dart, AFTER AuthBootstrap (which writes
+  /// `auth_current_user_id`) and BEFORE LocalDatabase.initialize() /
+  /// drift open. Drift v13 onUpgrade reads `auth_current_user_id` for
+  /// backfill (plan-023-C-v2 §5).
+  Future<void> markFreshInstallIfNeeded() async {
+    if (_prefs.getBool(_spFreshInstallMarkerDone) ?? false) return;
+
+    final hasLegacyData = _legacyDetectionKeys.any(_prefs.containsKey);
+
+    await writePendingSpMigration(hasLegacyData);
+    await writePendingDriftMigration(hasLegacyData);
+    await writePendingSqfliteMigration(hasLegacyData);
+
+    await _prefs.setBool(_spFreshInstallMarkerDone, true);
+  }
+
+  /// Testing-only: did [markFreshInstallIfNeeded] run on this storage?
+  bool readFreshInstallMarkerDone() =>
+      _prefs.getBool(_spFreshInstallMarkerDone) ?? false;
+
+  /// PR-C-α transitional bridge for services that write to user-scoped
+  /// drift tables but don't yet thread userId through their public API
+  /// (FsrsService / ReviewLogService / SessionStore / LocalTodayService).
+  /// Reads `auth_current_user_id` directly from SharedPreferences — the
+  /// same SP key AuthBootstrap populates at startup — and falls back to
+  /// [pendingLocalGuestUserId] when SP is empty (offline cold-start) or
+  /// the platform channel is unavailable (test envs without
+  /// TestWidgetsFlutterBinding).
+  ///
+  /// **PR-C-β will retire this method** in favour of repository classes
+  /// (plan-023-C-v2 §4.4) where each table-owning repository is
+  /// constructed with an explicit userId. Grep callers via this method's
+  /// name to find migration sites.
+  static Future<String> readBoundUserIdOrPlaceholder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = prefs.getString(_spUserId);
+      if (id != null && id.isNotEmpty) return id;
+    } catch (_) {
+      // SharedPreferences platform channel not registered (some test
+      // setups skip TestWidgetsFlutterBinding) — fall through.
+    }
+    return pendingLocalGuestUserId;
+  }
 
   // ========== Convenience: full logout ==========
 

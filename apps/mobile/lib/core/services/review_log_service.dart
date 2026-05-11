@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 
 import '../api/api_client.dart';
+import '../auth/auth_storage.dart';
 import '../storage/drift/app_database.dart';
 
 /// Need #10 — Local + cloud review attempt history.
@@ -33,10 +34,14 @@ class ReviewLogService {
     int? rating,
     DateTime? reviewedAt,
     bool synced = false,
-  }) {
+  }) async {
     final ts = (reviewedAt ?? DateTime.now().toUtc()).toIso8601String();
+    // PR-C-α transitional bridge — PR-C-β will hoist userId into the
+    // ReviewLogService constructor (plan-023-C-v2 §4.4 repository pattern).
+    final userId = await AuthStorage.readBoundUserIdOrPlaceholder();
     return _db.into(_db.reviewRecords).insert(
           ReviewRecordsCompanion.insert(
+            userId: userId,
             reviewGroupId: reviewGroupId,
             wordId: wordId,
             actionResult: actionResult,

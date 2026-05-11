@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/api_client.dart' show TodayState;
+import '../auth/auth_storage.dart';
 import '../memory/fsrs_service.dart';
 import '../storage/drift/app_database.dart';
 import '../storage/local_database.dart';
@@ -83,15 +84,21 @@ class LocalTodayService {
   /// Check in for today. Writes to local daily_checkins table.
   /// Returns true if this is a new check-in (not already done today).
   Future<bool> checkIn() async {
+    // PR-C-α transitional: scope the check-in to the bound user. Same SP
+    // read pattern as the other services; PR-C-β will replace with a
+    // DailyCheckinsRepository constructed with userId (plan-023-C-v2 §4.4).
+    final userId = await AuthStorage.readBoundUserIdOrPlaceholder();
     final today = _todayDateString();
     final existing = await (_driftDb.select(_driftDb.dailyCheckins)
-          ..where((t) => t.date.equals(today)))
+          ..where((t) =>
+              t.userId.equals(userId) & t.date.equals(today)))
         .getSingleOrNull();
 
     if (existing != null) return false; // already checked in
 
     await _driftDb.into(_driftDb.dailyCheckins).insert(
       DailyCheckinsCompanion.insert(
+        userId: userId,
         date: today,
         createdAt: DateTime.now().toUtc().toIso8601String(),
       ),

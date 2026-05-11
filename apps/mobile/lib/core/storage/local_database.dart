@@ -1,5 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
+
+import '../auth/auth_storage.dart';
 
 /// P3.1 SQLite-first — Local database for user progress.
 ///
@@ -9,6 +12,15 @@ import 'package:path/path.dart' as p;
 ///
 /// Tables: word_records, wordbook_progress, daily_checkins,
 ///         custom_wordbooks, vocabulary_notebook
+///
+/// 需求 23 Phase C PR-C-α (plan-023-C-v2 D1 + §4.0): schema 创建权完全
+/// 让渡给 drift。这里的 `onCreate` 改为 no-op，drift 的 `m.createAll()`
+/// 在 fresh install 路径上独占建表。原因：v1 D1 选 Option B 但没动
+/// `_createTables`，导致 fresh install 启动时先由 raw sqflite 建出无
+/// `user_id` 列的 5 张 legacy 表，drift onCreate 因 `IF NOT EXISTS` 跳
+/// 过——结果 fresh install 永远拿不到 v13 schema。strip 之后 drift 是
+/// 唯一 schema owner，PR-C-α main.dart 的强制 drift 初始化 + PRAGMA
+/// assert 共同保证 fresh install 5 张 legacy 表也带 `user_id`。
 class LocalDatabase {
   static LocalDatabase? _instance;
   static Database? _db;
@@ -22,6 +34,12 @@ class LocalDatabase {
     final dbPath = await getDatabasesPath();
     final path = p.join(dbPath, 'meow_progress.db');
 
+    // 需求 23 Phase C PR-C-α: keep `version: 1` for compatibility with
+    // existing devices (sqflite tracks user_version separately from
+    // drift's PRAGMA user_version on the same file); the `onCreate` hook
+    // is intentionally a no-op now — drift owns schema creation. The
+    // file may not have any tables yet when this returns; main.dart MUST
+    // force-init drift right after, before any DAO call.
     _db = await openDatabase(
       path,
       version: 1,
@@ -38,69 +56,132 @@ class LocalDatabase {
     return _instance!;
   }
 
+  /// TEST-ONLY bridge for PR-C-α.
+  ///
+  /// In production [initialize] opens an empty file and main.dart
+  /// immediately constructs [AppDatabase], whose drift onCreate creates
+  /// the v13 schema (including the 5 legacy tables WITH `user_id`).
+  /// Tests that exercise LocalDatabase methods WITHOUT also opening
+  /// AppDatabase on the same file have no other source of the schema —
+  /// drift owns it, but in-memory drift in tests is a separate DB.
+  ///
+  /// This helper plugs that gap by emitting the v13 schema for the 5
+  /// legacy tables inline. The SQL mirrors what drift's `m.createAll()`
+  /// emits from [WordRecords] / [WordbookProgress] / [DailyCheckins] /
+  /// [CustomWordbooks] / [VocabularyNotebook] table definitions — keep
+  /// in sync if those drift classes change.
+  ///
+  /// **PR-C-β will retire this method** by collapsing the affected tests
+  /// onto the repository layer (plan-023-C-v2 §4.4). Grep callers via
+  /// `initializeForTesting` to track migration progress.
+  @visibleForTesting
+  static Future<LocalDatabase> initializeForTesting() async {
+    if (_instance != null) return _instance!;
+
+    final dbPath = await getDatabasesPath();
+    final path = p.join(dbPath, 'meow_progress.db');
+
+    _db = await openDatabase(
+      path,
+      version: 1,
+      onCreate: (db, version) async {
+        // v13 schema for the 5 legacy tables. NOT NULL on user_id
+        // matches drift's fresh-install behavior; the composite UNIQUE
+        // on wordbook_progress / daily_checkins mirrors @TableIndex.
+        await db.execute('''
+          CREATE TABLE word_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            word_id TEXT NOT NULL,
+            book_id TEXT NOT NULL,
+            study_type TEXT NOT NULL DEFAULT 'new',
+            action_result TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            synced INTEGER NOT NULL DEFAULT 0,
+            session_id TEXT
+          )
+        ''');
+        await db.execute(
+            'CREATE INDEX idx_wr_word_id ON word_records(word_id)');
+        await db.execute(
+            'CREATE INDEX idx_wr_synced ON word_records(synced)');
+        await db.execute(
+            'CREATE INDEX idx_word_records_user ON word_records(user_id)');
+
+        await db.execute('''
+          CREATE TABLE wordbook_progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            book_id TEXT NOT NULL,
+            total_words INTEGER NOT NULL DEFAULT 0,
+            completed_words INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+            'CREATE UNIQUE INDEX idx_wordbook_progress_user_book '
+            'ON wordbook_progress(user_id, book_id)');
+
+        await db.execute('''
+          CREATE TABLE daily_checkins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            checked_in INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+            'CREATE UNIQUE INDEX idx_daily_checkins_user_date '
+            'ON daily_checkins(user_id, date)');
+
+        await db.execute('''
+          CREATE TABLE custom_wordbooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            word_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+            'CREATE INDEX idx_custom_wordbooks_user '
+            'ON custom_wordbooks(user_id)');
+
+        await db.execute('''
+          CREATE TABLE vocabulary_notebook (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            word TEXT NOT NULL,
+            meaning TEXT,
+            note TEXT,
+            created_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+            'CREATE INDEX idx_vocabulary_notebook_user '
+            'ON vocabulary_notebook(user_id)');
+      },
+    );
+
+    _instance = LocalDatabase._();
+    return _instance!;
+  }
+
   /// Get the raw database (for testing or advanced queries).
   Database get db {
     assert(_db != null, 'Database not opened.');
     return _db!;
   }
 
+  /// No-op on purpose. See class-level comment for context: schema 创建权
+  /// 完全 owned by drift onCreate. 保留方法签名是为了让 `openDatabase` 仍
+  /// 接受一个 `onCreate` callback（v1 → v1 没有 onUpgrade，omitting onCreate
+  /// 会触发 "no onCreate or onUpgrade" 警告）。fresh install 时 sqflite
+  /// 打开空文件后调用这里——drift 紧接着会调 `createAll()` 把所有 20 张
+  /// 表（含 v13 user_id schema）建好。
   static Future<void> _createTables(Database db, int version) async {
-    // 学习记录（核心）
-    await db.execute('''
-      CREATE TABLE word_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        word_id TEXT NOT NULL,
-        book_id TEXT NOT NULL,
-        study_type TEXT NOT NULL DEFAULT 'new',
-        action_result TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        synced INTEGER NOT NULL DEFAULT 0
-      )
-    ''');
-    await db.execute('CREATE INDEX idx_wr_word_id ON word_records(word_id)');
-    await db.execute('CREATE INDEX idx_wr_synced ON word_records(synced)');
-
-    // 词书进度（核心）
-    await db.execute('''
-      CREATE TABLE wordbook_progress (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        book_id TEXT NOT NULL UNIQUE,
-        total_words INTEGER NOT NULL DEFAULT 0,
-        completed_words INTEGER NOT NULL DEFAULT 0,
-        updated_at TEXT NOT NULL
-      )
-    ''');
-
-    // 签到记录
-    await db.execute('''
-      CREATE TABLE daily_checkins (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL UNIQUE,
-        checked_in INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL
-      )
-    ''');
-
-    // 自定义词书
-    await db.execute('''
-      CREATE TABLE custom_wordbooks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        word_count INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
-      )
-    ''');
-
-    // 生词本
-    await db.execute('''
-      CREATE TABLE vocabulary_notebook (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        word TEXT NOT NULL,
-        meaning TEXT,
-        note TEXT,
-        created_at TEXT NOT NULL
-      )
-    ''');
+    // intentionally empty — drift owns schema
   }
 
   // ==================== Word Records (核心) ====================
@@ -110,6 +191,12 @@ class LocalDatabase {
   /// [sessionId] (Need #8) is the local Sessions.id this attempt belongs to,
   /// or null when the attempt happens outside any active session
   /// (legacy / pre-migration data — backend falls back to time-window match).
+  ///
+  /// PR-C-α transitional bridge: user_id is read from AuthStorage SP. The
+  /// SELECT/UPDATE path here does NOT yet filter by user_id (partition
+  /// leak); PR-C-β refactors LocalDatabase into a user-scoped DAO that
+  /// takes userId at construction time and adds `WHERE user_id = ?` to
+  /// all queries (plan-023-C-v2 §4.1 + §4.4).
   Future<int> insertWordRecord({
     required String wordId,
     required String bookId,
@@ -117,6 +204,8 @@ class LocalDatabase {
     required String actionResult,
     String? sessionId,
   }) async {
+    final userId = await AuthStorage.readBoundUserIdOrPlaceholder();
+
     // If this word already has a record, update it (forgot → know upgrade)
     final existing = await _db!.query(
       'word_records',
@@ -146,6 +235,7 @@ class LocalDatabase {
     }
 
     return await _db!.insert('word_records', {
+      'user_id': userId,
       'word_id': wordId,
       'book_id': bookId,
       'study_type': studyType,
@@ -255,11 +345,17 @@ class LocalDatabase {
   }
 
   /// Replace all word records (for restore). Transactional.
+  ///
+  /// PR-C-α transitional: each restored row is tagged with user_id from
+  /// the snapshot (if present) or the bound user (fallback). PR-C-β will
+  /// scope this to per-user via repository pattern.
   Future<void> replaceAllWordRecords(List<Map<String, dynamic>> records) async {
+    final fallbackUserId = await AuthStorage.readBoundUserIdOrPlaceholder();
     await _db!.transaction((txn) async {
       await txn.delete('word_records');
       for (final r in records) {
         await txn.insert('word_records', {
+          'user_id': r['user_id'] ?? fallbackUserId,
           'word_id': r['word_id'] ?? '',
           'book_id': r['book_id'] ?? '',
           'study_type': r['study_type'] ?? 'new',

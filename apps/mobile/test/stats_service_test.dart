@@ -30,11 +30,13 @@ void main() {
     // Fresh in-memory drift
     driftDb = AppDatabase.forTesting(NativeDatabase.memory());
 
-    // Fresh sqflite (LocalDatabase)
+    // Fresh sqflite (LocalDatabase). PR-C-α: drift owns schema now, so
+    // a LocalDatabase-only test uses the test-only [initializeForTesting]
+    // bridge to materialize the v13 legacy schema in the sqflite file.
     SharedPreferences.setMockInitialValues({});
     prefs = await SharedPreferences.getInstance();
     await LocalDatabase.deleteDatabase_();
-    await LocalDatabase.initialize();
+    await LocalDatabase.initializeForTesting();
 
     svc = StatsService(
       localDb: LocalDatabase.instance,

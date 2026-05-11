@@ -123,14 +123,25 @@ Future<void> runManifestSyncIfEnabled({
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 需求 23 Phase B: bootstrap auth BEFORE database init.
-  // sp-keys-audit §7.3 target startup order:
+  // 需求 23 Phase B/C: bootstrap auth BEFORE database init.
+  // plan-023-C-v2 §4.0 target startup order:
   //   1. SharedPreferences
   //   2. AuthBootstrap (resolves current user_id; may call /auth/guest)
-  //   3. LocalDatabase / drift migration (will read user_id in Phase C)
-  // Phase C will add the SP namespace migration + drift v13 user_id
-  // column based on the resolved user_id. Phase B just establishes the
-  // user binding; downstream code keeps reading global keys.
+  //   3. ApiClient.setDefaultHttpClient
+  //   4. AuthStorage.markFreshInstallIfNeeded  (Phase C PR-C-α)
+  //   5. LocalDatabase.initialize() (now no-op for schema, drift owns it)
+  //   6. AppDatabase() + force drift to run onCreate / onUpgrade
+  //   7. PRAGMA assert: word_records.user_id column exists (fail-fast)
+  //   8. WordbookLoader / EnrichmentBootstrap / manifest sync / runApp
+  //
+  // The reordering is required because Phase C makes drift the SOLE
+  // schema owner (plan-023-C-v2 D1 + §4.0). Before C, LocalDatabase's
+  // `_createTables` raced ahead of drift on fresh install, creating the
+  // 5 legacy tables WITHOUT user_id; drift's `IF NOT EXISTS` then
+  // skipped them and the device permanently ran on the wrong schema.
+  // Now `_createTables` is a no-op and drift's `m.createAll()` /
+  // `onUpgrade` is the single source of truth — but we must trigger it
+  // here in main() before any DAO is exercised so the assert holds.
   final prefs = await SharedPreferences.getInstance();
   final authBoot = await AuthBootstrap.run(
     prefs: prefs,
@@ -143,9 +154,34 @@ void main() async {
   // 401s back to AuthController. AUTH_ENFORCE=true切流前置.
   ApiClient.setDefaultHttpClient(authBoot.httpClient);
 
+  // 需求 23 Phase C PR-C-α (plan-023-C-v2 §4.0 / D3): classify this
+  // device as fresh install vs upgrade, seed pending-migration flags
+  // exactly once. Idempotent — subsequent launches short-circuit. Must
+  // run BEFORE drift opens because drift v13 onUpgrade reads the same
+  // `auth_current_user_id` SP key for backfill (plan §5).
+  await authBoot.storage.markFreshInstallIfNeeded();
+
   await LocalDatabase.initialize();
 
   final appDb = AppDatabase();
+
+  // 需求 23 Phase C PR-C-α (plan-023-C-v2 §4.0): drift's onCreate /
+  // onUpgrade is normally lazy — it fires on the first real query. We
+  // force it eagerly now so:
+  //   1. fresh install: drift's `m.createAll()` builds all 20 tables
+  //      including the 5 legacy tables WITH user_id (LocalDatabase no
+  //      longer pre-creates them sans user_id).
+  //   2. v12 → v13 upgrade path: backfill runs against the current
+  //      `auth_current_user_id` AuthBootstrap just resolved, NOT against
+  //      a stale value an earlier query might have read.
+  //   3. PRAGMA assert below has something to assert against.
+  await appDb.customSelect('SELECT 1').get();
+
+  // Fail-fast: after drift open, every user-scoped legacy table must
+  // carry the `user_id` column. If this assert trips, schema migration
+  // silently broke and continuing would write rows that never partition
+  // properly. Detecting at boot turns a subtle data bug into a loud crash.
+  await _assertUserIdColumns(appDb);
 
   // v0.3.0 P1: unified content layer for all preset books.
   // Each loadIfNeeded check skips work when content_version matches.
@@ -184,4 +220,30 @@ void main() async {
   unawaited(runManifestSyncIfEnabled(db: appDb));
 
   runApp(MeowApp(authController: authBoot.controller));
+}
+
+/// 需求 23 Phase C PR-C-α (plan-023-C-v2 §4.0): fail-fast schema
+/// assert. After drift's onCreate / onUpgrade has run, every
+/// user-scoped legacy table MUST carry a `user_id` column — otherwise
+/// the v13 migration broke (or someone re-introduced the pre-C race
+/// where raw sqflite built the table before drift). Throwing here turns
+/// what would be a quiet "writes go to a table without user_id"
+/// data-loss bug into an immediate crash.
+///
+/// Probes `word_records` because it's the most-written table; if its
+/// schema is right the migration completed correctly for the rest
+/// (the v13 onUpgrade processes all 9 user-scoped tables in the same
+/// `if (from < 13)` block).
+Future<void> _assertUserIdColumns(AppDatabase db) async {
+  final cols = await db
+      .customSelect('PRAGMA table_info(word_records)')
+      .get();
+  final hasUserId = cols.any((r) => r.read<String>('name') == 'user_id');
+  if (!hasUserId) {
+    throw StateError(
+      '[main] schema invariant violated: word_records.user_id missing. '
+      'drift v13 migration likely failed silently — refuse to continue '
+      'or per-user data will be written without partition tag.',
+    );
+  }
 }

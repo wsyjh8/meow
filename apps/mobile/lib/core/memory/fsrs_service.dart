@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:fsrs/fsrs.dart' as fsrs;
 
+import '../auth/auth_storage.dart';
 import '../storage/drift/app_database.dart';
 import 'card_state_data.dart';
 import 'review_rating.dart';
@@ -51,9 +52,15 @@ class FsrsService {
     // Create new fsrs Card to get default values
     final card = fsrs.Card(cardId: now.millisecondsSinceEpoch);
 
+    // PR-C-α transitional: pull userId from AuthStorage SP bridge.
+    // PR-C-β will hoist userId into FsrsService constructor (repository
+    // pattern, plan-023-C-v2 §4.4).
+    final userId = await AuthStorage.readBoundUserIdOrPlaceholder();
+
     // Insert into card_states
     final id = await _db.into(_db.cardStates).insert(
           CardStatesCompanion.insert(
+            userId: userId,
             wordId: wordId,
             stability: Value(card.stability),
             difficulty: Value(card.difficulty),
@@ -135,8 +142,11 @@ class FsrsService {
           : 0.0;
 
       // 5. INSERT review_log (INSERT-ONLY, sacred, never update/delete)
+      // PR-C-α transitional: copy userId from the card row we just read.
+      // Same row → same user, no extra SP read needed inside the txn.
       await _db.into(_db.reviewLogs).insert(
             ReviewLogsCompanion.insert(
+              userId: row.userId,
               cardStateId: row.id,
               wordId: wordId,
               rating: fsrsRating.value,

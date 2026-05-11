@@ -13,10 +13,14 @@ void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
+  // PR-C-α: drift is now the sole schema owner. Tests that exercise
+  // LocalDatabase WITHOUT also opening AppDatabase on the same file go
+  // through the test-only [initializeForTesting] bridge that emits the
+  // v13 schema inline. Production code uses [initialize] (no-op schema).
   setUp(() async {
     // Fresh DB per test so cross-test row leak can't mask a bug.
     await LocalDatabase.deleteDatabase_();
-    await LocalDatabase.initialize();
+    await LocalDatabase.initializeForTesting();
   });
 
   test('empty table → returns empty set', () async {
@@ -74,6 +78,9 @@ void main() {
         .toIso8601String();
 
     await LocalDatabase.instance.db.insert('word_records', {
+      // PR-C-α: word_records.user_id is NOT NULL post-v13. Tests that
+      // bypass insertWordRecord() and write directly must include it.
+      'user_id': 'pending-local-guest',
       'word_id': 'old-word',
       'book_id': 'b',
       'study_type': 'new',

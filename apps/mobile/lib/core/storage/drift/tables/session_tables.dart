@@ -2,10 +2,16 @@
 ///
 /// Local raw fact for Need #8. session_validation_status is NEVER computed
 /// locally — `cached_validation_status` only mirrors what the cloud returned.
+///
+/// v13 (need 23 Phase C PR-C-α): both tables gain `user_id` for partition
+/// (plan-023-C-v2 §4.2). UNIQUE not changed — sessions.id is uuid and
+/// review_records.id is autoincrement, both already user-unique.
 import 'package:drift/drift.dart';
 
+@TableIndex(name: 'idx_sessions_user', columns: {#userId})
 class Sessions extends Table {
   TextColumn get id => text()();
+  TextColumn get userId => text().named('user_id')();
   TextColumn get kind => text()();
   TextColumn get startedAt => text().named('started_at')();
   TextColumn get endedAt => text().named('ended_at').nullable()();
@@ -21,8 +27,10 @@ class Sessions extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+@TableIndex(name: 'idx_review_records_user', columns: {#userId})
 class ReviewRecords extends Table {
   IntColumn get id => integer().autoIncrement()();
+  TextColumn get userId => text().named('user_id')();
   TextColumn get reviewGroupId => text().named('review_group_id')();
   TextColumn get wordId => text().named('word_id')();
   TextColumn get actionResult => text().named('action_result')();

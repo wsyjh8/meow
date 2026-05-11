@@ -24,9 +24,11 @@ void main() {
     settings = LocalSettingsService(prefs);
     progress = LocalProgressRepository(prefs);
 
-    // Initialize fresh in-memory SQLite for each test
+    // Initialize fresh SQLite for each test. PR-C-α: drift owns schema,
+    // so this test uses [initializeForTesting] to emit the v13 legacy
+    // schema in the sqflite file directly (no drift here).
     await LocalDatabase.deleteDatabase_();
-    await LocalDatabase.initialize();
+    await LocalDatabase.initializeForTesting();
 
     exportService = SnapshotExportService(
       settings: settings,

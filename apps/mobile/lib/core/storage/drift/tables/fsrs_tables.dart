@@ -7,15 +7,27 @@
 import 'package:drift/drift.dart';
 
 // ==================== card_states ====================
-/// Each word's FSRS card state. One row per word.
+/// Each word's FSRS card state. One row per word per user.
 /// Fields mirror the fsrs library's Card class for round-trip serialization.
+///
+/// v13 (need 23 Phase C PR-C-α): UNIQUE(word_id) → UNIQUE(user_id, word_id)
+/// (plan-023-C-v2 D6). One row per (user, word) pair — two users can both
+/// have FSRS state for the same word without colliding.
 @TableIndex(name: 'idx_card_states_due', columns: {#due})
 @TableIndex(name: 'idx_card_states_state', columns: {#state})
+@TableIndex(
+  name: 'idx_card_states_user_word',
+  columns: {#userId, #wordId},
+  unique: true,
+)
 class CardStates extends Table {
   IntColumn get id => integer().autoIncrement()();
 
-  /// Word identifier, e.g. 'cet4-abandon'. UNIQUE — one card per word.
-  TextColumn get wordId => text().named('word_id').unique()();
+  /// 需求 23 Phase C — partition tag.
+  TextColumn get userId => text().named('user_id')();
+
+  /// Word identifier, e.g. 'abandon'. UNIQUE within a user (see composite index).
+  TextColumn get wordId => text().named('word_id')();
 
   /// FSRS stability parameter. Nullable for brand-new cards.
   RealColumn get stability => real().nullable()();
@@ -50,10 +62,17 @@ class CardStates extends Table {
 // ==================== review_logs ====================
 /// Immutable review history. INSERT-ONLY — never update or delete.
 /// This is the raw data source for fsrs-optimizer.
+///
+/// v13 (need 23 Phase C PR-C-α): adds `user_id` for partition (a single
+/// fsrs-optimizer training pass MUST NOT mix two users' review streams).
 @TableIndex(name: 'idx_review_logs_word_id', columns: {#wordId})
 @TableIndex(name: 'idx_review_logs_review_time', columns: {#reviewTimeUtc})
+@TableIndex(name: 'idx_review_logs_user', columns: {#userId})
 class ReviewLogs extends Table {
   IntColumn get id => integer().autoIncrement()();
+
+  /// 需求 23 Phase C — partition tag.
+  TextColumn get userId => text().named('user_id')();
 
   /// FK to card_states.id
   IntColumn get cardStateId =>
