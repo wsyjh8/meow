@@ -43,7 +43,7 @@ void main() {
     test('default status is noBackupYet', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      final service = BackupUploadService(baseUrl: 'http://test', prefs: prefs);
+      final service = BackupUploadService(baseUrl: 'http://test', prefs: prefs, userId: 'test-user');
       final info = service.getLatestBackupInfo();
       expect(info.status, BackupUploadStatus.noBackupYet);
     });

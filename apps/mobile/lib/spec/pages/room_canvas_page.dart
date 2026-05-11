@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
 import '../../features/room_canvas/models/placed_furniture.dart';
 import '../../features/room_canvas/storage/room_canvas_storage.dart';
 import '../../features/room_canvas/widgets/furniture_bottom_panel.dart';
@@ -68,7 +69,10 @@ class _RoomCanvasPageState extends State<RoomCanvasPage> {
       _error = null;
     });
     try {
-      _storage = widget.storage ?? await RoomCanvasStorage.open();
+      // PR-C-β: RoomCanvasStorage is per-user. Tests inject `storage`
+      // explicitly; production reads the bound user from AuthScope.
+      final userId = AuthScope.currentUserIdOf(context);
+      _storage = widget.storage ?? await RoomCanvasStorage.open(userId: userId);
       final inventory = await _apiClient.getInventory();
       final placed = await _storage!.load();
       if (!mounted) return;

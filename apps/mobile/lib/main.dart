@@ -63,6 +63,7 @@ typedef ContentPackageServiceFactory = ContentPackageService Function(
 ///   cold start regardless of flag value).
 Future<void> runManifestSyncIfEnabled({
   required AppDatabase db,
+  required String userId,
   ContentPackageServiceFactory? serviceFactory,
 }) async {
   // PR-C/PR-B5: PR-B3 Day 3 Layer 1 `if (!kDebugMode) return;` guard removed.
@@ -74,8 +75,12 @@ Future<void> runManifestSyncIfEnabled({
 
   try {
     // Layer 2 (was Layer 2; renumbered to Layer 1 in PR-C): feature flag
+    // PR-C-β: LocalSettingsService is now user-scoped, so the manifest
+    // sync flag respects per-user opt-in / opt-out.
     final prefs = await SharedPreferences.getInstance();
-    if (!LocalSettingsService(prefs).manifestSyncEnabled) return;
+    if (!LocalSettingsService(prefs, userId: userId).manifestSyncEnabled) {
+      return;
+    }
 
     // Layer 3: actually run sync
     final cacheDir = await getApplicationDocumentsDirectory();
@@ -161,6 +166,18 @@ void main() async {
   // `auth_current_user_id` SP key for backfill (plan §5).
   await authBoot.storage.markFreshInstallIfNeeded();
 
+  // 需求 23 Phase C PR-C-β (plan-023-C-v2 §4.3): SP namespace migration.
+  // Idempotent — gated on `auth_pending_sp_migration` flag which
+  // markFreshInstallIfNeeded just set per "fresh vs upgrade" classification.
+  // Fresh installs: false → no-op. Existing pre-C devices: true → migrate
+  // the 13 flat keys into `u_<userId>_*` namespace and delete the 5
+  // `progress_*` keys (plan §D9 LocalProgressRepository retirement).
+  final currentUserId = authBoot.controller.currentUserId;
+  await SpMigrator(
+    prefs: prefs,
+    storage: authBoot.storage,
+  ).runIfNeeded(userId: currentUserId);
+
   await LocalDatabase.initialize();
 
   final appDb = AppDatabase();
@@ -217,7 +234,7 @@ void main() async {
   // is called immediately; flag=false / non-debug → helper returns
   // without touching prefs/disk → startup sequence is truly identical to
   // PR-B2 in those cases (v0.2 #1 R1#1 + R2#P2 review-adopted).
-  unawaited(runManifestSyncIfEnabled(db: appDb));
+  unawaited(runManifestSyncIfEnabled(db: appDb, userId: currentUserId));
 
   runApp(MeowApp(authController: authBoot.controller));
 }

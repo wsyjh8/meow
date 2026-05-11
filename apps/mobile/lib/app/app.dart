@@ -59,7 +59,13 @@ class _MeowAppState extends State<MeowApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       // App going to background — trigger auto-backup (fire-and-forget).
-      AutoBackupService.triggerIfNeeded();
+      // PR-C-β: per-user backup; grab the bound user from AuthController.
+      // If no controller is wired (legacy/test path), skip — there's no
+      // user to back up.
+      final controller = widget.authController;
+      if (controller != null) {
+        AutoBackupService.triggerIfNeeded(userId: controller.currentUserId);
+      }
     }
   }
 

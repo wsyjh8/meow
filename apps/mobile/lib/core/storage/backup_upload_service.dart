@@ -8,6 +8,10 @@ import 'snapshot_export_service.dart';
 /// Uploads a snapshot (from Phase 2) to the cloud backup container (backend).
 /// Tracks latest backup status locally.
 ///
+/// 需求 23 Phase C PR-C-β (plan-023-C-v2 §4.3): the 4 `backup_latest_*` SP
+/// keys are now `u_<userId>_backup_latest_*`. Construction takes userId so
+/// a switch-account doesn't leak the previous user's backup metadata.
+///
 /// IMPORTANT semantic boundaries:
 /// - upload success = snapshot sent to cloud container successfully
 /// - upload success != sync success (not a concept in P3.1)
@@ -16,14 +20,29 @@ import 'snapshot_export_service.dart';
 class BackupUploadService {
   final String baseUrl;
   final SharedPreferences _prefs;
+  final String _userId;
 
-  BackupUploadService({required this.baseUrl, required SharedPreferences prefs})
-      : _prefs = prefs;
+  BackupUploadService({
+    required this.baseUrl,
+    required SharedPreferences prefs,
+    required String userId,
+  })  : _prefs = prefs,
+        _userId = userId;
 
-  static const _keyLatestStatus = 'backup_latest_status';
-  static const _keyLatestBackupId = 'backup_latest_id';
-  static const _keyLatestUploadedAt = 'backup_latest_uploaded_at';
-  static const _keyLatestSchemaVersion = 'backup_latest_schema_version';
+  // PR-C-β: per-user SP namespace. Suffixes exported for [SpMigrator].
+  static const _kLatestStatusSuffix = 'backup_latest_status';
+  static const _kLatestBackupIdSuffix = 'backup_latest_id';
+  static const _kLatestUploadedAtSuffix = 'backup_latest_uploaded_at';
+  static const _kLatestSchemaVersionSuffix = 'backup_latest_schema_version';
+
+  static const List<String> migratableKeySuffixes = [
+    _kLatestStatusSuffix,
+    _kLatestBackupIdSuffix,
+    _kLatestUploadedAtSuffix,
+    _kLatestSchemaVersionSuffix,
+  ];
+
+  String _k(String suffix) => 'u_${_userId}_$suffix';
 
   /// Upload a snapshot to the cloud backup container.
   ///
@@ -85,28 +104,35 @@ class BackupUploadService {
 
   /// Get the latest backup status from local storage.
   LatestBackupInfo getLatestBackupInfo() {
-    final statusStr = _prefs.getString(_keyLatestStatus);
+    final statusStr = _prefs.getString(_k(_kLatestStatusSuffix));
     final status = BackupUploadStatus.values.firstWhere(
       (s) => s.name == statusStr,
       orElse: () => BackupUploadStatus.noBackupYet,
     );
     return LatestBackupInfo(
       status: status,
-      backupId: _prefs.getString(_keyLatestBackupId),
-      uploadedAt: _prefs.getString(_keyLatestUploadedAt),
-      schemaVersion: _prefs.getString(_keyLatestSchemaVersion),
+      backupId: _prefs.getString(_k(_kLatestBackupIdSuffix)),
+      uploadedAt: _prefs.getString(_k(_kLatestUploadedAtSuffix)),
+      schemaVersion: _prefs.getString(_k(_kLatestSchemaVersionSuffix)),
     );
   }
 
   Future<void> _saveLatestResult(BackupUploadResult result) async {
-    await _prefs.setString(_keyLatestStatus, result.status.name);
-    if (result.backupId != null) await _prefs.setString(_keyLatestBackupId, result.backupId!);
-    if (result.uploadedAt != null) await _prefs.setString(_keyLatestUploadedAt, result.uploadedAt!);
-    if (result.serverSchemaVersion != null) await _prefs.setString(_keyLatestSchemaVersion, result.serverSchemaVersion!);
+    await _prefs.setString(_k(_kLatestStatusSuffix), result.status.name);
+    if (result.backupId != null) {
+      await _prefs.setString(_k(_kLatestBackupIdSuffix), result.backupId!);
+    }
+    if (result.uploadedAt != null) {
+      await _prefs.setString(_k(_kLatestUploadedAtSuffix), result.uploadedAt!);
+    }
+    if (result.serverSchemaVersion != null) {
+      await _prefs.setString(
+          _k(_kLatestSchemaVersionSuffix), result.serverSchemaVersion!);
+    }
   }
 
   Future<void> _setLocalStatus(BackupUploadStatus status) async {
-    await _prefs.setString(_keyLatestStatus, status.name);
+    await _prefs.setString(_k(_kLatestStatusSuffix), status.name);
   }
 }
 

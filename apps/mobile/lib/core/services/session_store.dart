@@ -4,8 +4,8 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../api/api_client.dart';
-import '../auth/auth_storage.dart';
 import '../storage/drift/app_database.dart';
+import '../storage/repositories/session_repository.dart';
 
 /// Need #8 — Local-first Session lifecycle.
 ///
@@ -19,13 +19,31 @@ import '../storage/drift/app_database.dart';
 /// Session id is generated locally as UUID v4 and reused as the server
 /// session id, so offline-then-online replay needs no id mapping and
 /// attempts already carry the same session_id all the way through.
+///
+/// 需求 23 Phase C PR-C-β (plan-023-C-v2 §4.4): user-scoped via
+/// [SessionRepository]. Construct one SessionStore per user; PR-C-α
+/// SP-bridge fallback is removed.
 class SessionStore {
-  SessionStore({required ApiClient apiClient, AppDatabase? driftDb})
-      : _apiClient = apiClient,
-        _db = driftDb ?? AppDatabase();
+  SessionStore({
+    required ApiClient apiClient,
+    required SessionRepository repository,
+  })  : _apiClient = apiClient,
+        _repo = repository;
+
+  /// Convenience constructor when the caller has a userId but no repo.
+  factory SessionStore.forUser({
+    required ApiClient apiClient,
+    required AppDatabase driftDb,
+    required String userId,
+  }) {
+    return SessionStore(
+      apiClient: apiClient,
+      repository: SessionRepository(db: driftDb, userId: userId),
+    );
+  }
 
   final ApiClient _apiClient;
-  final AppDatabase _db;
+  final SessionRepository _repo;
   static const _uuid = Uuid();
   static const _defaultMinutesTarget = 15;
 
@@ -48,19 +66,12 @@ class SessionStore {
 
     final id = _uuid.v4();
     final startedAt = DateTime.now().toUtc().toIso8601String();
-    // PR-C-α transitional bridge — PR-C-β will thread userId through
-    // SessionStore's constructor via the repository pattern
-    // (plan-023-C-v2 §4.4).
-    final userId = await AuthStorage.readBoundUserIdOrPlaceholder();
-    await _db.into(_db.sessions).insert(
-          SessionsCompanion.insert(
-            id: id,
-            userId: userId,
-            kind: kind,
-            startedAt: startedAt,
-            sessionMinutesTarget: const Value(_defaultMinutesTarget),
-          ),
-        );
+    await _repo.insertSession(
+      id: id,
+      kind: kind,
+      startedAt: startedAt,
+      sessionMinutesTarget: _defaultMinutesTarget,
+    );
     _activeSessionId = id;
 
     // Fire-and-forget upload of the start.
@@ -75,8 +86,10 @@ class SessionStore {
         sessionMinutesTarget: _defaultMinutesTarget,
         idempotencyKey: 'sess-start-$sessionId',
       );
-      await (_db.update(_db.sessions)..where((t) => t.id.equals(sessionId)))
-          .write(const SessionsCompanion(synced: Value(1)));
+      await _repo.updateById(
+        sessionId,
+        const SessionsCompanion(synced: Value(1)),
+      );
     } catch (_) {
       // Stay synced=0; SessionSyncService will retry.
     }
@@ -87,9 +100,7 @@ class SessionStore {
     if (id == null) return;
     _activeSessionId = null;
 
-    final row = await (_db.select(_db.sessions)
-          ..where((t) => t.id.equals(id)))
-        .getSingleOrNull();
+    final row = await _repo.findById(id);
     if (row == null) return;
     if (row.endedAt != null) return; // already finished locally
 
@@ -98,7 +109,8 @@ class SessionStore {
     final durationSeconds =
         ((now.millisecondsSinceEpoch - startedAtMs) / 1000).round();
 
-    await (_db.update(_db.sessions)..where((t) => t.id.equals(id))).write(
+    await _repo.updateById(
+      id,
       SessionsCompanion(
         endedAt: Value(now.toIso8601String()),
         durationSeconds: Value(durationSeconds < 0 ? 0 : durationSeconds),
@@ -116,11 +128,13 @@ class SessionStore {
       );
       // Mirror the cloud's verdict into the local cache. This is the ONLY
       // place that writes cached_validation_status.
-      await (_db.update(_db.sessions)..where((t) => t.id.equals(sessionId)))
-          .write(SessionsCompanion(
-        synced: const Value(2),
-        cachedValidationStatus: Value(info.sessionValidationStatus),
-      ));
+      await _repo.updateById(
+        sessionId,
+        SessionsCompanion(
+          synced: const Value(2),
+          cachedValidationStatus: Value(info.sessionValidationStatus),
+        ),
+      );
     } catch (_) {
       // Leave at synced=1 (or 0 if start never confirmed) — the sync service
       // will retry. Never invent a validation status locally.
@@ -133,10 +147,12 @@ class SessionStore {
   Future<void> refreshCachedValidation(String sessionId) async {
     try {
       final info = await _apiClient.getSession(sessionId);
-      await (_db.update(_db.sessions)..where((t) => t.id.equals(sessionId)))
-          .write(SessionsCompanion(
-        cachedValidationStatus: Value(info.sessionValidationStatus),
-      ));
+      await _repo.updateById(
+        sessionId,
+        SessionsCompanion(
+          cachedValidationStatus: Value(info.sessionValidationStatus),
+        ),
+      );
     } catch (_) {
       // Silent — UI falls back to whatever cache already has.
     }

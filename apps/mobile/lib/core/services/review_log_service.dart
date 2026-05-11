@@ -1,8 +1,6 @@
-import 'package:drift/drift.dart';
-
 import '../api/api_client.dart';
-import '../auth/auth_storage.dart';
 import '../storage/drift/app_database.dart';
+import '../storage/repositories/review_record_repository.dart';
 
 /// Need #10 — Local + cloud review attempt history.
 ///
@@ -13,18 +11,36 @@ import '../storage/drift/app_database.dart';
 /// only authority on what counts as "accepted history".
 ///
 /// FSRS / rewards / settlement are untouched.
+///
+/// 需求 23 Phase C PR-C-β (plan-023-C-v2 §4.4): user-scoped via
+/// [ReviewRecordRepository]. Construct one ReviewLogService per user;
+/// PR-C-α SP-bridge fallback is gone.
 class ReviewLogService {
-  ReviewLogService({required ApiClient apiClient, AppDatabase? driftDb})
-      : _apiClient = apiClient,
-        _db = driftDb ?? AppDatabase();
+  ReviewLogService({
+    required ApiClient apiClient,
+    required ReviewRecordRepository repository,
+  })  : _apiClient = apiClient,
+        _repo = repository;
+
+  /// Convenience constructor when the caller has a userId but no repo.
+  factory ReviewLogService.forUser({
+    required ApiClient apiClient,
+    required AppDatabase driftDb,
+    required String userId,
+  }) {
+    return ReviewLogService(
+      apiClient: apiClient,
+      repository: ReviewRecordRepository(db: driftDb, userId: userId),
+    );
+  }
 
   final ApiClient _apiClient;
-  final AppDatabase _db;
+  final ReviewRecordRepository _repo;
 
   /// Insert one local review record. Always returns the new local row id.
-  /// Pass [synced] = 1 only when the caller already got an HTTP 200 from
+  /// Pass [synced] = true only when the caller already got an HTTP 200 from
   /// the cloud (e.g. the per-word `submitReviewAttempt` path that awaits
-  /// the response). Otherwise leave the default 0 — the sync sweeper
+  /// the response). Otherwise leave the default false — the sync sweeper
   /// will retry.
   Future<int> recordLocal({
     required String wordId,
@@ -34,51 +50,36 @@ class ReviewLogService {
     int? rating,
     DateTime? reviewedAt,
     bool synced = false,
-  }) async {
+  }) {
     final ts = (reviewedAt ?? DateTime.now().toUtc()).toIso8601String();
-    // PR-C-α transitional bridge — PR-C-β will hoist userId into the
-    // ReviewLogService constructor (plan-023-C-v2 §4.4 repository pattern).
-    final userId = await AuthStorage.readBoundUserIdOrPlaceholder();
-    return _db.into(_db.reviewRecords).insert(
-          ReviewRecordsCompanion.insert(
-            userId: userId,
-            reviewGroupId: reviewGroupId,
-            wordId: wordId,
-            actionResult: actionResult,
-            createdAt: ts,
-            sessionId: Value(sessionId),
-            rating: Value(rating),
-            synced: Value(synced ? 1 : 0),
-          ),
-        );
+    return _repo.insertRecord(
+      reviewGroupId: reviewGroupId,
+      wordId: wordId,
+      actionResult: actionResult,
+      createdAt: ts,
+      sessionId: sessionId,
+      rating: rating,
+      synced: synced ? 1 : 0,
+    );
   }
 
   /// Mark a local row as confirmed by the cloud. Best-effort; missing
   /// rows are silently ignored (e.g. if the row was wiped between submit
-  /// and ack).
+  /// and ack). PR-C-β: the WHERE also matches `user_id` so an in-flight
+  /// account-switch can't flip the prior user's row.
   Future<void> markSynced(int localId) async {
-    await (_db.update(_db.reviewRecords)..where((t) => t.id.equals(localId)))
-        .write(const ReviewRecordsCompanion(synced: Value(1)));
+    await _repo.markSynced(localId);
   }
 
   /// All local rows for a word, newest first. Includes both synced and
   /// unsynced — the debug page tags them.
   Future<List<ReviewRecord>> getLocalForWord(String wordId, {int limit = 20}) {
-    return (_db.select(_db.reviewRecords)
-          ..where((t) => t.wordId.equals(wordId))
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
-          ..limit(limit))
-        .get();
+    return _repo.listByWordId(wordId, limit: limit);
   }
 
   /// Pending (unsynced) local rows for a word, newest first.
   Future<List<ReviewRecord>> getPendingForWord(String wordId, {int limit = 20}) {
-    return (_db.select(_db.reviewRecords)
-          ..where((t) =>
-              t.wordId.equals(wordId) & t.synced.isSmallerThanValue(1))
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
-          ..limit(limit))
-        .get();
+    return _repo.listPendingByWordId(wordId, limit: limit);
   }
 
   /// Cloud-accepted history for a word.

@@ -152,7 +152,7 @@ void main() {
 
     setUp(() {
       db = _createTestDb();
-      svc = FsrsService(db: db);
+      svc = FsrsService.forUser(db: db, userId: 'test-user');
     });
 
     tearDown(() async => db.close());

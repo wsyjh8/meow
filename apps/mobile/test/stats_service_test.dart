@@ -44,6 +44,7 @@ void main() {
       localDb: LocalDatabase.instance,
       driftDb: driftDb,
       prefs: prefs,
+      userId: 'test-user',
     );
   });
 
@@ -66,6 +67,7 @@ void main() {
 
     test('插入 know 记录后 totalMastered 增加', () async {
       await LocalDatabase.instance.insertWordRecord(
+        userId: 'test-user',
         wordId: 'cet4-test-1',
         bookId: 'book-001',
         studyType: 'new',
@@ -95,6 +97,7 @@ void main() {
 
     test('插入 know 记录后今天的 newCount = 1', () async {
       await LocalDatabase.instance.insertWordRecord(
+        userId: 'test-user',
         wordId: 'w-1',
         bookId: 'b',
         studyType: 'new',

@@ -6,57 +6,71 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../storage/drift/app_database.dart';
 import '../storage/local_database.dart';
 import '../storage/local_settings_service.dart';
+import '../storage/repositories/card_state_repository.dart';
+import '../storage/repositories/daily_checkin_repository.dart';
+import '../storage/repositories/review_log_repository.dart';
 import '../util/pos_label.dart';
 import '../../spec/pages/stats/models/stats_models.dart';
 
 /// 统计服务 — 集中所有统计页跨表查询。
 ///
 /// 设计要点：
-/// - 外部注入 [AppDatabase] / [LocalDatabase] / [SharedPreferences]，避免新建多
-///   instance 引发 Drift 警告
+/// - 外部注入 [AppDatabase] / [LocalDatabase] / [SharedPreferences] / userId，
+///   避免新建多 instance 引发 Drift 警告
 /// - 所有"按本地日分组"在 Dart 侧 `.toLocal()` 后字符串化，**禁用** SQLite `date()`
 /// - new 计数源 = `word_records WHERE study_type='new' AND action_result='know'`
 /// - review 计数源 = `review_logs`（FSRS 真相，避免与 word_records 重复计数）
+///
+/// 需求 23 Phase C PR-C-β (plan-023-C-v2 §4.4): every query is user-scoped
+/// via the injected userId + repositories. Stats hero numbers, trend
+/// charts, badges, etc. all read this user's rows only.
 class StatsService {
   final LocalDatabase _localDb;
   final AppDatabase _driftDb;
   final SharedPreferences _prefs;
+  final String _userId;
+  final CardStateRepository _cards;
+  final ReviewLogRepository _logs;
+  final DailyCheckinRepository _checkins;
+  final LocalSettingsService _settings;
 
   StatsService({
     required LocalDatabase localDb,
     required AppDatabase driftDb,
     required SharedPreferences prefs,
+    required String userId,
   })  : _localDb = localDb,
         _driftDb = driftDb,
-        _prefs = prefs;
+        _prefs = prefs,
+        _userId = userId,
+        _cards = CardStateRepository(db: driftDb, userId: userId),
+        _logs = ReviewLogRepository(db: driftDb, userId: userId),
+        _checkins = DailyCheckinRepository(db: driftDb, userId: userId),
+        _settings = LocalSettingsService(prefs, userId: userId);
 
   // ── Tab 1: 概览趋势 ────────────────────────────────────────────────────────
 
   /// 4 数字卡 + 顶部 hero 数据。
   Future<OverviewHeader> getOverviewHeader() async {
     // 累计学习的不同词数（不限本词书）
-    final masteredIds = await _localDb.getMasteredWordIds();
+    final masteredIds = await _localDb.getMasteredWordIds(_userId);
     final totalMastered = masteredIds.length;
 
     // 累计学习数 = 所有 word_records 的 distinct word_id
-    final allLearnedRows = await _localDb.db.rawQuery(
-      'SELECT COUNT(DISTINCT word_id) AS cnt FROM word_records',
-    );
-    final totalWordsLearned = (allLearnedRows.first['cnt'] as int?) ?? 0;
+    final totalWordsLearned =
+        await _localDb.countDistinctLearnedWords(_userId);
 
     // 较上周 = 7 天前到现在新增的 distinct word_id 数
     final now = DateTime.now();
     final sevenDaysAgoUtc =
         DateTime(now.year, now.month, now.day).subtract(const Duration(days: 7));
-    final weeklyRows = await _localDb.db.rawQuery(
-      'SELECT COUNT(DISTINCT word_id) AS cnt FROM word_records '
-      "WHERE study_type='new' AND action_result='know' AND created_at >= ?",
-      [sevenDaysAgoUtc.toUtc().toIso8601String()],
+    final weeklyDelta = await _localDb.countDistinctNewKnowSince(
+      _userId,
+      sevenDaysAgoUtc.toUtc().toIso8601String(),
     );
-    final weeklyDelta = (weeklyRows.first['cnt'] as int?) ?? 0;
 
     // 总词数 / mastery 百分比 = active wordbook
-    final activeBook = LocalSettingsService(_prefs).activeWordbook;
+    final activeBook = _settings.activeWordbook;
     final totalInBook = await _driftDb.countWordsInBook(activeBook);
     final bookWordIds = await _driftDb.getWordIdsForBook(activeBook);
     final bookMastered = masteredIds.intersection(bookWordIds).length;
@@ -67,16 +81,17 @@ class StatsService {
     final streak = await _computeStreak();
 
     // 今日完成 / 目标
-    final todayNew = await _localDb.countTodayNewCompleted();
+    final todayNew = await _localDb.countTodayNewCompleted(_userId);
     int todayReview = 0;
     int reviewTarget = 0;
     try {
       todayReview = await _countTodayReviewLogs();
       // 目标：FSRS 当下到期数 + 已复习数
-      final dueCount = await _countDueCardsNow();
+      final dueCount = await _cards
+          .countDueAtOrBefore(DateTime.now().toUtc().millisecondsSinceEpoch);
       reviewTarget = dueCount + todayReview;
     } catch (_) {}
-    final dailyGoal = LocalSettingsService(_prefs).dailyGoal;
+    final dailyGoal = _settings.dailyGoal;
     final todayCompleted = todayNew + todayReview;
     final todayGoal = dailyGoal + reviewTarget;
 
@@ -104,28 +119,22 @@ class StatsService {
     final startUtcIso = startLocal.toUtc().toIso8601String();
 
     // ── 新词：word_records ────────────────────────────────────────────────
-    final newRows = await _localDb.db.rawQuery(
-      'SELECT created_at FROM word_records '
-      "WHERE study_type='new' AND action_result='know' AND created_at >= ?",
-      [startUtcIso],
-    );
+    final createdAts =
+        await _localDb.listNewKnowCreatedAtSince(_userId, startUtcIso);
     final newByDay = <String, int>{};
-    for (final r in newRows) {
-      final localDate = DateTime.parse(r['created_at'] as String).toLocal();
+    for (final iso in createdAts) {
+      final localDate = DateTime.parse(iso).toLocal();
       final key = _dateKey(localDate);
       newByDay[key] = (newByDay[key] ?? 0) + 1;
     }
 
     // ── 复习：review_logs ─────────────────────────────────────────────────
     final startUtcMs = startLocal.toUtc().millisecondsSinceEpoch;
-    final reviewRows = await _driftDb.customSelect(
-      'SELECT review_time_utc FROM review_logs WHERE review_time_utc >= ?',
-      variables: [Variable.withInt(startUtcMs)],
-    ).get();
+    final reviewTimes = await _logs.listReviewTimesAfter(startUtcMs);
     final reviewByDay = <String, int>{};
-    for (final r in reviewRows) {
-      final ms = r.read<int>('review_time_utc');
-      final localDate = DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+    for (final ms in reviewTimes) {
+      final localDate =
+          DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
       final key = _dateKey(localDate);
       reviewByDay[key] = (reviewByDay[key] ?? 0) + 1;
     }
@@ -152,15 +161,11 @@ class StatsService {
         .subtract(Duration(days: days - 1));
     final startUtcMs = startLocal.toUtc().millisecondsSinceEpoch;
 
-    final rows = await _driftDb.customSelect(
-      'SELECT review_time_utc FROM review_logs WHERE review_time_utc >= ?',
-      variables: [Variable.withInt(startUtcMs)],
-    ).get();
-
+    final times = await _logs.listReviewTimesAfter(startUtcMs);
     final hours = List<int>.filled(24, 0);
-    for (final r in rows) {
-      final ms = r.read<int>('review_time_utc');
-      final localDt = DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+    for (final ms in times) {
+      final localDt =
+          DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
       hours[localDt.hour] += 1;
     }
     return hours;
@@ -175,25 +180,18 @@ class StatsService {
     final startUtcMs = startLocal.toUtc().millisecondsSinceEpoch;
 
     // word_records (new + know)
-    final wrRows = await _localDb.db.rawQuery(
-      'SELECT created_at FROM word_records '
-      "WHERE study_type='new' AND action_result='know' AND created_at >= ?",
-      [startUtcIso],
-    );
+    final wrCreatedAt =
+        await _localDb.listNewKnowCreatedAtSince(_userId, startUtcIso);
     // review_logs
-    final rlRows = await _driftDb.customSelect(
-      'SELECT review_time_utc FROM review_logs WHERE review_time_utc >= ?',
-      variables: [Variable.withInt(startUtcMs)],
-    ).get();
+    final rlTimes = await _logs.listReviewTimesAfter(startUtcMs);
 
     final countByDay = <String, int>{};
-    for (final r in wrRows) {
-      final localDate = DateTime.parse(r['created_at'] as String).toLocal();
+    for (final iso in wrCreatedAt) {
+      final localDate = DateTime.parse(iso).toLocal();
       final key = _dateKey(localDate);
       countByDay[key] = (countByDay[key] ?? 0) + 1;
     }
-    for (final r in rlRows) {
-      final ms = r.read<int>('review_time_utc');
+    for (final ms in rlTimes) {
       final localDate =
           DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
       final key = _dateKey(localDate);
@@ -222,9 +220,7 @@ class StatsService {
   /// 每桶: userRetention = COUNT(rating ≥ 3) / COUNT(*)；样本 < 3 时为 null。
   /// 同时给出艾宾浩斯标准曲线值 R(t) = exp(-t / 1.0) 在桶中点的取值。
   Future<List<RetentionBucket>> getRetentionCurve() async {
-    final rows = await _driftDb.customSelect(
-      'SELECT elapsed_days, rating FROM review_logs WHERE elapsed_days > 0',
-    ).get();
+    final rows = await _logs.listForRetentionCurve();
 
     // 桶定义：(label, midDays, lower, upper)
     const buckets = [
@@ -239,8 +235,8 @@ class StatsService {
     // 累加每桶 (correct, total)
     final counts = List<List<int>>.generate(buckets.length, (_) => [0, 0]);
     for (final r in rows) {
-      final ed = r.read<double>('elapsed_days');
-      final rating = r.read<int>('rating');
+      final ed = r.elapsedDays;
+      final rating = r.rating;
       for (var i = 0; i < buckets.length; i++) {
         final (_, _, lo, hi) = buckets[i];
         if (ed > lo && ed <= hi) {
@@ -274,30 +270,26 @@ class StatsService {
   ///   熟悉 = state == 2 AND 7 ≤ stability < 30
   ///   牢记 = state == 2 AND stability ≥ 30
   Future<MasteryDistribution> getMasteryDistribution() async {
-    final activeBook = LocalSettingsService(_prefs).activeWordbook;
+    final activeBook = _settings.activeWordbook;
     final total = await _driftDb.countWordsInBook(activeBook);
     if (total == 0) return MasteryDistribution.empty;
 
     final bookIds = await _driftDb.getWordIdsForBook(activeBook);
 
-    // 全量 SELECT card_states，内存交集（避免 SQLite IN 999 限制）
-    final csRows = await _driftDb.customSelect(
-      'SELECT word_id, state, stability FROM card_states',
-    ).get();
+    // 全量 SELECT card_states (this user only), 内存交集（避免 SQLite IN 999 限制）
+    final csRows = await _cards.listForMastery();
 
     var learning = 0, familiar = 0, mastered = 0;
     final hitIds = <String>{};
     for (final r in csRows) {
-      final wid = r.read<String>('word_id');
-      if (!bookIds.contains(wid)) continue;
-      hitIds.add(wid);
-      final state = r.read<int>('state');
-      final stability = r.readNullable<double>('stability') ?? 0.0;
-      if (state == 1 || state == 3 || stability < 7) {
+      if (!bookIds.contains(r.wordId)) continue;
+      hitIds.add(r.wordId);
+      final stability = r.stability ?? 0.0;
+      if (r.state == 1 || r.state == 3 || stability < 7) {
         learning++;
-      } else if (state == 2 && stability < 30) {
+      } else if (r.state == 2 && stability < 30) {
         familiar++;
-      } else if (state == 2 && stability >= 30) {
+      } else if (r.state == 2 && stability >= 30) {
         mastered++;
       } else {
         learning++; // fallback
@@ -319,21 +311,18 @@ class StatsService {
     final startLocal = todayLocal.subtract(Duration(days: days - 1));
     final startUtcMs = startLocal.toUtc().millisecondsSinceEpoch;
 
-    final rows = await _driftDb.customSelect(
-      'SELECT review_time_utc, rating FROM review_logs WHERE review_time_utc >= ?',
-      variables: [Variable.withInt(startUtcMs)],
-    ).get();
+    final rows = await _logs.listTimedRatingsAfter(startUtcMs);
 
     // 按本地日累加 (correct, total)
     final byDay = <String, List<int>>{};
     for (final r in rows) {
-      final ms = r.read<int>('review_time_utc');
       final localDate =
-          DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+          DateTime.fromMillisecondsSinceEpoch(r.reviewTimeUtc, isUtc: true)
+              .toLocal();
       final key = _dateKey(localDate);
       final entry = byDay.putIfAbsent(key, () => [0, 0]);
       entry[1] += 1; // total
-      if (r.read<int>('rating') >= 3) entry[0] += 1; // correct
+      if (r.rating >= 3) entry[0] += 1; // correct
     }
 
     final result = <DailyAccuracy>[];
@@ -361,38 +350,37 @@ class StatsService {
   /// v0.3.0 P1: 单一 word_entries 查 word_text + meaning（CET-4 / ZK / GK 统一表）。
   /// lapses=0 不入榜。
   Future<List<StubbornWord>> getTopStubbornWords({int limit = 10}) async {
-    final csRows = await _driftDb.customSelect(
-      'SELECT word_id, lapses, reps FROM card_states '
-      'WHERE lapses > 0 '
-      'ORDER BY lapses DESC, reps ASC '
-      'LIMIT ?',
-      variables: [Variable.withInt(limit)],
-    ).get();
-    if (csRows.isEmpty) return [];
+    final stubbornRows = await _cards.listTopStubborn(limit: limit);
+    if (stubbornRows.isEmpty) return [];
 
-    final wordIds = csRows.map((r) => r.read<String>('word_id')).toList();
-    final wePh = wordIds.map((_) => '?').join(', ');
-    final weRows = await _driftDb.customSelect(
-      'SELECT word_id, word_text, meaning FROM word_entries WHERE word_id IN ($wePh)',
-      variables: wordIds.map(Variable.withString).toList(),
+    final wordIds = stubbornRows.map((r) => r.wordId).toList();
+    // word_entries is content-layer (no user_id), so AppDatabase's
+    // existing helpers handle it directly.
+    final textMap = await _driftDb.getWordTextsForIds(wordIds);
+    // Meanings come back via a separate helper — we need both.
+    // For now, do a single customSelect on word_entries since the
+    // existing AppDatabase doesn't expose a `text+meaning` bulk helper.
+    final meaningMap = <String, String>{};
+    final entriesRows = await _driftDb.customSelect(
+      'SELECT word_id, meaning FROM word_entries '
+      'WHERE word_id IN (${wordIds.map((_) => '?').join(', ')})',
+      variables: wordIds.map((id) => Variable.withString(id)).toList(),
     ).get();
-    final wordMap = <String, (String, String)>{};
-    for (final r in weRows) {
-      wordMap[r.read<String>('word_id')] =
-          (r.read<String>('word_text'), r.read<String>('meaning'));
+    for (final r in entriesRows) {
+      meaningMap[r.read<String>('word_id')] = r.read<String>('meaning');
     }
 
-    return csRows
+    return stubbornRows
         .map((r) {
-          final wid = r.read<String>('word_id');
-          final tuple = wordMap[wid];
-          if (tuple == null) return null;
+          final text = textMap[r.wordId];
+          final meaning = meaningMap[r.wordId];
+          if (text == null || meaning == null) return null;
           return StubbornWord(
-            wordId: wid,
-            wordText: tuple.$1,
-            meaning: tuple.$2,
-            lapses: r.read<int>('lapses'),
-            reps: r.read<int>('reps'),
+            wordId: r.wordId,
+            wordText: text,
+            meaning: meaning,
+            lapses: r.lapses,
+            reps: r.reps,
           );
         })
         .whereType<StubbornWord>()
@@ -401,7 +389,7 @@ class StatsService {
 
   /// 词性雷达图（4 项）：基于已掌握单词集 (word_records WHERE action_result='know')。
   Future<PosRadarData> getPosRadar() async {
-    final masteredIds = (await _localDb.getMasteredWordIds()).toList();
+    final masteredIds = (await _localDb.getMasteredWordIds(_userId)).toList();
     if (masteredIds.isEmpty) return PosRadarData.empty;
 
     final translations = await _driftDb.getTranslationsForIds(masteredIds);
@@ -423,9 +411,9 @@ class StatsService {
   /// 词汇增长预测：当前掌握 / 目标 (active book 总词) / 近 7 天日均 →
   /// 预计还需天数 + 预计达成日。
   Future<VocabularyForecast> getVocabularyForecast() async {
-    final activeBook = LocalSettingsService(_prefs).activeWordbook;
+    final activeBook = _settings.activeWordbook;
     final target = await _driftDb.countWordsInBook(activeBook);
-    final masteredIds = await _localDb.getMasteredWordIds();
+    final masteredIds = await _localDb.getMasteredWordIds(_userId);
     final bookWordIds = await _driftDb.getWordIdsForBook(activeBook);
     final bookMastered = masteredIds.intersection(bookWordIds).length;
 
@@ -433,12 +421,10 @@ class StatsService {
     final now = DateTime.now();
     final todayLocal = DateTime(now.year, now.month, now.day);
     final sevenAgo = todayLocal.subtract(const Duration(days: 7));
-    final rows = await _localDb.db.rawQuery(
-      'SELECT COUNT(DISTINCT word_id) AS cnt FROM word_records '
-      "WHERE study_type='new' AND action_result='know' AND created_at >= ?",
-      [sevenAgo.toUtc().toIso8601String()],
+    final last7 = await _localDb.countDistinctNewKnowSince(
+      _userId,
+      sevenAgo.toUtc().toIso8601String(),
     );
-    final last7 = (rows.first['cnt'] as int?) ?? 0;
     final avgDaily = last7 / 7.0;
 
     final remaining = target - bookMastered;
@@ -468,19 +454,13 @@ class StatsService {
     final streak = await _computeStreak();
 
     // ── 记忆大师：card_states.stability ≥ 30 计数 ≥ 1000 ─────────────────
-    final masterRows = await _driftDb.customSelect(
-      'SELECT COUNT(*) AS cnt FROM card_states WHERE stability >= 30',
-    ).get();
-    final masterCount = masterRows.first.read<int>('cnt');
+    final masterCount = await _cards.countWithStabilityAtLeast(30);
 
     // ── 百日斩：单日 word_records new+know 计数 ≥ 100 ─────────────────────
-    final allWrRows = await _localDb.db.rawQuery(
-      'SELECT created_at FROM word_records '
-      "WHERE study_type='new' AND action_result='know'",
-    );
+    final allCreatedAt = await _localDb.listAllNewKnowCreatedAt(_userId);
     final byDay = <String, int>{};
-    for (final r in allWrRows) {
-      final localDate = DateTime.parse(r['created_at'] as String).toLocal();
+    for (final iso in allCreatedAt) {
+      final localDate = DateTime.parse(iso).toLocal();
       final key = _dateKey(localDate);
       byDay[key] = (byDay[key] ?? 0) + 1;
     }
@@ -492,15 +472,13 @@ class StatsService {
         .subtract(const Duration(days: 7))
         .toUtc()
         .millisecondsSinceEpoch;
-    final rlRows = await _driftDb.customSelect(
-      'SELECT review_time_utc FROM review_logs WHERE review_time_utc >= ?',
-      variables: [Variable.withInt(sevenAgoUtcMs)],
-    ).get();
+    final recentTimedRatings =
+        await _logs.listTimedRatingsAfter(sevenAgoUtcMs);
     final nightDays = <String>{};
-    for (final r in rlRows) {
-      final ms = r.read<int>('review_time_utc');
+    for (final r in recentTimedRatings) {
       final localDt =
-          DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+          DateTime.fromMillisecondsSinceEpoch(r.reviewTimeUtc, isUtc: true)
+              .toLocal();
       if (localDt.hour >= 23 || localDt.hour < 4) {
         nightDays.add(_dateKey(localDt));
       }
@@ -509,22 +487,17 @@ class StatsService {
     // ── 完美主义：连续 7 个本地日，每天 review_logs 中 rating=4 占比 = 1.0
     //   且当日 ≥ 1 条 ─────────────────────────────────────────────────────
     int perfectDays = 0;
-    final rlWithRating = await _driftDb.customSelect(
-      'SELECT review_time_utc, rating FROM review_logs '
-      'WHERE review_time_utc >= ?',
-      variables: [Variable.withInt(sevenAgoUtcMs)],
-    ).get();
-    if (rlWithRating.isNotEmpty) {
+    if (recentTimedRatings.isNotEmpty) {
       // 按本地日分组 (count4, total)
       final perDay = <String, List<int>>{};
-      for (final r in rlWithRating) {
-        final ms = r.read<int>('review_time_utc');
+      for (final r in recentTimedRatings) {
         final localDt =
-            DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+            DateTime.fromMillisecondsSinceEpoch(r.reviewTimeUtc, isUtc: true)
+                .toLocal();
         final key = _dateKey(localDt);
         final entry = perDay.putIfAbsent(key, () => [0, 0]);
         entry[1] += 1;
-        if (r.read<int>('rating') == 4) entry[0] += 1;
+        if (r.rating == 4) entry[0] += 1;
       }
       // 检查最近 7 天是否都满足
       final today = DateTime(now.year, now.month, now.day);
@@ -600,12 +573,11 @@ class StatsService {
 
   // ── 私有辅助 ───────────────────────────────────────────────────────────────
 
-  /// 复用 LocalTodayService 的 streak 算法（基于 daily_checkins 倒序扫描）。
+  /// 复用 LocalTodayService 的 streak 算法（基于 daily_checkins 倒序扫描），
+  /// PR-C-β: now user-scoped via DailyCheckinRepository.
   Future<int> _computeStreak() async {
-    final rows = await _driftDb.customSelect(
-      'SELECT date FROM daily_checkins ORDER BY date DESC',
-    ).get();
-    if (rows.isEmpty) return 0;
+    final dates = await _checkins.listDatesDesc();
+    if (dates.isEmpty) return 0;
 
     final today = _todayLocalDateString();
     final yesterday = _dateKey(
@@ -613,13 +585,13 @@ class StatsService {
     );
 
     // 第一天必须是今天或昨天，否则 streak = 0
-    final firstDate = rows.first.read<String>('date');
+    final firstDate = dates.first;
     if (firstDate != today && firstDate != yesterday) return 0;
 
     int streak = 0;
     var expected = DateTime.parse(firstDate);
-    for (final r in rows) {
-      final d = DateTime.parse(r.read<String>('date'));
+    for (final date in dates) {
+      final d = DateTime.parse(date);
       if (_dateKey(d) != _dateKey(expected)) break;
       streak++;
       expected = expected.subtract(const Duration(days: 1));
@@ -636,22 +608,7 @@ class StatsService {
         .add(const Duration(days: 1))
         .toUtc()
         .millisecondsSinceEpoch;
-    final rows = await _driftDb.customSelect(
-      'SELECT COUNT(*) AS cnt FROM review_logs '
-      'WHERE review_time_utc >= ? AND review_time_utc < ?',
-      variables: [Variable.withInt(startMs), Variable.withInt(endMs)],
-    ).get();
-    return rows.first.read<int>('cnt');
-  }
-
-  /// 当下到期复习卡片数（card_states.due ≤ 现在）。
-  Future<int> _countDueCardsNow() async {
-    final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
-    final rows = await _driftDb.customSelect(
-      'SELECT COUNT(*) AS cnt FROM card_states WHERE due <= ?',
-      variables: [Variable.withInt(nowMs)],
-    ).get();
-    return rows.first.read<int>('cnt');
+    return _logs.countInRange(startMs: startMs, endMs: endMs);
   }
 
   /// 计数 → 5 档紫色梯度等级 [0..4]。

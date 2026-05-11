@@ -171,7 +171,7 @@ void main() {
     test('LocalSettingsService dailyGoal default still 20', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      final settings = LocalSettingsService(prefs);
+      final settings = LocalSettingsService(prefs, userId: 'test-user');
       expect(settings.dailyGoal, 20);
     });
   });

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../../core/auth/auth.dart';
 import '../../../../core/services/stats_service.dart';
 import '../../../../core/storage/drift/app_database.dart';
 import '../../../../core/storage/local_database.dart';
@@ -37,12 +38,14 @@ class _AchievementsTabState extends State<AchievementsTab> {
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     try {
+      final userId = AuthScope.currentUserIdOf(context);
       final prefs = await SharedPreferences.getInstance();
       final driftDb = AppDatabase();
       final svc = StatsService(
         localDb: LocalDatabase.instance,
         driftDb: driftDb,
         prefs: prefs,
+        userId: userId,
       );
       final results = await Future.wait([
         svc.getVocabularyForecast(),

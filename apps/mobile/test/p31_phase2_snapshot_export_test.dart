@@ -1,4 +1,10 @@
 /// P3.1 Phase 2 — Snapshot export tests (updated for SQLite-first).
+///
+/// 需求 23 Phase C PR-C-β D9: LocalProgressRepository has been deleted —
+/// SnapshotExportService reads progress directly from SQLite, scoped by
+/// userId. The `progress:` field is gone from the constructor; the
+/// snapshot Map still has a `progress` section but its rows come from
+/// `LocalDatabase.getAllWordRecords(userId)` etc.
 library;
 
 import 'dart:convert';
@@ -6,25 +12,24 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:meow_mobile/core/storage/local_settings_service.dart';
-import 'package:meow_mobile/core/storage/local_progress_repository.dart';
 import 'package:meow_mobile/core/storage/local_database.dart';
 import 'package:meow_mobile/core/storage/snapshot_export_service.dart';
 import 'package:meow_mobile/core/guards/p3_feature_guard.dart';
 
 void main() {
+  const testUserId = 'test-user';
+
   // Use FFI for SQLite in tests (desktop)
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
   late LocalSettingsService settings;
-  late LocalProgressRepository progress;
   late SnapshotExportService exportService;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
-    settings = LocalSettingsService(prefs);
-    progress = LocalProgressRepository(prefs);
+    settings = LocalSettingsService(prefs, userId: testUserId);
 
     // Initialize fresh SQLite for each test. PR-C-α: drift owns schema,
     // so this test uses [initializeForTesting] to emit the v13 legacy
@@ -34,8 +39,8 @@ void main() {
 
     exportService = SnapshotExportService(
       settings: settings,
-      progress: progress,
       db: LocalDatabase.instance,
+      userId: testUserId,
     );
   });
 
@@ -74,6 +79,7 @@ void main() {
     test('word_records from SQLite appear in snapshot', () async {
       // Insert a record into SQLite
       await LocalDatabase.instance.insertWordRecord(
+        userId: testUserId,
         wordId: 'w-001',
         bookId: 'cet4',
         studyType: 'new',
@@ -136,13 +142,16 @@ void main() {
 
     test('export is read-only (does not modify data)', () async {
       await LocalDatabase.instance.insertWordRecord(
+        userId: testUserId,
         wordId: 'w-001', bookId: 'cet4', studyType: 'new', actionResult: 'know',
       );
-      final before = await LocalDatabase.instance.getAllWordRecords();
+      final before =
+          await LocalDatabase.instance.getAllWordRecords(testUserId);
 
       await exportService.export();
 
-      final after = await LocalDatabase.instance.getAllWordRecords();
+      final after =
+          await LocalDatabase.instance.getAllWordRecords(testUserId);
       expect(after.length, before.length);
     });
   });

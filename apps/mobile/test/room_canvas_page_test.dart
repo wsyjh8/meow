@@ -59,7 +59,7 @@ void main() {
 
   testWidgets('Renders empty canvas hint when nothing placed', (tester) async {
     final api = _StubApiClient(_inventoryWithItems(['room_lamp_warm']));
-    final storage = await RoomCanvasStorage.open();
+    final storage = await RoomCanvasStorage.open(userId: 'test-user');
     await pumpPage(tester, apiClient: api, storage: storage);
 
     expect(find.text('布置小窝'), findsOneWidget);
@@ -71,7 +71,7 @@ void main() {
     final api = _StubApiClient(
       _inventoryWithItems(['room_lamp_warm', 'room_plant_small']),
     );
-    final storage = await RoomCanvasStorage.open();
+    final storage = await RoomCanvasStorage.open(userId: 'test-user');
     await pumpPage(tester, apiClient: api, storage: storage);
 
     // 2 owned room items → 2 "+ 摆放" cards in panel
@@ -81,7 +81,7 @@ void main() {
   testWidgets('Tapping a panel card adds furniture to canvas',
       (tester) async {
     final api = _StubApiClient(_inventoryWithItems(['room_lamp_warm']));
-    final storage = await RoomCanvasStorage.open();
+    final storage = await RoomCanvasStorage.open(userId: 'test-user');
     await pumpPage(tester, apiClient: api, storage: storage);
 
     expect(find.byType(FurnitureWidget), findsNothing);
@@ -95,7 +95,7 @@ void main() {
   testWidgets('Selecting a furniture shows delete button; deleting removes it',
       (tester) async {
     final api = _StubApiClient(_inventoryWithItems(['room_lamp_warm']));
-    final storage = await RoomCanvasStorage.open();
+    final storage = await RoomCanvasStorage.open(userId: 'test-user');
     await pumpPage(tester, apiClient: api, storage: storage);
 
     // Add one
@@ -113,7 +113,7 @@ void main() {
 
   testWidgets('Layout persists across page reloads', (tester) async {
     final api = _StubApiClient(_inventoryWithItems(['room_lamp_warm']));
-    final storage = await RoomCanvasStorage.open();
+    final storage = await RoomCanvasStorage.open(userId: 'test-user');
     await pumpPage(tester, apiClient: api, storage: storage);
 
     // Add a furniture, allow a tick for save
@@ -146,7 +146,7 @@ void main() {
       ownedItems: const [],
       coinsBalance: 0,
     ));
-    final storage = await RoomCanvasStorage.open();
+    final storage = await RoomCanvasStorage.open(userId: 'test-user');
     await pumpPage(tester, apiClient: api, storage: storage);
 
     expect(find.textContaining('小窝里还没有家具喵'), findsOneWidget);

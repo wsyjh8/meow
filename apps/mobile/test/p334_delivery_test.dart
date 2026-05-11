@@ -154,7 +154,7 @@ void main() {
         'previewSchedule() returns map with all 4 ReviewRating keys (in-memory DB)',
         () async {
       final db = AppDatabase.forTesting(NativeDatabase.memory());
-      final service = FsrsService(db: db);
+      final service = FsrsService.forUser(db: db, userId: 'test-user');
 
       // Must init card first — previewSchedule() requires existing card state
       await service.initCardForWord('word_preview_test');

@@ -49,8 +49,9 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
 
     // Always read local settings (no network needed).
     try {
+      final userId = AuthScope.currentUserIdOf(context);
       final prefs = await SharedPreferences.getInstance();
-      final settings = LocalSettingsService(prefs);
+      final settings = LocalSettingsService(prefs, userId: userId);
       _dailyGoal = settings.dailyGoal;
       _activeWordbook = settings.activeWordbook;
 

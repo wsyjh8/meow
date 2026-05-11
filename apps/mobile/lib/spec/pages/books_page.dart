@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/auth/auth.dart';
 import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_settings_service.dart';
 import '../theme/tokens.dart';
@@ -42,8 +43,9 @@ class _BooksPageState extends State<BooksPage> {
   }
 
   Future<void> _load() async {
+    final userId = AuthScope.currentUserIdOf(context);
     final prefs = await SharedPreferences.getInstance();
-    final active = LocalSettingsService(prefs).activeWordbook;
+    final active = LocalSettingsService(prefs, userId: userId).activeWordbook;
 
     // CET-4 is in cached_words, not preset_wordbooks — hard-code meta.
     final cet4Total = await _db.countWordsInBook('book-001');
@@ -76,8 +78,9 @@ class _BooksPageState extends State<BooksPage> {
   Future<void> _switchBook(String slug) async {
     if (slug == _activeSlug) return;
 
+    final userId = AuthScope.currentUserIdOf(context);
     final prefs = await SharedPreferences.getInstance();
-    await LocalSettingsService(prefs).setActiveWordbook(slug);
+    await LocalSettingsService(prefs, userId: userId).setActiveWordbook(slug);
 
     final name = _books.firstWhere((b) => b.slug == slug).displayName;
 

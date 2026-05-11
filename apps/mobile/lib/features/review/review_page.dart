@@ -1,6 +1,7 @@
 // DEPRECATED: review functionality lives in StudyPage; this file is no longer routed.
 import 'package:flutter/material.dart';
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
 import '../../core/guards/p3_feature_guard.dart';
 import '../../core/memory/fsrs_service.dart';
 import '../../core/services/review_log_service.dart';
@@ -179,11 +180,15 @@ class _ReviewPageState extends State<ReviewPage> {
   void initState() {
     super.initState();
     final appDb = AppDatabase();
-    _fsrsService = FsrsService(db: appDb);
-    _sessionStore = SessionStore(apiClient: _apiClient, driftDb: appDb);
-    _sessionSyncService =
-        SessionSyncService(apiClient: _apiClient, driftDb: appDb);
-    _reviewLog = ReviewLogService(apiClient: _apiClient, driftDb: appDb);
+    // PR-C-β: per-user repositories wired via factory constructors.
+    final userId = AuthScope.currentUserIdOf(context);
+    _fsrsService = FsrsService.forUser(db: appDb, userId: userId);
+    _sessionStore = SessionStore.forUser(
+        apiClient: _apiClient, driftDb: appDb, userId: userId);
+    _sessionSyncService = SessionSyncService.forUser(
+        apiClient: _apiClient, driftDb: appDb, userId: userId);
+    _reviewLog = ReviewLogService.forUser(
+        apiClient: _apiClient, driftDb: appDb, userId: userId);
     // Drain any unfinished sessions from prior runs first, then open one
     // for this review page (independent from any study-page session).
     _sessionSyncService.drainPending();

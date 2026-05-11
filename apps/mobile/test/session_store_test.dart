@@ -65,7 +65,11 @@ void main() {
     setUp(() {
       db = AppDatabase.forTesting(NativeDatabase.memory());
       api = _RecordingApiClient();
-      store = SessionStore(apiClient: api, driftDb: db);
+      store = SessionStore.forUser(
+        apiClient: api,
+        driftDb: db,
+        userId: 'test-user',
+      );
     });
 
     tearDown(() async {
@@ -121,7 +125,11 @@ void main() {
 
       // Recover network and drain.
       api.throwOnStart = false;
-      final sync = SessionSyncService(apiClient: api, driftDb: db);
+      final sync = SessionSyncService.forUser(
+        apiClient: api,
+        driftDb: db,
+        userId: 'test-user',
+      );
       await sync.drainPending();
 
       row =

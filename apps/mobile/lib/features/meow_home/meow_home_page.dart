@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
 import '../../core/memory/fsrs_service.dart';
 import '../../core/router/app_router.dart';
 import '../../core/services/local_today_service.dart';
 import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_database.dart';
-import '../../core/storage/local_settings_service.dart';
 import '../../shared/theme.dart';
 import '../../shared/animations.dart';
 import '../../shared/widgets/meow_card.dart';
@@ -141,14 +141,17 @@ class _MeowHomePageState extends State<MeowHomePage>
     // future: cloud verification — getToday() retained for hybrid mode.
     TodayState? todayState;
     try {
+      final userId = AuthScope.currentUserIdOf(context);
       final prefs = await SharedPreferences.getInstance();
       try {
         final appDb = AppDatabase();
-        final localService = LocalTodayService(
+        // PR-C-β: user-scoped via factory constructor.
+        final localService = LocalTodayService.forUser(
           prefs: prefs,
           localDb: LocalDatabase.instance,
-          fsrs: FsrsService(db: appDb),
+          fsrs: FsrsService.forUser(db: appDb, userId: userId),
           driftDb: appDb,
+          userId: userId,
         );
         todayState = await localService.getTodayState();
       } catch (_) {

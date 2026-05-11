@@ -60,6 +60,7 @@ class _RecordingService implements ContentPackageService {
 }
 
 void main() {
+  const testUserId = 'test-user';
   late AppDatabase db;
   late _RecordingService fakeService;
   late Directory tempDocs;
@@ -93,13 +94,15 @@ void main() {
       // PR-B4: default flipped from false to true. To exercise the
       // short-circuit branch we must EXPLICITLY persist false now —
       // setMockInitialValues({}) (the setUp default) would yield true
-      // and trip the syncIfNeeded path.
+      // and trip the syncIfNeeded path. PR-C-β: settings SP keys are now
+      // per-user `u_<userId>_settings_*`.
       SharedPreferences.setMockInitialValues({
-        'settings_manifest_sync_enabled': false,
+        'u_${testUserId}_settings_manifest_sync_enabled': false,
       });
 
       await runManifestSyncIfEnabled(
         db: db,
+        userId: testUserId,
         serviceFactory: (Directory _, AppDatabase __) => fakeService,
       );
       expect(fakeService.syncCalls, 0,
@@ -118,10 +121,12 @@ void main() {
       // is redundant but kept as documentation that this case was
       // originally written for the PR-B3 default=false world.
       final prefs = await SharedPreferences.getInstance();
-      await LocalSettingsService(prefs).setManifestSyncEnabled(true);
+      await LocalSettingsService(prefs, userId: testUserId)
+          .setManifestSyncEnabled(true);
 
       await runManifestSyncIfEnabled(
         db: db,
+        userId: testUserId,
         serviceFactory: (Directory _, AppDatabase __) => fakeService,
       );
 

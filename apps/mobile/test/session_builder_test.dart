@@ -59,7 +59,11 @@ void main() {
 
   setUp(() {
     db = _createTestDb();
-    fsrs = FsrsService(db: db, desiredRetention: 0.9);
+    fsrs = FsrsService.forUser(
+      db: db,
+      userId: 'test-user',
+      desiredRetention: 0.9,
+    );
     builder = SessionBuilder(fsrsService: fsrs, db: db);
   });
 
