@@ -345,8 +345,16 @@ class LocalDatabase {
 
   /// Replace [userId]'s word records with [records] (for restore).
   /// Transactional. Other users' rows are untouched — only this
-  /// user's rows are deleted before insert. The snapshot may carry a
-  /// `user_id` field per row; if absent we default to [userId].
+  /// user's rows are deleted before insert.
+  ///
+  /// 需求 23 Phase D PR-D-γ (plan-023-D-v2 §4.3 / Review 2 P1-2):
+  /// `user_id` is **unconditionally** set to the caller's [userId],
+  /// regardless of whatever the snapshot row claims. Pre-γ this was
+  /// `r['user_id'] ?? userId`, which let a polluted snapshot drop
+  /// rows into another user's bucket — the current user's DELETE
+  /// then wiped their own data while INSERT silently stashed it
+  /// under a stranger's user_id. Server-side validateSnapshotUserIds
+  /// (PR-D-β) is the first line of defence; this is belt-and-braces.
   Future<void> replaceAllWordRecords(
     List<Map<String, dynamic>> records, {
     required String userId,
@@ -359,7 +367,7 @@ class LocalDatabase {
       );
       for (final r in records) {
         await txn.insert('word_records', {
-          'user_id': r['user_id'] ?? userId,
+          'user_id': userId, // PR-D-γ: unconditional, never trust snapshot row
           'word_id': r['word_id'] ?? '',
           'book_id': r['book_id'] ?? '',
           'study_type': r['study_type'] ?? 'new',
@@ -450,6 +458,12 @@ class LocalDatabase {
 
   /// Replace [userId]'s rows in [table] with [records]. Transactional.
   /// Other users' rows are not touched.
+  ///
+  /// 需求 23 Phase D PR-D-γ (plan-023-D-v2 §4.3 / Review 2 P1-2):
+  /// `user_id` is unconditionally set to the caller's [userId]. The
+  /// spread `...r` still keeps every other column, but the explicit
+  /// override that follows must come LAST so it wins regardless of
+  /// what the snapshot row carries.
   Future<void> replaceUserRowsInTable(
     String table,
     List<Map<String, dynamic>> records, {
@@ -460,7 +474,7 @@ class LocalDatabase {
       for (final r in records) {
         await txn.insert(table, {
           ...r,
-          'user_id': r['user_id'] ?? userId,
+          'user_id': userId, // PR-D-γ: unconditional, never trust snapshot row
         });
       }
     });

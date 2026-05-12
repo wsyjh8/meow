@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../api/api_client.dart';
@@ -160,9 +161,70 @@ class BackupRestoreService {
     }
   }
 
+  /// Walk the snapshot's progress sub-tree and count rows whose
+  /// `user_id` field is set to anything other than this restore
+  /// service's bound user. Returns a per-entity tally; empty map →
+  /// clean snapshot.
+  ///
+  /// 需求 23 Phase D PR-D-γ (plan-023-D-v2 §4.3 / Review 2 P2-1):
+  /// server-side `validateSnapshotUserIds` is the first defence
+  /// (rejects 400 before storage write). This is the second:
+  /// when a snapshot arrives from somewhere that bypassed the
+  /// server check (legacy backup, local file replay), log every
+  /// foreign-tag column so the engineer sees the inbound shape.
+  /// The actual write path uses [LocalDatabase.replaceAll*] which
+  /// PR-D-γ flipped to unconditional `userId` overwrite — so the
+  /// foreign tags are dropped, not stored.
+  Map<String, int> _countForeignUserIdRows(
+    Map<String, dynamic> snapshot,
+  ) {
+    final progress = snapshot['progress'];
+    if (progress is! Map) return const {};
+
+    int countList(dynamic node) {
+      if (node is! List) return 0;
+      var n = 0;
+      for (final e in node) {
+        if (e is Map && e['user_id'] is String && e['user_id'] != _userId) {
+          n += 1;
+        }
+      }
+      return n;
+    }
+
+    int countMap(dynamic node) {
+      if (node is! Map) return 0;
+      if (node['user_id'] is String && node['user_id'] != _userId) return 1;
+      return 0;
+    }
+
+    return <String, int>{
+      'word_records': countList(progress['word_records']),
+      'card_states': countList(progress['card_states']),
+      'daily_checkins': countList(progress['daily_checkins']),
+      'wordbook_progress': progress['wordbook_progress'] is List
+          ? countList(progress['wordbook_progress'])
+          : countMap(progress['wordbook_progress']),
+      'custom_wordbooks': countList(progress['custom_wordbooks']),
+      'vocabulary_notebook': countList(progress['vocabulary_notebook']),
+    }..removeWhere((_, n) => n == 0);
+  }
+
   /// Apply snapshot to local storage — full replace, no merge. All
   /// writes are scoped to this user; other users' rows are untouched.
   Future<void> _applySnapshot(Map<String, dynamic> snapshot) async {
+    // PR-D-γ §4.3: log any foreign-tag rows BEFORE we write. The
+    // write itself ignores the tag (LocalDatabase forces `user_id =
+    // _userId`), but surfacing the count helps diagnose pollution.
+    // Empty map → no foreign tags → silence.
+    final foreign = _countForeignUserIdRows(snapshot);
+    if (foreign.isNotEmpty) {
+      debugPrint(
+        '[BackupRestore] snapshot contains foreign user_id rows '
+        '(will be re-tagged as current user): $foreign',
+      );
+    }
+
     // 1. Restore settings (these are SP, already user-scoped via
     //    [LocalSettingsService] construction).
     final settings = snapshot['settings'] as Map<String, dynamic>?;
