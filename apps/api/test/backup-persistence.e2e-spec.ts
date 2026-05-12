@@ -364,4 +364,95 @@ describeIfPg('Backup persistence (PR-D-β / e2e)', () => {
     const idx = createdUserIds.indexOf(userCId);
     if (idx >= 0) createdUserIds.splice(idx, 1);
   });
+
+  // ── D-T13: PRD §9.5 — bind keeps backup ───────────────────────────
+  it('D-T13: guest uploads backup → bind to registered → backup still '
+      + 'visible (same-row bind preserves users.id and backup row)',
+      async () => {
+    // Create a fresh guest (we want bind to upgrade, not collide).
+    const guest = await request(app.getHttpServer())
+      .post('/api/v1/auth/guest')
+      .send({ device_id: `bk-bind-${Date.now()}` });
+    expect(guest.status).toBe(200);
+    const guestToken = guest.body.token;
+    const guestUserId = guest.body.user.id;
+    createdUserIds.push(guestUserId);
+
+    // Upload a backup as the guest.
+    const guestSnap = buildSnapshotForUser(guestUserId, {
+      extraWordId: 'pre-bind',
+    });
+    const up = await request(app.getHttpServer())
+      .post('/api/v1/me/backup')
+      .set('Authorization', `Bearer ${guestToken}`)
+      .send({ snapshot: guestSnap })
+      .expect(201);
+    const backupIdBeforeBind = up.body.backup_id;
+    expect(backupIdBeforeBind).toBeTruthy();
+
+    // Bind the guest to email/password. A4-α §6.2 same-row upgrade:
+    // users.id stays the same; only account_type + email + password
+    // change.
+    const email = `bk-bind-${Date.now()}@test.local`;
+    const bound = await request(app.getHttpServer())
+      .post('/api/v1/auth/bind')
+      .set('Authorization', `Bearer ${guestToken}`)
+      .send({ email, password: 'pa55w0rd!' });
+    expect(bound.status).toBe(200);
+    const boundToken = bound.body.token;
+    const boundUserId = bound.body.user.id;
+
+    // Critical assertion: users.id is stable through bind.
+    expect(boundUserId).toBe(guestUserId);
+
+    // GET /me/backup/latest with the post-bind token still returns
+    // the SAME backup row (PRIMARY KEY is user_id, which didn't
+    // move).
+    const metaAfterBind = await request(app.getHttpServer())
+      .get('/api/v1/me/backup/latest')
+      .set('Authorization', `Bearer ${boundToken}`);
+    expect(metaAfterBind.status).toBe(200);
+    expect(metaAfterBind.body.status).toBe('available');
+    expect(metaAfterBind.body.backup_id).toBe(backupIdBeforeBind);
+
+    // Full snapshot fetch also works.
+    const fullAfterBind = await request(app.getHttpServer())
+      .get('/api/v1/me/backup/latest/snapshot')
+      .set('Authorization', `Bearer ${boundToken}`);
+    expect(fullAfterBind.status).toBe(200);
+    expect(fullAfterBind.body.status).toBe('available');
+    expect(
+      fullAfterBind.body.snapshot.progress.word_records[0].word_id,
+    ).toBe('pre-bind');
+  });
+
+  // ── D-T14: PRD §9.7 — token guard on backup endpoints ─────────────
+  describe('D-T14: AUTH_ENFORCE=true → /me/backup/* rejects missing / invalid token', () => {
+    it('POST /me/backup with no Authorization → 401', async () => {
+      const r = await request(app.getHttpServer())
+        .post('/api/v1/me/backup')
+        .send({ snapshot: buildSnapshotForUser(userAId) });
+      expect(r.status).toBe(401);
+    });
+
+    it('GET /me/backup/latest with no Authorization → 401', async () => {
+      const r = await request(app.getHttpServer())
+        .get('/api/v1/me/backup/latest');
+      expect(r.status).toBe(401);
+    });
+
+    it('GET /me/backup/latest/snapshot with no Authorization → 401',
+        async () => {
+      const r = await request(app.getHttpServer())
+        .get('/api/v1/me/backup/latest/snapshot');
+      expect(r.status).toBe(401);
+    });
+
+    it('GET /me/backup/latest with invalid Bearer → 401', async () => {
+      const r = await request(app.getHttpServer())
+        .get('/api/v1/me/backup/latest')
+        .set('Authorization', 'Bearer not-a-real-jwt');
+      expect(r.status).toBe(401);
+    });
+  });
 });
