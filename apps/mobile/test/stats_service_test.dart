@@ -7,6 +7,8 @@
 /// - 留存曲线桶边界
 /// - 掌握等级分布 stability 阈值边界 (7, 30)
 /// - 顽固词排序 + lapses=0 不入榜
+library;
+
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -30,16 +32,19 @@ void main() {
     // Fresh in-memory drift
     driftDb = AppDatabase.forTesting(NativeDatabase.memory());
 
-    // Fresh sqflite (LocalDatabase)
+    // Fresh sqflite (LocalDatabase). PR-C-α: drift owns schema now, so
+    // a LocalDatabase-only test uses the test-only [initializeForTesting]
+    // bridge to materialize the v13 legacy schema in the sqflite file.
     SharedPreferences.setMockInitialValues({});
     prefs = await SharedPreferences.getInstance();
     await LocalDatabase.deleteDatabase_();
-    await LocalDatabase.initialize();
+    await LocalDatabase.initializeForTesting();
 
     svc = StatsService(
       localDb: LocalDatabase.instance,
       driftDb: driftDb,
       prefs: prefs,
+      userId: 'test-user',
     );
   });
 
@@ -62,6 +67,7 @@ void main() {
 
     test('插入 know 记录后 totalMastered 增加', () async {
       await LocalDatabase.instance.insertWordRecord(
+        userId: 'test-user',
         wordId: 'cet4-test-1',
         bookId: 'book-001',
         studyType: 'new',
@@ -91,6 +97,7 @@ void main() {
 
     test('插入 know 记录后今天的 newCount = 1', () async {
       await LocalDatabase.instance.insertWordRecord(
+        userId: 'test-user',
         wordId: 'w-1',
         bookId: 'b',
         studyType: 'new',

@@ -1,12 +1,30 @@
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { loggingMiddleware } from './middleware/logging.middleware';
 import { errorFilter } from './middleware/error.filter';
 import { PersistenceFailureFilter } from './middleware/persistence-failure.filter';
+import { assertProductionAuthEnforce } from './auth/auth.guard';
 
 async function bootstrap() {
+  // 需求 23 D13: 生产环境必须开启 AUTH_ENFORCE
+  assertProductionAuthEnforce();
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // 需求 23 Phase D PR-D-α (plan-023-D-v2 §4.1 / Review 1: HTTP body
+  // limit): default express.json limit is 100KB; a typical mobile
+  // snapshot already comfortably exceeds that (full word_records +
+  // card_states for an active learner). Raise to 10MB so /me/backup
+  // POSTs don't 413. urlencoded follows for any future form posts.
+  // See `BACKUP_BODY_LIMIT_MB` env knob if a higher cap is ever
+  // needed in dev / staging.
+  const bodyLimit = process.env.BACKUP_BODY_LIMIT_MB
+    ? `${process.env.BACKUP_BODY_LIMIT_MB}mb`
+    : '10mb';
+  app.use(json({ limit: bodyLimit }));
+  app.use(urlencoded({ extended: true, limit: bodyLimit }));
 
   // Global prefix for API versioning (does NOT affect static assets)
   app.setGlobalPrefix('api/v1');

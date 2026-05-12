@@ -1,5 +1,7 @@
-import { Controller, Post, Body, Headers, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, Headers, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
 import { repositories } from '../domain';
+import { AuthGuard, RequestUser } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 export interface ReviewAttemptDto {
   review_group_id: string;
@@ -21,23 +23,30 @@ interface LocalBatchReviewAttemptDto {
 
 /**
  * Review attempts controller.
+ *
+ * 需求 23 Phase A4-α: AuthGuard required.
+ * audit §6 owner-check on submitReviewAttempt prevents writing to
+ * another user's review_group.
  */
 @Controller('review-attempts')
+@UseGuards(AuthGuard)
 export class ReviewAttemptsController {
   @Post()
   @HttpCode(HttpStatus.OK)
   async submitReviewAttempt(
     @Body() dto: ReviewAttemptDto,
+    @CurrentUser() user: RequestUser,
     @Headers('x-idempotency-key') idempotencyKey?: string,
   ) {
     if (idempotencyKey) {
-      const existing = repositories.idempotency.getIdempotencyKey(idempotencyKey);
+      const existing = repositories.idempotency.getIdempotencyKey(user.id, idempotencyKey);
       if (existing) {
         return existing.response;
       }
     }
 
     const result = repositories.review.submitReviewAttempt(
+      user.id,
       dto.review_group_id,
       dto.word_id,
       dto.action_result,
@@ -45,20 +54,22 @@ export class ReviewAttemptsController {
       dto.session_id,
     );
 
-    const state = repositories.today.getTodayState();
+    const state = repositories.today.getTodayState(user.id);
 
     let settlementResponse = null;
     if (result.success && result.groupCompleted && idempotencyKey) {
-      const hasGroupCompletedEvent = repositories.review.hasReviewGroupCompletedEvent(dto.review_group_id);
+      const hasGroupCompletedEvent = repositories.review.hasReviewGroupCompletedEvent(user.id, dto.review_group_id);
 
       if (!hasGroupCompletedEvent) {
         const sourceEventResult = repositories.reward.createOrGetSourceEvent(
+          user.id,
           'review_group_completed',
           dto.review_group_id,
           `${idempotencyKey}-group-settlement`,
         );
 
         const settlementResult = repositories.reward.createSettlement(
+          user.id,
           sourceEventResult.sourceEvent.source_event_id,
           `${idempotencyKey}-group-settlement`,
         );
@@ -87,11 +98,11 @@ export class ReviewAttemptsController {
 
     if (result.success && dto.action_result === 'correct') {
       const today = new Date().toISOString().split('T')[0];
-      repositories.checkIn.updateLearningDay(today);
+      repositories.checkIn.updateLearningDay(user.id, today);
     }
 
     if (idempotencyKey) {
-      repositories.idempotency.setIdempotencyKey(idempotencyKey, '/review-attempts', response);
+      repositories.idempotency.setIdempotencyKey(user.id, idempotencyKey, '/review-attempts', response);
     }
 
     await repositories.ensurePersisted();
@@ -112,10 +123,11 @@ export class ReviewAttemptsController {
   @HttpCode(HttpStatus.OK)
   async submitLocalReviewBatch(
     @Body() dto: LocalBatchReviewAttemptDto,
+    @CurrentUser() user: RequestUser,
     @Headers('x-idempotency-key') idempotencyKey?: string,
   ) {
     if (idempotencyKey) {
-      const existing = repositories.idempotency.getIdempotencyKey(idempotencyKey);
+      const existing = repositories.idempotency.getIdempotencyKey(user.id, idempotencyKey);
       if (existing) {
         return existing.response;
       }
@@ -126,23 +138,26 @@ export class ReviewAttemptsController {
       session_id: wa.session_id ?? dto.session_id,
     }));
     const result = repositories.review.submitLocalReviewBatch(
+      user.id,
       wordAttemptsWithSession,
       idempotencyKey || '',
     );
 
-    const state = repositories.today.getTodayState();
+    const state = repositories.today.getTodayState(user.id);
 
     let settlementResponse = null;
     const localGroupId = result.localGroupId;
     if (result.success && !result.alreadyExists && idempotencyKey) {
-      const hasEvent = repositories.review.hasReviewGroupCompletedEvent(localGroupId);
+      const hasEvent = repositories.review.hasReviewGroupCompletedEvent(user.id, localGroupId);
       if (!hasEvent) {
         const sourceEventResult = repositories.reward.createOrGetSourceEvent(
+          user.id,
           'review_group_completed',
           localGroupId,
           `${idempotencyKey}-group-settlement`,
         );
         const settlementResult = repositories.reward.createSettlement(
+          user.id,
           sourceEventResult.sourceEvent.source_event_id,
           `${idempotencyKey}-group-settlement`,
         );
@@ -170,11 +185,11 @@ export class ReviewAttemptsController {
 
     if (result.success && dto.word_attempts.some(a => a.action_result === 'correct')) {
       const today = new Date().toISOString().split('T')[0];
-      repositories.checkIn.updateLearningDay(today);
+      repositories.checkIn.updateLearningDay(user.id, today);
     }
 
     if (idempotencyKey) {
-      repositories.idempotency.setIdempotencyKey(idempotencyKey, '/review-attempts/local-batch', response);
+      repositories.idempotency.setIdempotencyKey(user.id, idempotencyKey, '/review-attempts/local-batch', response);
     }
 
     await repositories.ensurePersisted();

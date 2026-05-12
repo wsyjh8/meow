@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+import '../api/api_client.dart';
 import 'local_settings_service.dart';
-import 'local_progress_repository.dart';
 import 'local_database.dart';
 import 'snapshot_export_service.dart';
 
@@ -9,6 +11,20 @@ import 'snapshot_export_service.dart';
 ///
 /// Fetches a cloud backup snapshot and applies it to local storage.
 /// This is a HIGH-RISK gated operation requiring pre-check and user confirmation.
+///
+/// 需求 23 Phase C PR-C-β (plan-023-C-v2 §D9 + §4.4): single-source
+/// SQLite. The PR-A-era LocalProgressRepository was deleted; the
+/// restore path now writes each progress entity directly to its SQLite
+/// table via [LocalDatabase], scoped to the current [userId].
+///
+/// 需求 23 Phase D PR-D-α (plan-023-D-v2 §4.1 / Review 2 P0-1):
+/// constructor accepts `http.Client client`; both pre-check fetch and
+/// the snapshot fetch now route through the [AuthHttpClient]
+/// AuthBootstrap installed, so requests carry `Authorization:
+/// Bearer <token>`. Pre-D the fetches went out as `http.get` (no
+/// auth) — the server hit the permissive fallback and pulled
+/// DEV_FALLBACK_USER_ID's backup regardless of who was actually
+/// signed in.
 ///
 /// IMPORTANT semantic boundaries:
 /// - restore success = current device local data updated from backup
@@ -25,17 +41,20 @@ import 'snapshot_export_service.dart';
 class BackupRestoreService {
   final String baseUrl;
   final LocalSettingsService _settings;
-  final LocalProgressRepository _progress;
   final LocalDatabase _db;
+  final String _userId;
+  final http.Client _client;
 
   BackupRestoreService({
     required this.baseUrl,
     required LocalSettingsService settings,
-    required LocalProgressRepository progress,
     required LocalDatabase db,
+    required String userId,
+    http.Client? client,
   })  : _settings = settings,
-        _progress = progress,
-        _db = db;
+        _db = db,
+        _userId = userId,
+        _client = client ?? ApiClient.defaultHttpClient ?? http.Client();
 
   /// Accepted schema versions for restore.
   static const _acceptedSchemas = {
@@ -46,7 +65,9 @@ class BackupRestoreService {
   /// Pre-check: is there a restorable backup?
   Future<RestorePreCheckResult> preCheck() async {
     try {
-      final response = await http.get(
+      // PR-D-α: route through injected client so the request is
+      // authorized as the current user (not the permissive fallback).
+      final response = await _client.get(
         Uri.parse('$baseUrl/me/backup/latest/snapshot'),
       );
 
@@ -89,8 +110,8 @@ class BackupRestoreService {
   /// MUST be called only after preCheck() returns restorable AND user confirms.
   Future<RestoreResult> restore() async {
     try {
-      // Fetch snapshot
-      final response = await http.get(
+      // PR-D-α: route through injected client (auth header).
+      final response = await _client.get(
         Uri.parse('$baseUrl/me/backup/latest/snapshot'),
       );
 
@@ -140,9 +161,72 @@ class BackupRestoreService {
     }
   }
 
-  /// Apply snapshot to local storage — full replace, no merge.
+  /// Walk the snapshot's progress sub-tree and count rows whose
+  /// `user_id` field is set to anything other than this restore
+  /// service's bound user. Returns a per-entity tally; empty map →
+  /// clean snapshot.
+  ///
+  /// 需求 23 Phase D PR-D-γ (plan-023-D-v2 §4.3 / Review 2 P2-1):
+  /// server-side `validateSnapshotUserIds` is the first defence
+  /// (rejects 400 before storage write). This is the second:
+  /// when a snapshot arrives from somewhere that bypassed the
+  /// server check (legacy backup, local file replay), log every
+  /// foreign-tag column so the engineer sees the inbound shape.
+  /// The actual write path uses [LocalDatabase.replaceAll*] which
+  /// PR-D-γ flipped to unconditional `userId` overwrite — so the
+  /// foreign tags are dropped, not stored.
+  Map<String, int> _countForeignUserIdRows(
+    Map<String, dynamic> snapshot,
+  ) {
+    final progress = snapshot['progress'];
+    if (progress is! Map) return const {};
+
+    int countList(dynamic node) {
+      if (node is! List) return 0;
+      var n = 0;
+      for (final e in node) {
+        if (e is Map && e['user_id'] is String && e['user_id'] != _userId) {
+          n += 1;
+        }
+      }
+      return n;
+    }
+
+    int countMap(dynamic node) {
+      if (node is! Map) return 0;
+      if (node['user_id'] is String && node['user_id'] != _userId) return 1;
+      return 0;
+    }
+
+    return <String, int>{
+      'word_records': countList(progress['word_records']),
+      'card_states': countList(progress['card_states']),
+      'daily_checkins': countList(progress['daily_checkins']),
+      'wordbook_progress': progress['wordbook_progress'] is List
+          ? countList(progress['wordbook_progress'])
+          : countMap(progress['wordbook_progress']),
+      'custom_wordbooks': countList(progress['custom_wordbooks']),
+      'vocabulary_notebook': countList(progress['vocabulary_notebook']),
+    }..removeWhere((_, n) => n == 0);
+  }
+
+  /// Apply snapshot to local storage — full replace, no merge. All
+  /// writes are scoped to this user; other users' rows are untouched.
   Future<void> _applySnapshot(Map<String, dynamic> snapshot) async {
-    // 1. Restore settings
+    // PR-D-γ §4.3: log any foreign-tag rows BEFORE we write. The
+    // write itself ignores the tag (LocalDatabase forces `user_id =
+    // _userId`), but surfacing the count helps diagnose pollution.
+    // Empty map → no foreign tags → silence.
+    final foreign = _countForeignUserIdRows(snapshot);
+    if (foreign.isNotEmpty) {
+      debugPrint(
+        '[BackupRestore] snapshot contains foreign user_id rows '
+        '(will be re-tagged as current user): $foreign',
+      );
+    }
+
+    // 1. Restore settings (these are SP, already user-scoped via
+    //    [LocalSettingsService] construction).
     final settings = snapshot['settings'] as Map<String, dynamic>?;
     if (settings != null) {
       if (settings['daily_goal'] is num) {
@@ -160,16 +244,15 @@ class BackupRestoreService {
       }
     }
 
-    // 2. Restore progress — full replace each entity
+    // 2. Restore progress — full replace each entity FOR THIS USER ONLY.
     final progress = snapshot['progress'] as Map<String, dynamic>?;
     if (progress != null) {
-      // word_records (SQLite source of truth)
+      // word_records (SQLite source of truth, user-scoped replace)
       if (progress['word_records'] is List) {
         final records = (progress['word_records'] as List)
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
-        await _progress.setWordRecords(records);
-        await _db.replaceAllWordRecords(records);
+        await _db.replaceAllWordRecords(records, userId: _userId);
       }
 
       // card_states (FSRS scheduling — present in p3_2_snapshot_v1 only)
@@ -177,33 +260,58 @@ class BackupRestoreService {
         final cardStateRecords = (progress['card_states'] as List)
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
-        await _db.replaceAllInTable('card_states', cardStateRecords);
+        await _db.replaceUserRowsInTable(
+          'card_states',
+          cardStateRecords,
+          userId: _userId,
+        );
       }
 
-      // SharedPreferences-backed progress entities
-      if (progress['wordbook_progress'] is Map) {
-        await _progress.setWordbookProgress(
-            Map<String, dynamic>.from(progress['wordbook_progress'] as Map));
+      // PR-C-β D9: the four ex-SP entities are now SQLite-sourced.
+      // wordbook_progress is the only one that historically held a Map
+      // instead of a List; tolerate both shapes.
+      final wbp = progress['wordbook_progress'];
+      if (wbp is Map) {
+        await _db.replaceUserRowsInTable(
+          'wordbook_progress',
+          [Map<String, dynamic>.from(wbp)],
+          userId: _userId,
+        );
+      } else if (wbp is List) {
+        await _db.replaceUserRowsInTable(
+          'wordbook_progress',
+          wbp
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList(),
+          userId: _userId,
+        );
       }
+
       if (progress['daily_checkins'] is List) {
-        await _progress.setDailyCheckins(
+        await _db.replaceUserRowsInTable(
+          'daily_checkins',
           (progress['daily_checkins'] as List)
               .map((e) => Map<String, dynamic>.from(e as Map))
               .toList(),
+          userId: _userId,
         );
       }
       if (progress['custom_wordbooks'] is List) {
-        await _progress.setCustomWordbooks(
+        await _db.replaceUserRowsInTable(
+          'custom_wordbooks',
           (progress['custom_wordbooks'] as List)
               .map((e) => Map<String, dynamic>.from(e as Map))
               .toList(),
+          userId: _userId,
         );
       }
       if (progress['vocabulary_notebook'] is List) {
-        await _progress.setVocabularyNotebook(
+        await _db.replaceUserRowsInTable(
+          'vocabulary_notebook',
           (progress['vocabulary_notebook'] as List)
               .map((e) => Map<String, dynamic>.from(e as Map))
               .toList(),
+          userId: _userId,
         );
       }
     }

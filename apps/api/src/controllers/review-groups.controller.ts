@@ -1,11 +1,13 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 import { repositories } from '../domain';
+import { AuthGuard, RequestUser } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 /**
  * Review groups controller.
- * 
+ *
  * Handles review_group lifecycle.
- * 
+ *
  * Frozen rules:
  * - Backend generates and holds review_group
  * - Only one active group per user at a time
@@ -13,17 +15,20 @@ import { repositories } from '../domain';
  * - Group completion != today's review completion
  * - Same active group can span across sessions
  * - No duplicate completion/settlement/rewards
- * 
+ *
  * Blocked if touched:
  * - Group size algorithm
  * - Grouping algorithm
  * - Review priority algorithm
+ *
+ * 需求 23 Phase A4-α: AuthGuard required.
  */
 @Controller('me/review-groups')
+@UseGuards(AuthGuard)
 export class ReviewGroupsController {
   @Get('next')
-  getNextReviewGroup() {
-    const group = repositories.review.getOrCreateReviewGroup();
+  getNextReviewGroup(@CurrentUser() user: RequestUser) {
+    const group = repositories.review.getOrCreateReviewGroup(user.id);
     return {
       review_group_id: group.review_group_id,
       group_status: group.group_status,

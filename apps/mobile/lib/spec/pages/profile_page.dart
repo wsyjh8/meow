@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
 import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_settings_service.dart';
+import '../../features/auth/auth_form_page.dart';
 import '../theme/tokens.dart';
 import '../icons/mochi_illustrations.dart';
 import '../widgets/spec_settings_list.dart';
@@ -47,8 +49,9 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
 
     // Always read local settings (no network needed).
     try {
+      final userId = AuthScope.currentUserIdOf(context);
       final prefs = await SharedPreferences.getInstance();
-      final settings = LocalSettingsService(prefs);
+      final settings = LocalSettingsService(prefs, userId: userId);
       _dailyGoal = settings.dailyGoal;
       _activeWordbook = settings.activeWordbook;
 
@@ -83,6 +86,7 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildUserIdentity(),
+              _buildAccountBlock(),
               _buildCurrentBookCard(),
               _buildLearningSettings(),
               _buildDataSettings(),
@@ -103,6 +107,15 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
     final stats = _summary?.statsSummary;
     final wordsLearned = stats?.totalWordsLearned ?? 0;
     final daysJoined = stats?.totalLearningDays ?? 0;
+
+    // 需求 23 Phase B: display nickname/email from AuthScope.
+    // Guest fallback shows "游客" without an explicit "Alex" placeholder.
+    final auth = AuthScope.of(context);
+    final user = auth.currentUser;
+    final displayName = user?.nickname.isNotEmpty == true
+        ? user!.nickname
+        : (auth.status == AuthStatus.authedRegistered ? 'Learner' : '游客');
+    final displaySub = '加入 $daysJoined 天 · 共掌握 $wordsLearned 词';
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(SpecSpacing.pageH, 14, SpecSpacing.pageH, 18),
@@ -129,13 +142,13 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Alex',
-                    style: TextStyle(fontSize: 16, fontWeight: SpecTypo.medium, color: SpecText.primary),
+                  Text(
+                    displayName,
+                    style: const TextStyle(fontSize: 16, fontWeight: SpecTypo.medium, color: SpecText.primary),
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '加入 $daysJoined 天 · 共掌握 $wordsLearned 词',
+                    displaySub,
                     style: const TextStyle(fontSize: 12, color: SpecText.secondary),
                   ),
                 ],
@@ -147,6 +160,184 @@ class _SpecProfilePageState extends State<SpecProfilePage> {
         ),
       ),
     );
+  }
+
+  // ==================== 需求 23 Phase B — Account block ====================
+  //
+  // Shows account status (guest / registered / token expired) with the
+  // single most useful CTA. plan v2 §7.2 says we display:
+  //   - current account status
+  //   - nickname or email
+  //   - bind-account / logout / re-login entry
+  //   - (备份入口 already exists via "数据" group below)
+  //
+  // 项目硬纪律 §3.4: never blame / never threaten. The bind prompt is
+  // a gentle "more secure"-style hint, not a guilt trip.
+
+  Widget _buildAccountBlock() {
+    final auth = AuthScope.of(context);
+    final status = auth.status;
+    final email = auth.currentUser?.email;
+
+    String label;
+    String? sublabel;
+    String? ctaLabel;
+    VoidCallback? onCta;
+    Color ctaColor = SpecText.purple;
+
+    switch (status) {
+      case AuthStatus.authedRegistered:
+        label = email ?? '已登录';
+        sublabel = '正式账号';
+        ctaLabel = '退出登录';
+        ctaColor = SpecText.secondary;
+        onCta = _confirmLogout;
+        break;
+      case AuthStatus.authedGuest:
+        label = '游客模式';
+        sublabel = '绑定后可在新设备上找回进度';
+        ctaLabel = '绑定账号';
+        onCta = () => _openAuth(AuthFormMode.bind);
+        // Phase B fix-6 (评审采纳): guest 用户也需要"已有账号登录"入口。
+        // 否则换手机/重装的老用户没办法回到自己账号下。Sub-CTA 渲染
+        // 在主 CTA 旁边（详见 build 末尾的 secondary link）。
+        break;
+      case AuthStatus.offlineGuest:
+        label = '游客模式（离线）';
+        sublabel = '联网后会自动获取账号身份';
+        ctaLabel = null;
+        onCta = null;
+        break;
+      case AuthStatus.tokenExpired:
+        label = '登录已过期';
+        sublabel = '本设备进度安全保留，请重新登录';
+        ctaLabel = '重新登录';
+        onCta = () => _openAuth(AuthFormMode.login);
+        break;
+      case AuthStatus.loading:
+        label = '正在加载…';
+        sublabel = null;
+        ctaLabel = null;
+        onCta = null;
+        break;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(SpecSpacing.pageH, 0, SpecSpacing.pageH, 18),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: SpecBg.card,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: SpecTypo.medium,
+                          color: SpecText.primary,
+                        ),
+                      ),
+                      if (sublabel != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          sublabel,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: SpecText.secondary,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (ctaLabel != null && onCta != null)
+                  GestureDetector(
+                    onTap: onCta,
+                    child: Text(
+                      '$ctaLabel →',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: SpecTypo.medium,
+                        color: ctaColor,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            // Phase B fix-6 (评审采纳): guest 状态（在线 / 离线）都需要
+            // "已有账号马上登录"入口。覆盖换手机 / 重装场景。
+            if (status == AuthStatus.authedGuest ||
+                status == AuthStatus.offlineGuest) ...[
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: status == AuthStatus.offlineGuest
+                    ? null  // 离线不能登录，避免误点
+                    : () => _openAuth(AuthFormMode.login),
+                child: Text(
+                  status == AuthStatus.offlineGuest
+                      ? '已有账号？联网后可登录'
+                      : '已有账号？登录 →',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: status == AuthStatus.offlineGuest
+                        ? SpecText.tertiary
+                        : SpecText.purple,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAuth(AuthFormMode mode) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => AuthFormPage(initialMode: mode)),
+    );
+    // AuthScope notifyListeners after auth flow will trigger rebuild
+    // automatically (this widget calls AuthScope.of in build).
+    if (mounted) _loadData();
+  }
+
+  Future<void> _confirmLogout() async {
+    // plan v2 §7.3: 退出登录确认。文案重点："退出后本设备将不再显示当前账号
+    // 数据。如未备份，重新安装或清除本地数据可能导致进度丢失。"
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('确认退出登录?'),
+        content: const Text(
+          '退出后，本设备将不再显示当前账号数据。\n'
+          '如未备份，重新安装或清除本地数据可能导致进度丢失。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('退出登录', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await AuthScope.read(context).logout();
+    }
   }
 
   // ==================== 6.4.3 Current Textbook Card ====================

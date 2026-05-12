@@ -4,6 +4,8 @@ import 'package:drift/drift.dart';
 import 'package:fsrs/fsrs.dart' as fsrs;
 
 import '../storage/drift/app_database.dart';
+import '../storage/repositories/card_state_repository.dart';
+import '../storage/repositories/review_log_repository.dart';
 import 'card_state_data.dart';
 import 'review_rating.dart';
 
@@ -14,14 +16,30 @@ import 'review_rating.dart';
 ///
 /// All time fields are stored as UTC epoch milliseconds.
 /// "Today" calculations accept nowLocal and convert internally.
+///
+/// 需求 23 Phase C PR-C-β (plan-023-C-v2 §4.4): FsrsService is now
+/// user-scoped. Construction takes a [CardStateRepository] and a
+/// [ReviewLogRepository] (or builds them from a [userId]) so every
+/// read/write goes through the partition guard. The PR-C-α
+/// SP-bridge fallback is gone.
 class FsrsService {
   final AppDatabase _db;
+  final CardStateRepository _cards;
+  final ReviewLogRepository _logs;
   fsrs.Scheduler _scheduler;
 
+  /// Primary constructor — caller (main.dart) injects already-bound
+  /// repositories. Recommended in production: it keeps the
+  /// AppDatabase / userId resolution in one place and makes test
+  /// fixtures trivial to substitute.
   FsrsService({
     required AppDatabase db,
+    required CardStateRepository cards,
+    required ReviewLogRepository logs,
     double desiredRetention = 0.9,
   })  : _db = db,
+        _cards = cards,
+        _logs = logs,
         _scheduler = fsrs.Scheduler(
           desiredRetention: desiredRetention,
           // 保留 learning steps 是因为背单词场景需要短期巩固，不要关
@@ -29,21 +47,35 @@ class FsrsService {
           relearningSteps: const [Duration(minutes: 10)],
         );
 
+  /// Convenience constructor for call sites that have a [userId] but
+  /// haven't built the repositories themselves. Wires both repositories
+  /// against [db] + [userId] so every query is partition-safe.
+  factory FsrsService.forUser({
+    required AppDatabase db,
+    required String userId,
+    double desiredRetention = 0.9,
+  }) {
+    return FsrsService(
+      db: db,
+      cards: CardStateRepository(db: db, userId: userId),
+      logs: ReviewLogRepository(db: db, userId: userId),
+      desiredRetention: desiredRetention,
+    );
+  }
+
   // ==================== Public API ====================
 
   /// Create a fresh FSRS card for a word that has never been seen.
   ///
-  /// Idempotent: if card_states already has this word_id, returns existing.
+  /// Idempotent: if card_states already has this word_id for the bound
+  /// user, returns the existing card.
   /// New card: state=1(Learning), due=now, stability/difficulty=null.
   Future<CardStateData> initCardForWord(String wordId,
       {DateTime? nowUtc}) async {
     final now = nowUtc ?? DateTime.now().toUtc();
 
-    // Check if already exists (idempotent)
-    final existing = await (_db.select(_db.cardStates)
-          ..where((t) => t.wordId.equals(wordId)))
-        .getSingleOrNull();
-
+    // Check if already exists (idempotent, user-scoped via repo).
+    final existing = await _cards.findByWordId(wordId);
     if (existing != null) {
       return _rowToCardStateData(existing);
     }
@@ -51,21 +83,18 @@ class FsrsService {
     // Create new fsrs Card to get default values
     final card = fsrs.Card(cardId: now.millisecondsSinceEpoch);
 
-    // Insert into card_states
-    final id = await _db.into(_db.cardStates).insert(
-          CardStatesCompanion.insert(
-            wordId: wordId,
-            stability: Value(card.stability),
-            difficulty: Value(card.difficulty),
-            due: now.millisecondsSinceEpoch,
-            lastReview: const Value(null),
-            state: Value(card.state.value),
-            step: Value(card.step),
-            reps: const Value(0),
-            lapses: const Value(0),
-            createdAt: now.millisecondsSinceEpoch,
-          ),
-        );
+    final id = await _cards.insertCard(
+      wordId: wordId,
+      stability: card.stability,
+      difficulty: card.difficulty,
+      dueMs: now.millisecondsSinceEpoch,
+      lastReviewMs: null,
+      state: card.state.value,
+      step: card.step,
+      reps: 0,
+      lapses: 0,
+      createdAtMs: now.millisecondsSinceEpoch,
+    );
 
     return CardStateData(
       id: id,
@@ -91,7 +120,8 @@ class FsrsService {
   ///   4. INSERT review_log (immutable — never update/delete)
   ///   5. UPDATE card_state with new FSRS values
   ///
-  /// If anything fails, both the log insert and card update roll back.
+  /// Throws if the card does not exist for this user. UI must first
+  /// call [initCardForWord] before any rating.
   Future<CardStateData> rateCard(
     String wordId,
     ReviewRating rating, {
@@ -100,10 +130,14 @@ class FsrsService {
     final now = nowUtc ?? DateTime.now().toUtc();
 
     return _db.transaction(() async {
-      // 1. Read current card state
-      final row = await (_db.select(_db.cardStates)
-            ..where((t) => t.wordId.equals(wordId)))
-          .getSingle();
+      // 1. Read current card state (user-scoped via repo).
+      final row = await _cards.findByWordId(wordId);
+      if (row == null) {
+        throw StateError(
+          '[FsrsService] rateCard: no card_state for $wordId — '
+          'initCardForWord must be called first.',
+        );
+      }
 
       // 2. Snapshot state-before (for review_log)
       final stateBefore = row.state;
@@ -129,26 +163,22 @@ class FsrsService {
       // scheduled_days: how many days FSRS had scheduled before this review
       // For a new card (never reviewed), this is 0
       final scheduledDays = row.lastReview != null
-          ? (row.due -
-                  row.lastReview!) /
-              (1000 * 60 * 60 * 24.0)
+          ? (row.due - row.lastReview!) / (1000 * 60 * 60 * 24.0)
           : 0.0;
 
       // 5. INSERT review_log (INSERT-ONLY, sacred, never update/delete)
-      await _db.into(_db.reviewLogs).insert(
-            ReviewLogsCompanion.insert(
-              cardStateId: row.id,
-              wordId: wordId,
-              rating: fsrsRating.value,
-              reviewTimeUtc: now.millisecondsSinceEpoch,
-              elapsedDays: elapsedDays,
-              scheduledDays: scheduledDays,
-              stateBefore: stateBefore,
-              stabilityBefore: Value(stabilityBefore),
-              difficultyBefore: Value(difficultyBefore),
-              clientVersion: const Value('0.0.1'),
-            ),
-          );
+      await _logs.insertLog(
+        cardStateId: row.id,
+        wordId: wordId,
+        rating: fsrsRating.value,
+        reviewTimeUtc: now.millisecondsSinceEpoch,
+        elapsedDays: elapsedDays,
+        scheduledDays: scheduledDays,
+        stateBefore: stateBefore,
+        stabilityBefore: stabilityBefore,
+        difficultyBefore: difficultyBefore,
+        clientVersion: '0.0.1',
+      );
 
       // 6. Compute reps/lapses (fsrs Card doesn't track these; we maintain them)
       int newReps = row.reps;
@@ -160,19 +190,20 @@ class FsrsService {
         newReps++;
       }
 
-      // 7. UPDATE card_states
-      await (_db.update(_db.cardStates)
-            ..where((t) => t.wordId.equals(wordId)))
-          .write(CardStatesCompanion(
-        stability: Value(newCard.stability),
-        difficulty: Value(newCard.difficulty),
-        due: Value(newCard.due.millisecondsSinceEpoch),
-        lastReview: Value(now.millisecondsSinceEpoch),
-        state: Value(newCard.state.value),
-        step: Value(newCard.step),
-        reps: Value(newReps),
-        lapses: Value(newLapses),
-      ));
+      // 7. UPDATE card_states (user-scoped via repo).
+      await _cards.updateByWordId(
+        wordId,
+        CardStatesCompanion(
+          stability: Value(newCard.stability),
+          difficulty: Value(newCard.difficulty),
+          due: Value(newCard.due.millisecondsSinceEpoch),
+          lastReview: Value(now.millisecondsSinceEpoch),
+          state: Value(newCard.state.value),
+          step: Value(newCard.step),
+          reps: Value(newReps),
+          lapses: Value(newLapses),
+        ),
+      );
 
       // 8. Return updated state
       return CardStateData(
@@ -192,7 +223,7 @@ class FsrsService {
     });
   }
 
-  /// List all cards due for review at or before [nowLocal].
+  /// List all cards due for review at or before [nowLocal] (this user only).
   ///
   /// Converts nowLocal to UTC internally. Results ordered by due ASC
   /// (most overdue first).
@@ -201,54 +232,31 @@ class FsrsService {
     int? limit,
   }) async {
     final nowUtcMs = nowLocal.toUtc().millisecondsSinceEpoch;
-
-    final query = _db.select(_db.cardStates)
-      ..where((t) => t.due.isSmallerOrEqualValue(nowUtcMs))
-      ..orderBy([(t) => OrderingTerm.asc(t.due)]);
-
-    if (limit != null) {
-      query.limit(limit);
-    }
-
-    final rows = await query.get();
+    final rows = await _cards.listDueAtOrBefore(dueMs: nowUtcMs, limit: limit);
     return rows.map(_rowToCardStateData).toList();
   }
 
-  /// Count how many new cards were introduced today.
+  /// Count how many new cards were introduced today (this user only).
   ///
   /// "Today" is the calendar day of [nowLocal] (00:00 ~ 23:59:59 local).
   Future<int> countNewCardsToday({required DateTime nowLocal}) async {
     final todayStart = DateTime(nowLocal.year, nowLocal.month, nowLocal.day);
     final todayEnd = todayStart.add(const Duration(days: 1));
-
-    final startMs = todayStart.toUtc().millisecondsSinceEpoch;
-    final endMs = todayEnd.toUtc().millisecondsSinceEpoch;
-
-    final result = await _db.customSelect(
-      'SELECT COUNT(*) AS cnt FROM card_states '
-      'WHERE created_at >= ? AND created_at < ?',
-      variables: [Variable.withInt(startMs), Variable.withInt(endMs)],
-    ).getSingle();
-
-    return result.read<int>('cnt');
+    return _cards.countCreatedBetween(
+      startMs: todayStart.toUtc().millisecondsSinceEpoch,
+      endMs: todayEnd.toUtc().millisecondsSinceEpoch,
+    );
   }
 
-  /// Count distinct words reviewed today (from local review_logs).
+  /// Count distinct words this user reviewed today (from local review_logs).
   ///
   /// "Today" is the calendar day of [nowLocal] (00:00 ~ 23:59:59 local).
   /// Used as offline fallback for todayReviewCompleted.
   Future<int> countTodayReviewCompleted({DateTime? nowLocal}) async {
     final now = nowLocal ?? DateTime.now();
     final todayStart = DateTime(now.year, now.month, now.day);
-    final startMs = todayStart.toUtc().millisecondsSinceEpoch;
-
-    final result = await _db.customSelect(
-      'SELECT COUNT(DISTINCT word_id) AS cnt FROM review_logs '
-      'WHERE review_time_utc >= ?',
-      variables: [Variable.withInt(startMs)],
-    ).getSingle();
-
-    return result.read<int>('cnt');
+    return _logs
+        .countDistinctWordsAfter(todayStart.toUtc().millisecondsSinceEpoch);
   }
 
   /// Preview scheduling for all 4 ratings without persisting.
@@ -259,9 +267,12 @@ class FsrsService {
       {DateTime? nowUtc}) async {
     final now = nowUtc ?? DateTime.now().toUtc();
 
-    final row = await (_db.select(_db.cardStates)
-          ..where((t) => t.wordId.equals(wordId)))
-        .getSingle();
+    final row = await _cards.findByWordId(wordId);
+    if (row == null) {
+      throw StateError(
+        '[FsrsService] previewSchedule: no card_state for $wordId',
+      );
+    }
 
     final card = _rowToFsrsCard(row);
     final result = <ReviewRating, Duration>{};
@@ -276,12 +287,9 @@ class FsrsService {
   }
 
   /// Export all review_logs as JSONL (one JSON object per line).
-  /// For feeding into fsrs-optimizer.
+  /// For feeding into fsrs-optimizer. Only this user's rows.
   Future<String> exportReviewLogsAsJsonl() async {
-    final rows = await (_db.select(_db.reviewLogs)
-          ..orderBy([(t) => OrderingTerm.asc(t.reviewTimeUtc)]))
-        .get();
-
+    final rows = await _logs.listAllByTimeAsc();
     final buffer = StringBuffer();
     for (final row in rows) {
       buffer.writeln(jsonEncode({

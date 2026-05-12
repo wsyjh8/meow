@@ -2,12 +2,12 @@
  * DevStore Adapter (A1).
  *
  * Wraps the existing DevStore singleton behind repository interfaces.
- * This is the bridge between the old monolithic store and the new
- * interface-based persistence contract.
  *
- * In A2+, PostgreSQL implementations will implement the same interfaces.
- * In A4, controllers will be switched from this adapter to PG implementations.
- * In A5, this adapter will be removed.
+ * 需求 23 Phase A4-α: every adapter method binds the caller-provided
+ * userId via `devStore.withUser(...)` so downstream code reads
+ * `this.userId` correctly. dev-store public method signatures are
+ * unchanged in α (minimal-invasive); audit §6 owner-check is enforced
+ * inside dev-store using the bound `this.userId`.
  */
 
 import { devStore } from './dev-store';
@@ -27,110 +27,187 @@ import type {
 import type { IIdempotencyRepository } from './repository/idempotency.repository';
 import type { IFishingRepository, ILotteryRepository } from './repository/fishing.repository';
 
+/** Bind userId for the duration of `fn`. Tiny helper to keep adapters readable. */
+function asUser<T>(userId: string, fn: () => T): T {
+  return devStore.withUser(userId, fn);
+}
+
 // ========== Study ==========
 
 class DevStoreStudyAdapter implements IStudyRepository {
-  getNextNewWord() { return devStore.getNextNewWord(); }
+  getNextNewWord(userId: string) {
+    return asUser(userId, () => devStore.getNextNewWord());
+  }
   submitStudyAttempt(
+    userId: string,
     wordId: string, bookId: string, studyType: 'new',
     actionResult: 'know' | 'forgot', idempotencyKey: string,
     sessionId?: string,
   ) {
-    return devStore.submitStudyAttempt(wordId, bookId, studyType, actionResult, idempotencyKey, sessionId);
+    return asUser(userId, () =>
+      devStore.submitStudyAttempt(wordId, bookId, studyType, actionResult, idempotencyKey, sessionId),
+    );
   }
-  getStudyAttempts() { return devStore.getStudyAttempts(); }
+  getStudyAttempts(userId: string) {
+    return asUser(userId, () => devStore.getStudyAttempts());
+  }
 }
 
 // ========== Review ==========
 
 class DevStoreReviewAdapter implements IReviewRepository {
-  getActiveReviewGroup() { return devStore.getActiveReviewGroup(); }
-  getOrCreateReviewGroup() { return devStore.getOrCreateReviewGroup(); }
+  getActiveReviewGroup(userId: string) {
+    return asUser(userId, () => devStore.getActiveReviewGroup());
+  }
+  getOrCreateReviewGroup(userId: string) {
+    return asUser(userId, () => devStore.getOrCreateReviewGroup());
+  }
   submitReviewAttempt(
+    userId: string,
     reviewGroupId: string, wordId: string,
     actionResult: 'correct' | 'incorrect', idempotencyKey: string,
     sessionId?: string,
   ) {
-    return devStore.submitReviewAttempt(reviewGroupId, wordId, actionResult, idempotencyKey, sessionId);
+    return asUser(userId, () =>
+      devStore.submitReviewAttempt(reviewGroupId, wordId, actionResult, idempotencyKey, sessionId),
+    );
   }
   submitLocalReviewBatch(
+    userId: string,
     wordAttempts: { word_id: string; action_result: 'correct' | 'incorrect'; session_id?: string }[],
     idempotencyKey: string,
   ) {
-    return devStore.submitLocalReviewBatch(wordAttempts, idempotencyKey);
+    return asUser(userId, () => devStore.submitLocalReviewBatch(wordAttempts, idempotencyKey));
   }
-  hasReviewGroupCompletedEvent(reviewGroupId: string) {
-    return devStore.hasReviewGroupCompletedEvent(reviewGroupId);
+  hasReviewGroupCompletedEvent(userId: string, reviewGroupId: string) {
+    return asUser(userId, () => devStore.hasReviewGroupCompletedEvent(reviewGroupId));
   }
-  getReviewGroups() { return devStore.getReviewGroups(); }
-  getReviewAttempts() { return devStore.getReviewAttempts(); }
-  getReviewAttemptsForWord(wordId: string, limit: number) {
-    return devStore.getReviewAttemptsForWord(wordId, limit);
+  getReviewGroups(userId: string) {
+    return asUser(userId, () => devStore.getReviewGroups());
+  }
+  getReviewAttempts(userId: string) {
+    return asUser(userId, () => devStore.getReviewAttempts());
+  }
+  getReviewAttemptsForWord(userId: string, wordId: string, limit: number) {
+    return asUser(userId, () => devStore.getReviewAttemptsForWord(wordId, limit));
   }
 }
 
 // ========== Reward ==========
 
 class DevStoreRewardAdapter implements IRewardRepository {
-  createOrGetSourceEvent(sourceEventType: any, sourceRefId: string, idempotencyKey: string) {
-    return devStore.createOrGetSourceEvent(sourceEventType, sourceRefId, idempotencyKey);
+  createOrGetSourceEvent(userId: string, sourceEventType: any, sourceRefId: string, idempotencyKey: string) {
+    return asUser(userId, () => devStore.createOrGetSourceEvent(sourceEventType, sourceRefId, idempotencyKey));
   }
-  createSettlement(sourceEventId: string, idempotencyKey: string) {
-    return devStore.createSettlement(sourceEventId, idempotencyKey);
+  createSettlement(userId: string, sourceEventId: string, idempotencyKey: string) {
+    return asUser(userId, () => devStore.createSettlement(sourceEventId, idempotencyKey));
   }
-  getSettlementBySourceEventId(id: string) { return devStore.getSettlementBySourceEventId(id); }
-  getSettlement(id: string) { return devStore.getSettlement(id); }
-  getBalanceSnapshot() { return devStore.getBalanceSnapshot(); }
-  getSourceEvents() { return devStore.getSourceEvents(); }
-  getSettlements() { return devStore.getSettlements(); }
-  getRewardLedgerItems() { return devStore.getRewardLedgerItems(); }
+  getSettlementBySourceEventId(userId: string, id: string) {
+    return asUser(userId, () => devStore.getSettlementBySourceEventId(id));
+  }
+  getSettlement(userId: string, id: string) {
+    return asUser(userId, () => devStore.getSettlement(id));
+  }
+  getBalanceSnapshot(userId: string) {
+    return asUser(userId, () => devStore.getBalanceSnapshot());
+  }
+  getSourceEvents(userId: string) {
+    return asUser(userId, () => devStore.getSourceEvents());
+  }
+  getSettlements(userId: string) {
+    return asUser(userId, () => devStore.getSettlements());
+  }
+  getRewardLedgerItems(userId: string) {
+    return asUser(userId, () => devStore.getRewardLedgerItems());
+  }
 }
 
 // ========== Session ==========
 
 class DevStoreSessionAdapter implements ISessionRepository {
-  getActiveSession() { return devStore.getActiveSession(); }
-  startSession(minutesTarget: number, idempotencyKey: string, clientSessionId?: string) {
-    return devStore.startSession(minutesTarget, idempotencyKey, clientSessionId);
+  getActiveSession(userId: string) {
+    return asUser(userId, () => devStore.getActiveSession());
   }
-  finishSession(sessionId: string, idempotencyKey: string) {
-    return devStore.finishSession(sessionId, idempotencyKey);
+  startSession(userId: string, minutesTarget: number, idempotencyKey: string, clientSessionId?: string) {
+    return asUser(userId, () => devStore.startSession(minutesTarget, idempotencyKey, clientSessionId));
   }
-  getSession(id: string) { return devStore.getSession(id); }
-  getSessions() { return devStore.getSessions(); }
+  finishSession(userId: string, sessionId: string, idempotencyKey: string) {
+    return asUser(userId, () => devStore.finishSession(sessionId, idempotencyKey));
+  }
+  getSession(userId: string, id: string) {
+    return asUser(userId, () => devStore.getSession(id));
+  }
+  getSessions(userId: string) {
+    return asUser(userId, () => devStore.getSessions());
+  }
 }
 
 // ========== Check-in ==========
 
 class DevStoreCheckInAdapter implements ICheckInRepository {
-  checkIn(idempotencyKey: string) { return devStore.checkIn(idempotencyKey); }
-  getCheckInForDate(localDate: string) { return devStore.getCheckInForDate(localDate); }
-  getOrCreateStreak() { return devStore.getOrCreateStreak(); }
-  updateLearningDay(localDate: string) { return devStore.updateLearningDay(localDate); }
-  getCheckIns() { return devStore.getCheckIns(); }
-  getStreak() { return devStore.getStreak(); }
+  checkIn(userId: string, idempotencyKey: string) {
+    return asUser(userId, () => devStore.checkIn(idempotencyKey));
+  }
+  getCheckInForDate(userId: string, localDate: string) {
+    return asUser(userId, () => devStore.getCheckInForDate(localDate));
+  }
+  getOrCreateStreak(userId: string) {
+    return asUser(userId, () => devStore.getOrCreateStreak());
+  }
+  updateLearningDay(userId: string, localDate: string) {
+    return asUser(userId, () => devStore.updateLearningDay(localDate));
+  }
+  getCheckIns(userId: string) {
+    return asUser(userId, () => devStore.getCheckIns());
+  }
+  getStreak(userId: string) {
+    return asUser(userId, () => devStore.getStreak());
+  }
 }
 
 // ========== Today ==========
 
 class DevStoreTodayAdapter implements ITodayRepository {
-  getTodayState() { return devStore.getTodayState(); }
-  updateTodayState(updates: any) { return devStore.updateTodayState(updates); }
-  async updateDailyNewTarget(newTarget: number) { return devStore.updateDailyNewTarget(newTarget); }
+  getTodayState(userId: string) {
+    return asUser(userId, () => devStore.getTodayState());
+  }
+  updateTodayState(userId: string, updates: any) {
+    return asUser(userId, () => devStore.updateTodayState(updates));
+  }
+  async updateDailyNewTarget(userId: string, newTarget: number) {
+    // β.9 hot-fix: dev-store.updateDailyNewTarget now takes userId as
+    // first param. The legacy `this.userId = userId` binding manually was
+    // also fixed since getters within the method body resolve to the
+    // correct bucket via userId (the same way withUser does, but
+    // explicit). Both approaches work; explicit param wins for async.
+    const prev = devStore.getCurrentUserId();
+    (devStore as any).userId = userId;
+    try {
+      return await devStore.updateDailyNewTarget(userId, newTarget);
+    } finally {
+      (devStore as any).userId = prev;
+    }
+  }
 }
 
 // ========== Feed ==========
 
 class DevStoreFeedAdapter implements IFeedRepository {
-  feedCat(feedItemType: any, idempotencyKey: string) {
-    return devStore.feedCat(feedItemType, idempotencyKey);
+  feedCat(userId: string, feedItemType: any, idempotencyKey: string) {
+    return asUser(userId, () => devStore.feedCat(feedItemType, idempotencyKey));
   }
-  getFeedRecords() { return devStore.getFeedRecords(); }
-  getTodayFeedCount() { return devStore.getTodayFeedCount(); }
-  getTotalExp() { return devStore.getTotalExp(); }
+  getFeedRecords(userId: string) {
+    return asUser(userId, () => devStore.getFeedRecords());
+  }
+  getTodayFeedCount(userId: string) {
+    return asUser(userId, () => devStore.getTodayFeedCount());
+  }
+  getTotalExp(userId: string) {
+    return asUser(userId, () => devStore.getTotalExp());
+  }
 }
 
-// ========== Catalog ==========
+// ========== Catalog (no userId — public catalog) ==========
 
 class DevStoreCatalogAdapter implements ICatalogRepository {
   getCatalog() { return devStore.getCatalog(); }
@@ -140,60 +217,84 @@ class DevStoreCatalogAdapter implements ICatalogRepository {
 // ========== Inventory ==========
 
 class DevStoreInventoryAdapter implements IInventoryRepository {
-  getInventory() { return devStore.getInventory(); }
-  isItemOwned(itemId: string) { return devStore.isItemOwned(itemId); }
-  getOwnedItems() { return devStore.getOwnedItems(); }
-  purchaseItem(itemId: string, idempotencyKey: string) {
-    return devStore.purchaseItem(itemId, idempotencyKey);
+  getInventory(userId: string) {
+    return asUser(userId, () => devStore.getInventory());
+  }
+  isItemOwned(userId: string, itemId: string) {
+    return asUser(userId, () => devStore.isItemOwned(itemId));
+  }
+  getOwnedItems(userId: string) {
+    return asUser(userId, () => devStore.getOwnedItems());
+  }
+  purchaseItem(userId: string, itemId: string, idempotencyKey: string) {
+    return asUser(userId, () => devStore.purchaseItem(itemId, idempotencyKey));
   }
 }
 
 // ========== Equipment ==========
 
 class DevStoreEquipmentAdapter implements IEquipmentRepository {
-  getEquippedSnapshot() { return devStore.getEquippedSnapshot(); }
-  getEquippedPreview() { return devStore.getEquippedPreview(); }
-  equipItem(itemId: string, idempotencyKey: string) {
-    return devStore.equipItem(itemId, idempotencyKey);
+  getEquippedSnapshot(userId: string) {
+    return asUser(userId, () => devStore.getEquippedSnapshot());
   }
-  unequipItem(itemId: string, idempotencyKey: string) {
-    return devStore.unequipItem(itemId, idempotencyKey);
+  getEquippedPreview(userId: string) {
+    return asUser(userId, () => devStore.getEquippedPreview());
+  }
+  equipItem(userId: string, itemId: string, idempotencyKey: string) {
+    return asUser(userId, () => devStore.equipItem(itemId, idempotencyKey));
+  }
+  unequipItem(userId: string, itemId: string, idempotencyKey: string) {
+    return asUser(userId, () => devStore.unequipItem(itemId, idempotencyKey));
   }
 }
 
 // ========== Secondary Summary ==========
 
 class DevStoreSecondarySummaryAdapter implements ISecondarySummaryRepository {
-  getSecondarySummary() { return devStore.getSecondarySummary(); }
-  getCatSummary() { return devStore.getCatSummary(); }
-  getCompanionResponse() { return devStore.getCompanionResponse(); }
+  getSecondarySummary(userId: string) {
+    return asUser(userId, () => devStore.getSecondarySummary());
+  }
+  getCatSummary(userId: string) {
+    return asUser(userId, () => devStore.getCatSummary());
+  }
+  getCompanionResponse(userId: string) {
+    return asUser(userId, () => devStore.getCompanionResponse());
+  }
 }
 
 // ========== Phase D: Fishing ==========
 
 class DevStoreFishingAdapter implements IFishingRepository {
-  getDailyFishingTask() { return devStore.getDailyFishingTask(); }
-  startFishingRound() { return devStore.startFishingRound(); }
-  submitFishingAttempt(taskId: string, chosenWordId: string, idempotencyKey: string) {
-    return devStore.submitFishingAttempt(taskId, chosenWordId, idempotencyKey);
+  getDailyFishingTask(userId: string) {
+    return asUser(userId, () => devStore.getDailyFishingTask());
+  }
+  startFishingRound(userId: string) {
+    return asUser(userId, () => devStore.startFishingRound());
+  }
+  submitFishingAttempt(userId: string, taskId: string, chosenWordId: string, idempotencyKey: string) {
+    return asUser(userId, () => devStore.submitFishingAttempt(taskId, chosenWordId, idempotencyKey));
   }
 }
 
 // ========== Phase D: Lottery ==========
 
 class DevStoreLotteryAdapter implements ILotteryRepository {
-  getLotteryBoxes() { return devStore.getLotteryBoxes(); }
-  openLotteryBox(boxId: string, idempotencyKey: string) {
-    return devStore.openLotteryBox(boxId, idempotencyKey);
+  getLotteryBoxes(userId: string) {
+    return asUser(userId, () => devStore.getLotteryBoxes());
+  }
+  openLotteryBox(userId: string, boxId: string, idempotencyKey: string) {
+    return asUser(userId, () => devStore.openLotteryBox(boxId, idempotencyKey));
   }
 }
 
 // ========== Idempotency ==========
 
 class DevStoreIdempotencyAdapter implements IIdempotencyRepository {
-  getIdempotencyKey(key: string) { return devStore.getIdempotencyKey(key); }
-  setIdempotencyKey(key: string, path: string, response: Record<string, unknown>) {
-    devStore.setIdempotencyKey(key, path, response);
+  getIdempotencyKey(userId: string, key: string) {
+    return asUser(userId, () => devStore.getIdempotencyKey(key));
+  }
+  setIdempotencyKey(userId: string, key: string, path: string, response: Record<string, unknown>) {
+    asUser(userId, () => { devStore.setIdempotencyKey(key, path, response); });
   }
 }
 

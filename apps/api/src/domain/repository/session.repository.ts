@@ -3,22 +3,26 @@ import { Session } from '../types';
 /**
  * Session domain repository interface.
  *
- * Covers: session start/finish/query.
+ * 需求 23 Phase A4-α: all methods take userId as first param.
+ * Owner-check (audit §6) enforced internally — getSession / finishSession
+ * for a session not owned by the caller returns null / throws NotFound.
  */
 export interface ISessionRepository {
-  getActiveSession(): Session | null;
+  getActiveSession(userId: string): Session | null;
 
   startSession(
+    userId: string,
     minutesTarget: number,
     idempotencyKey: string,
     clientSessionId?: string,
   ): { session: Session; alreadyExists: boolean };
 
   finishSession(
+    userId: string,
     sessionId: string,
     idempotencyKey: string,
   ): { session: Session; alreadyExists: boolean };
 
-  getSession(sessionId: string): Session | null;
-  getSessions(): Session[];
+  getSession(userId: string, sessionId: string): Session | null;
+  getSessions(userId: string): Session[];
 }

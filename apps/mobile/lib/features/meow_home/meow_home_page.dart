@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
 import '../../core/memory/fsrs_service.dart';
 import '../../core/router/app_router.dart';
 import '../../core/services/local_today_service.dart';
 import '../../core/storage/drift/app_database.dart';
 import '../../core/storage/local_database.dart';
-import '../../core/storage/local_settings_service.dart';
 import '../../shared/theme.dart';
 import '../../shared/animations.dart';
 import '../../shared/widgets/meow_card.dart';
@@ -102,6 +102,11 @@ class _MeowHomePageState extends State<MeowHomePage>
   // Level thresholds for progress bar (matching backend)
   static const _levelThresholds = [0, 20, 50, 90, 145, 215, 305, 420, 565, 745];
 
+  /// 需求 23 Phase C PR-C-γ §4.5: last-seen auth epoch for the
+  /// account-switch reset hook in [didChangeDependencies]. Null on
+  /// first frame; set by the initial dependency pass.
+  int? _lastSeenEpoch;
+
   @override
   void initState() {
     super.initState();
@@ -113,6 +118,24 @@ class _MeowHomePageState extends State<MeowHomePage>
       CurvedAnimation(parent: _breathController, curve: Curves.easeInOut),
     );
     _loadSummary();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // PR-C-γ §4.5: drop stale per-user state on account switch.
+    final controller = AuthScope.maybeRead(context);
+    final epoch = controller?.epoch;
+    if (epoch != null && _lastSeenEpoch != null && _lastSeenEpoch != epoch) {
+      setState(() {
+        _summary = null;
+        _todayState = null;
+        _isLoading = true;
+        _error = null;
+      });
+      _loadSummary();
+    }
+    _lastSeenEpoch = epoch;
   }
 
   @override
@@ -141,14 +164,17 @@ class _MeowHomePageState extends State<MeowHomePage>
     // future: cloud verification — getToday() retained for hybrid mode.
     TodayState? todayState;
     try {
+      final userId = AuthScope.currentUserIdOf(context);
       final prefs = await SharedPreferences.getInstance();
       try {
         final appDb = AppDatabase();
-        final localService = LocalTodayService(
+        // PR-C-β: user-scoped via factory constructor.
+        final localService = LocalTodayService.forUser(
           prefs: prefs,
           localDb: LocalDatabase.instance,
-          fsrs: FsrsService(db: appDb),
+          fsrs: FsrsService.forUser(db: appDb, userId: userId),
           driftDb: appDb,
+          userId: userId,
         );
         todayState = await localService.getTodayState();
       } catch (_) {

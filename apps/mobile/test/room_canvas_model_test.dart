@@ -99,13 +99,13 @@ void main() {
     });
 
     test('returns empty list when nothing saved', () async {
-      final storage = await RoomCanvasStorage.open();
+      final storage = await RoomCanvasStorage.open(userId: 'test-user');
       final loaded = await storage.load();
       expect(loaded, isEmpty);
     });
 
     test('save then load roundtrip preserves items', () async {
-      final storage = await RoomCanvasStorage.open();
+      final storage = await RoomCanvasStorage.open(userId: 'test-user');
       final items = [
         PlacedFurniture(
           instanceId: 'i1',
@@ -134,15 +134,15 @@ void main() {
 
     test('load returns empty on corrupted JSON', () async {
       SharedPreferences.setMockInitialValues({
-        'room_canvas_layout_v1': 'not-valid-json{',
+        'u_test-user_room_canvas_layout_v1': 'not-valid-json{',
       });
-      final storage = await RoomCanvasStorage.open();
+      final storage = await RoomCanvasStorage.open(userId: 'test-user');
       final loaded = await storage.load();
       expect(loaded, isEmpty);
     });
 
     test('clear empties the store', () async {
-      final storage = await RoomCanvasStorage.open();
+      final storage = await RoomCanvasStorage.open(userId: 'test-user');
       await storage.save([
         PlacedFurniture(
           instanceId: 'i1',

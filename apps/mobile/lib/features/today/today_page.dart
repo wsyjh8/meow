@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
 import '../../core/memory/fsrs_service.dart';
 import '../../core/router/app_router.dart';
 import '../../core/services/local_today_service.dart';
@@ -37,10 +38,37 @@ class _TodayPageState extends State<TodayPage> {
   bool _isLoading = true;
   String? _error;
 
+  /// 需求 23 Phase C PR-C-γ §4.5: last-seen auth epoch. When a
+  /// login / bind / logout fires, AuthController bumps epoch and
+  /// notifyListeners — InheritedNotifier triggers our
+  /// didChangeDependencies. If the epoch has moved since we last
+  /// loaded data, we reset state and refetch so we never display the
+  /// previous user's progress to the new user.
+  int? _lastSeenEpoch;
+
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // PR-C-γ §4.5: account-switch reset.
+    final controller = AuthScope.maybeRead(context);
+    final epoch = controller?.epoch;
+    if (epoch != null && _lastSeenEpoch != null && _lastSeenEpoch != epoch) {
+      // User changed — drop stale state and reload for the new user.
+      setState(() {
+        _todayState = null;
+        _secondarySummary = null;
+        _isLoading = true;
+        _error = null;
+      });
+      _loadData();
+    }
+    _lastSeenEpoch = epoch;
   }
 
   @override
@@ -54,15 +82,18 @@ class _TodayPageState extends State<TodayPage> {
     try {
       // Today state: local-first via LocalTodayService.
       // future: cloud verification — getToday() retained for hybrid mode.
+      final userId = AuthScope.currentUserIdOf(context);
       final prefs = await SharedPreferences.getInstance();
       late TodayState todayState;
       try {
         final appDb = AppDatabase();
-        final localService = LocalTodayService(
+        // PR-C-β: user-scoped via factory constructor.
+        final localService = LocalTodayService.forUser(
           prefs: prefs,
           localDb: LocalDatabase.instance,
-          fsrs: FsrsService(db: appDb),
+          fsrs: FsrsService.forUser(db: appDb, userId: userId),
           driftDb: appDb,
+          userId: userId,
         );
         todayState = await localService.getTodayState();
       } catch (_) {

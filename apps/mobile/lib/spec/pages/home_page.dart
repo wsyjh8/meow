@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
 import '../../core/memory/fsrs_service.dart';
 import '../../core/services/local_today_service.dart';
 import '../../core/serving/home_review_helper_summary.dart';
@@ -60,15 +61,18 @@ class _SpecHomePageState extends State<SpecHomePage> {
 
     // 2. Today state: local-first via LocalTodayService, cloud fallback.
     //    This block is intentionally isolated — its failures must not mask stats.
+    // PR-C-β: user-scoped services constructed via factory ctors.
+    final userId = AuthScope.currentUserIdOf(context);
     TodayState? todayState;
     try {
       final prefs = await SharedPreferences.getInstance();
       final appDb = AppDatabase();
-      todayState = await LocalTodayService(
+      todayState = await LocalTodayService.forUser(
         prefs: prefs,
         localDb: LocalDatabase.instance,
-        fsrs: FsrsService(db: appDb),
+        fsrs: FsrsService.forUser(db: appDb, userId: userId),
         driftDb: appDb,
+        userId: userId,
       ).getTodayState();
     } catch (_) {
       try { todayState = await _apiClient.getToday(); } catch (_) {}
@@ -83,9 +87,11 @@ class _SpecHomePageState extends State<SpecHomePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final appDb = AppDatabase();
-      final activeBook = LocalSettingsService(prefs).activeWordbook;
+      final activeBook =
+          LocalSettingsService(prefs, userId: userId).activeWordbook;
       activeBookName = _bookDisplayName(activeBook);
-      final masteredIds = await LocalDatabase.instance.getMasteredWordIds();
+      final masteredIds =
+          await LocalDatabase.instance.getMasteredWordIds(userId);
       totalMastered = masteredIds.length;
       // Per-book count: app-level intersection (sqflite ∩ drift — can't SQL JOIN).
       final bookWordIds = await appDb.getWordIdsForBook(activeBook);

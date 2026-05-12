@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app/app.dart' show studyPageRouteObserver;
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
 import '../../core/audio/audio_cache_repository.dart' show AudioFetchException;
 import '../../core/audio/example_audio_service.dart';
 import '../../core/audio/pronunciation_service.dart';
@@ -145,18 +146,23 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
     super.initState();
     final appDb = AppDatabase();
     final apiClient = ApiClient();
+    // PR-C-β: drift-touching services are user-scoped; resolve userId
+    // once via AuthScope and thread it through the factory constructors.
+    final userId = AuthScope.currentUserIdOf(context);
     _studyService = StudyService(
       apiClient: apiClient,
       db: LocalDatabase.instance,
       driftDb: appDb,
+      userId: userId,
     );
-    _fsrsService = FsrsService(db: appDb);
+    _fsrsService = FsrsService.forUser(db: appDb, userId: userId);
     _pronunciationService = PronunciationService();
     _exampleAudioService = ExampleAudioService();
     _wordAudioService = WordAudioService();
-    _sessionStore = SessionStore(apiClient: apiClient, driftDb: appDb);
-    _sessionSyncService =
-        SessionSyncService(apiClient: apiClient, driftDb: appDb);
+    _sessionStore = SessionStore.forUser(
+        apiClient: apiClient, driftDb: appDb, userId: userId);
+    _sessionSyncService = SessionSyncService.forUser(
+        apiClient: apiClient, driftDb: appDb, userId: userId);
     _enrichmentService = WordEnrichmentService(driftDb: appDb);
     _audioSub = _pronunciationService.onPlayerStateChanged.listen((state) {
       if (mounted) setState(() => _isPlayingAudio = state == PlayerState.playing);
@@ -287,8 +293,9 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
   Future<void> _refreshDailyGoalFromPrefs() async {
     int newGoal;
     try {
+      final userId = AuthScope.currentUserIdOf(context);
       final prefs = await SharedPreferences.getInstance();
-      newGoal = LocalSettingsService(prefs).dailyGoal;
+      newGoal = LocalSettingsService(prefs, userId: userId).dailyGoal;
     } catch (_) {
       return;
     }
@@ -308,15 +315,17 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
   // ── Settings ──────────────────────────────────────────────────────────────
 
   Future<void> _loadDailyGoal() async {
+    final userId = AuthScope.currentUserIdOf(context);
     try {
       final prefs = await SharedPreferences.getInstance();
-      final goal = LocalSettingsService(prefs).dailyGoal;
+      final goal = LocalSettingsService(prefs, userId: userId).dailyGoal;
       if (mounted) setState(() => _dailyGoal = goal);
     } catch (_) {
       // Stay at default 20 — non-blocking
     }
     try {
-      final completed = await LocalDatabase.instance.countTodayNewCompleted();
+      final completed =
+          await LocalDatabase.instance.countTodayNewCompleted(userId);
       if (mounted) setState(() => _todayCompleted = completed);
     } catch (_) {
       // Stay at 0 — non-blocking
@@ -324,7 +333,8 @@ class _StudyPageState extends State<StudyPage> with RouteAware {
     try {
       // Bug 4 — Hydrate the served-id gate from SQLite so the daily goal
       // limit survives app restarts within the same calendar day.
-      final served = await LocalDatabase.instance.getTodayServedNewWordIds();
+      final served =
+          await LocalDatabase.instance.getTodayServedNewWordIds(userId);
       if (mounted) setState(() => _todayServedIds.addAll(served));
     } catch (_) {
       // Stay at empty set — non-blocking

@@ -9,26 +9,30 @@ import {
 /**
  * Reward / settlement domain repository interface.
  *
- * Covers: source events, reward ledger, settlements, balance computation.
+ * 需求 23 Phase A4-α: all user-scoped methods take userId as first param.
+ * Owner-check (audit §6) enforced internally — looking up another user's
+ * source_event / settlement returns null.
  */
 export interface IRewardRepository {
   createOrGetSourceEvent(
+    userId: string,
     sourceEventType: SourceEventType,
     sourceRefId: string,
     idempotencyKey: string,
   ): { sourceEvent: RewardSourceEvent; alreadyExists: boolean };
 
   createSettlement(
+    userId: string,
     sourceEventId: string,
     idempotencyKey: string,
   ): { settlement: Settlement; alreadyExists: boolean };
 
-  getSettlementBySourceEventId(sourceEventId: string): Settlement | null;
-  getSettlement(settlementId: string): Settlement | null;
+  getSettlementBySourceEventId(userId: string, sourceEventId: string): Settlement | null;
+  getSettlement(userId: string, settlementId: string): Settlement | null;
 
-  getBalanceSnapshot(): BalanceSnapshot;
+  getBalanceSnapshot(userId: string): BalanceSnapshot;
 
-  getSourceEvents(): RewardSourceEvent[];
-  getSettlements(): Settlement[];
-  getRewardLedgerItems(): RewardLedgerItem[];
+  getSourceEvents(userId: string): RewardSourceEvent[];
+  getSettlements(userId: string): Settlement[];
+  getRewardLedgerItems(userId: string): RewardLedgerItem[];
 }

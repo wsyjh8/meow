@@ -16,21 +16,29 @@ import '../storage/local_settings_service.dart';
 /// path is gone, and so is the `if (bookSlug == 'book-001')` branch.
 /// No network is needed to get the next word; API sync still happens in
 /// the background so daily-goal / settlement / cloud progress stay updated.
+///
+/// 需求 23 Phase C PR-C-β (plan-023-C-v2 §4.1): user-scoped. Construction
+/// requires a userId; every LocalDatabase read/write threads it through
+/// so the served-words gate, mastered-set lookup, and sync sweeper all
+/// see only this user's rows.
 class StudyService {
   final ApiClient _apiClient;
   final LocalDatabase _db;
   final AppDatabase _driftDb;
+  final String _userId;
   // Optional injected settings (for testability). If null, reads SharedPreferences.
   final LocalSettingsService? _settings;
 
   StudyService({
     required ApiClient apiClient,
     required LocalDatabase db,
+    required String userId,
     AppDatabase? driftDb,
     LocalSettingsService? settings,
   })  : _apiClient = apiClient,
         _db = db,
         _driftDb = driftDb ?? AppDatabase(),
+        _userId = userId,
         _settings = settings;
 
   /// Default wordbook when settings unavailable. v0.3.0 P1: still 'book-001'
@@ -43,7 +51,7 @@ class StudyService {
     if (_settings != null) return _settings!.activeWordbook;
     try {
       final prefs = await SharedPreferences.getInstance();
-      return LocalSettingsService(prefs).activeWordbook;
+      return LocalSettingsService(prefs, userId: _userId).activeWordbook;
     } catch (_) {
       return _defaultBookSlug;
     }
@@ -62,9 +70,9 @@ class StudyService {
     // catch block (StudyPage._loadNextWord), which shows an error state
     // instead of falsely displaying the "all done" completion screen.
 
-    // 1. Get mastered word IDs from local SQLite (word_records)
+    // 1. Get mastered word IDs from local SQLite (word_records), user-scoped.
     final bookSlug = await _activeWordbook();
-    final masteredIds = await _db.getMasteredWordIds();
+    final masteredIds = await _db.getMasteredWordIds(_userId);
 
     // 2. Merge mastered + session-seen exclusions
     final allExclude = masteredIds.union(extraExclude);
@@ -151,17 +159,8 @@ class StudyService {
   /// StudyPage to rehydrate the consolidation queue at session start
   /// so these words can re-appear via Path A / Path C without
   /// counting against the daily-goal cap.
-  ///
-  /// v0.3.0 P1: cached_words / getCachedWordById removed. CET-4 / ZK / GK
-  /// all flow through word_entries (loaded by WordbookLoader from bundled
-  /// assets), so a single lookup suffices.
-  ///
-  /// Routes per word:
-  ///   1. word_entries (any book) lookup
-  ///   2. silently skip words missing from word_entries (orphan rows from
-  ///      a since-removed wordbook or stale data — treat as no-op).
   Future<List<Word>> loadStuckForgotWords() async {
-    final ids = await _db.getTodayStuckForgotIds();
+    final ids = await _db.getTodayStuckForgotIds(_userId);
     if (ids.isEmpty) return [];
     final result = <Word>[];
     for (final id in ids) {
@@ -200,15 +199,13 @@ class StudyService {
   /// Used by StudyPage when a word exits the consolidation queue
   /// (consecutive 2 know's) so future sessions know the word was
   /// recovered today and don't re-seed it back into consolidation.
-  /// Deliberately bypasses [_syncToApiInBackground] — consolidation
-  /// recoveries are local-only by design (no cloud attempt history,
-  /// no FSRS update, see session_consolidation_v1 spec).
   Future<void> recordLocalConsolidationRecovery({
     required String wordId,
     required String bookId,
     String? sessionId,
   }) async {
     await _db.insertWordRecord(
+      userId: _userId,
       wordId: wordId,
       bookId: bookId,
       studyType: 'new',
@@ -226,7 +223,7 @@ class StudyService {
     Set<String> extraExclude = const {},
   }) async {
     final bookSlug = await _activeWordbook();
-    final masteredIds = await _db.getMasteredWordIds();
+    final masteredIds = await _db.getMasteredWordIds(_userId);
     final allExclude = masteredIds.union(extraExclude);
     return _driftDb.peekNextWordTexts(bookSlug, allExclude, count);
   }
@@ -243,8 +240,9 @@ class StudyService {
     required String actionResult,
     String? sessionId,
   }) async {
-    // Step 1: Write to SQLite FIRST
+    // Step 1: Write to SQLite FIRST (user-scoped)
     final localId = await _db.insertWordRecord(
+      userId: _userId,
       wordId: wordId,
       bookId: bookId,
       studyType: studyType,
@@ -292,8 +290,8 @@ class StudyService {
         idempotencyKey: idempotencyKey,
         sessionId: sessionId,
       );
-      // API succeeded — mark as synced
-      await _db.markSynced(localId);
+      // API succeeded — mark as synced (defensive WHERE on user_id).
+      await _db.markSynced(localId, userId: _userId);
     } catch (_) {
       // API failed — record stays synced=0, will be retried later or included in backup
     }
@@ -302,7 +300,7 @@ class StudyService {
   /// Sync all pending (unsynced) records to the API.
   /// Called on app start or manually.
   Future<int> syncPendingAttempts() async {
-    final unsynced = await _db.getUnsyncedRecords();
+    final unsynced = await _db.getUnsyncedRecords(_userId);
     int syncedCount = 0;
 
     for (final record in unsynced) {
@@ -316,7 +314,7 @@ class StudyService {
           idempotencyKey: idempotencyKey,
           sessionId: record['session_id'] as String?,
         );
-        await _db.markSynced(record['id'] as int);
+        await _db.markSynced(record['id'] as int, userId: _userId);
         syncedCount++;
       } catch (_) {
         // Stop on first failure (will retry next time)

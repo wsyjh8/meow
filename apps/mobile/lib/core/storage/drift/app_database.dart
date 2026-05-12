@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 import 'package:drift_sqflite/drift_sqflite.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../auth/auth_storage.dart';
 import 'tables/legacy_tables.dart';
 import 'tables/fsrs_tables.dart';
 import 'tables/session_tables.dart';
@@ -27,6 +29,35 @@ part 'app_database.g.dart';
 ///   v10 (P1):         cached_words DROPPED — CET-4 unified into word_entries;
 ///                       word_records.word_id and card_states.word_id strip
 ///                       'cet4-' prefix in place to preserve user history.
+///   v11 (P2.1):       audio_file_cache (LRU + content-version eviction).
+///   v12 (PR-B2):      content_package_states (manifest-imported package tracking).
+///   v13 (need 23 PR-C-α): 9 user-scoped tables gain `user_id` column for
+///                       per-user partition (plan-023-C-v2 §4.2):
+///                         word_records, wordbook_progress, daily_checkins,
+///                         custom_wordbooks, vocabulary_notebook, card_states,
+///                         review_logs, sessions, review_records.
+///                       3 UNIQUE constraints widened to composite (plan §D6):
+///                         wordbook_progress.(user_id, book_id),
+///                         daily_checkins.(user_id, date),
+///                         card_states.(user_id, word_id).
+///                       Public/content/cache tables (11) untouched.
+// 需求 23 Phase C PR-C-γ §4.5 regression note (评审 2 弱覆盖 4):
+//
+// drift exposes a `.watch()` API on queries that emits a Stream of result
+// updates whenever underlying tables change. As of PR-C-γ implementation,
+// `grep -rn '\.watch()\|Stream<' lib/` returns ZERO drift stream usages
+// (only audio player state streams). The Phase C account-switch story
+// (`AuthHttpClient.send` epoch check + page-level didChangeDependencies
+// reset) does NOT propagate a "stop emitting" signal to live drift
+// streams.
+//
+// If a future feature adopts drift `.watch()` (e.g., a live-updating
+// FSRS due-count badge on Today), it MUST also subscribe / unsubscribe
+// against AuthController.epoch — otherwise user A's stream will keep
+// pushing rows into user B's UI after a switch. Likely shape:
+//   * Page acquires the stream via a per-user repository.
+//   * On didChangeDependencies epoch change, cancel the stream and
+//     re-subscribe via a new per-user repository.
 @DriftDatabase(tables: [
   // Legacy tables (v1, migrated from raw sqflite)
   WordRecords,
@@ -85,7 +116,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -252,8 +283,246 @@ class AppDatabase extends _$AppDatabase {
             // decision in master plan v0.4).
             await _safeCreateTable(m, contentPackageStates);
           }
+          if (from < 13) {
+            // v13 (need 23 Phase C PR-C-α): per-user partition.
+            //
+            // 9 user-scoped tables gain a `user_id` column. 6 use the
+            // ADD COLUMN path (nullable add + parameterized backfill +
+            // index — no DEFAULT residue, no string concat). 3 require a
+            // REBUILD because SQLite can't widen an inline UNIQUE
+            // constraint in place: `wordbook_progress.book_id`,
+            // `daily_checkins.date`, `card_states.word_id` all become
+            // composite UNIQUE(user_id, …) so two users can hold the
+            // same key without colliding (plan-023-C-v2 §D6).
+            //
+            // The rebuild path uses `legacy_alter_table=ON` so that
+            // `ALTER TABLE … RENAME` does NOT auto-rewrite FK references
+            // in other tables (SQLite 3.26+ behavior). Without this,
+            // `review_logs.card_state_id REFERENCES card_states(id)`
+            // would silently retarget to `card_states__old` mid-rebuild
+            // and be left dangling after the temp table is dropped.
+            //
+            // Each operation is idempotent (PRAGMA table_info / sqlite_master
+            // probes) so partial-state dev devices and recovery from a
+            // crashed prior attempt don't trip "duplicate column" /
+            // "table already exists" errors.
+            await _v13UserScopedPartition();
+          }
         },
       );
+
+  /// 需求 23 Phase C PR-C-α (plan-023-C-v2 §4.2 + §5):
+  /// add `user_id` to 9 user-scoped tables, widen 3 UNIQUEs to composite,
+  /// backfill via a parameterized UPDATE against the currently bound
+  /// `auth_current_user_id` (Phase B AuthBootstrap guarantees this is
+  /// written before drift opens; falls back to `pending-local-guest` for
+  /// offline cold-start / test environments).
+  Future<void> _v13UserScopedPartition() async {
+    final userId = await _resolveBackfillUserId();
+
+    // Disable SQLite's 3.26+ auto-update of FK references on RENAME so the
+    // single review_logs → card_states FK survives the card_states rebuild
+    // intact. We restore the default before returning (only matters when
+    // FK enforcement is on, but the schema text is cleaner either way).
+    await customStatement('PRAGMA legacy_alter_table = ON');
+    // Best-effort defense-in-depth: defer FK checks to commit so any
+    // mid-rebuild moment where review_logs FK is briefly dangling cannot
+    // cause a check failure.
+    await customStatement('PRAGMA defer_foreign_keys = ON');
+
+    try {
+      // (tableName, driftTableInfo, rebuildRequired, addColumnUserIndexSql)
+      // `addColumnUserIndexSql` is non-null only for the 6 ADD COLUMN
+      // tables — the rebuild path emits indexes via m.createTable from
+      // @TableIndex annotations. CREATE IF NOT EXISTS keeps it idempotent
+      // even if a prior crashed run partially completed.
+      final tables = <(String, TableInfo, bool, String?)>[
+        (
+          'word_records',
+          wordRecords,
+          false,
+          'CREATE INDEX IF NOT EXISTS idx_word_records_user '
+              'ON word_records(user_id)',
+        ),
+        ('wordbook_progress', wordbookProgress, true, null),
+        ('daily_checkins', dailyCheckins, true, null),
+        (
+          'custom_wordbooks',
+          customWordbooks,
+          false,
+          'CREATE INDEX IF NOT EXISTS idx_custom_wordbooks_user '
+              'ON custom_wordbooks(user_id)',
+        ),
+        (
+          'vocabulary_notebook',
+          vocabularyNotebook,
+          false,
+          'CREATE INDEX IF NOT EXISTS idx_vocabulary_notebook_user '
+              'ON vocabulary_notebook(user_id)',
+        ),
+        ('card_states', cardStates, true, null),
+        (
+          'review_logs',
+          reviewLogs,
+          false,
+          'CREATE INDEX IF NOT EXISTS idx_review_logs_user '
+              'ON review_logs(user_id)',
+        ),
+        (
+          'sessions',
+          sessions,
+          false,
+          'CREATE INDEX IF NOT EXISTS idx_sessions_user '
+              'ON sessions(user_id)',
+        ),
+        (
+          'review_records',
+          reviewRecords,
+          false,
+          'CREATE INDEX IF NOT EXISTS idx_review_records_user '
+              'ON review_records(user_id)',
+        ),
+      ];
+
+      for (final (name, drift, rebuild, indexSql) in tables) {
+        // Partial-state tests / dev devices may not have every table yet
+        // (e.g. a v11 device upgrading through v13 never had
+        // custom_wordbooks pre-created in some migration_test fixtures).
+        // Skip these — drift's fresh-install onCreate path will build
+        // them via m.createAll(), not here.
+        if (!await _tableExists(name)) continue;
+        if (await _hasUserIdColumn(name)) {
+          // Already at v13 schema (recovery from a prior partial run, or
+          // already-rebuilt sibling) — only ensure the index exists.
+          if (indexSql != null) await customStatement(indexSql);
+          continue;
+        }
+        if (rebuild) {
+          await _v13RebuildWithUserId(drift, name, userId);
+        } else {
+          await _v13AddUserIdColumn(name, userId);
+          if (indexSql != null) await customStatement(indexSql);
+        }
+      }
+    } finally {
+      await customStatement('PRAGMA legacy_alter_table = OFF');
+    }
+  }
+
+  /// Read the bound user_id for backfill. Phase B's AuthBootstrap is run
+  /// before drift opens in production main.dart, so this always finds a
+  /// value. In test / cold-start-offline paths we fall back to the
+  /// placeholder per plan v2 §6.3 single-ID design.
+  Future<String> _resolveBackfillUserId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = prefs.getString('auth_current_user_id');
+      if (id != null && id.isNotEmpty) return id;
+    } catch (_) {
+      // SharedPreferences platform channel not registered (some test
+      // setups skip TestWidgetsFlutterBinding) — fall through to placeholder.
+    }
+    return AuthStorage.pendingLocalGuestUserId;
+  }
+
+  /// v13 ADD COLUMN path: nullable add + parameterized UPDATE backfill.
+  /// No DEFAULT clause — relying on DEFAULT would let future bare
+  /// INSERTs (e.g. raw sqflite paths missed by PR-C-β) silently land
+  /// rows under whoever happened to be current at migration time.
+  Future<void> _v13AddUserIdColumn(String tableName, String userId) async {
+    await customStatement(
+      'ALTER TABLE $tableName ADD COLUMN user_id TEXT',
+    );
+    await customStatement(
+      'UPDATE $tableName SET user_id = ? WHERE user_id IS NULL',
+      [userId],
+    );
+  }
+
+  /// v13 REBUILD path. SQLite can't widen an inline UNIQUE in place, so
+  /// the only safe sequence is the documented "rename → create new →
+  /// copy → drop" rebuild (sqlite.org/lang_altertable.html#otheralter).
+  ///
+  /// Used for the 3 tables whose UNIQUE constraint changes shape:
+  ///   wordbook_progress  UNIQUE(book_id)  → UNIQUE(user_id, book_id)
+  ///   daily_checkins     UNIQUE(date)     → UNIQUE(user_id, date)
+  ///   card_states        UNIQUE(word_id)  → UNIQUE(user_id, word_id)
+  Future<void> _v13RebuildWithUserId(
+    TableInfo driftTable,
+    String tableName,
+    String userId,
+  ) async {
+    await customStatement(
+      'ALTER TABLE $tableName RENAME TO ${tableName}__old',
+    );
+
+    // Drop named indexes that followed the table to its `__old` name.
+    // m.createTable + m.create(idx) below re-emits them with their
+    // original names; SQLite would refuse with "index … already exists"
+    // otherwise. sqlite_autoindex_* indexes (from inline UNIQUE on the
+    // v12 schema) can't be dropped manually but go away when we DROP
+    // TABLE __old.
+    final oldIndexes = await customSelect(
+      "SELECT name FROM sqlite_master "
+      "WHERE type='index' AND tbl_name = ? "
+      "AND name NOT LIKE 'sqlite_autoindex_%'",
+      variables: [Variable.withString('${tableName}__old')],
+    ).get();
+    for (final r in oldIndexes) {
+      final idxName = r.read<String>('name');
+      await customStatement('DROP INDEX IF EXISTS "$idxName"');
+    }
+
+    // Create the v13 schema. m.createTable creates ONLY the table —
+    // drift's generated code emits @TableIndex declarations as separate
+    // top-level Index entities, so we must re-emit them after rebuild.
+    final migrator = createMigrator();
+    await migrator.createTable(driftTable);
+
+    // Re-emit every @TableIndex attached to this table. Drift doesn't
+    // expose a "indexes for table X" accessor, but the @TableIndex
+    // naming convention is stable: `idx_<table_name>_<suffix>`. The 3
+    // rebuild tables all follow it (idx_wordbook_progress_*,
+    // idx_daily_checkins_*, idx_card_states_*).
+    final tablePrefix = 'idx_${tableName}_';
+    final relatedIndexes = allSchemaEntities
+        .whereType<Index>()
+        .where((i) => i.entityName.startsWith(tablePrefix))
+        .toList();
+    for (final idx in relatedIndexes) {
+      await migrator.create(idx);
+    }
+
+    // Copy data, parameterized backfill of user_id. Discover old
+    // columns dynamically so a v8 / v10-era table with fewer columns
+    // still maps cleanly to the v13 table by name.
+    final oldColRows = await customSelect(
+      'PRAGMA table_info(${tableName}__old)',
+    ).get();
+    final oldColNames = oldColRows
+        .map((r) => r.read<String>('name'))
+        .where((c) => c != 'user_id') // belt and braces
+        .toList();
+    final colList = oldColNames.join(', ');
+    await customStatement(
+      'INSERT INTO $tableName ($colList, user_id) '
+      'SELECT $colList, ? FROM ${tableName}__old',
+      [userId],
+    );
+
+    await customStatement('DROP TABLE ${tableName}__old');
+  }
+
+  /// Test whether [tableName] has a `user_id` column at the current schema.
+  /// Reads PRAGMA table_info live so partial-state dev devices behave
+  /// idempotently — a re-run of v13 onUpgrade on an already-migrated
+  /// table is a no-op.
+  Future<bool> _hasUserIdColumn(String tableName) async {
+    final cols = await customSelect(
+      'PRAGMA table_info($tableName)',
+    ).get();
+    return cols.any((r) => r.read<String>('name') == 'user_id');
+  }
 
   /// Add a column iff it doesn't already exist on [table]. Reads the live
   /// `PRAGMA table_info(...)` rather than relying on drift's internal

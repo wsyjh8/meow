@@ -14,7 +14,7 @@ void main() {
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      settings = LocalSettingsService(prefs);
+      settings = LocalSettingsService(prefs, userId: 'test-user');
     });
 
     test('default daily goal is 20', () {
@@ -30,14 +30,14 @@ void main() {
       await settings.setDailyGoal(50);
       // Re-create service from same prefs (simulates re-read)
       final prefs = await SharedPreferences.getInstance();
-      final reloaded = LocalSettingsService(prefs);
+      final reloaded = LocalSettingsService(prefs, userId: 'test-user');
       expect(reloaded.dailyGoal, 50);
     });
 
     test('survives simulated restart', () async {
       await settings.setDailyGoal(15);
       final prefs = await SharedPreferences.getInstance();
-      final restarted = LocalSettingsService(prefs);
+      final restarted = LocalSettingsService(prefs, userId: 'test-user');
       expect(restarted.dailyGoal, 15);
     });
   });
@@ -86,7 +86,7 @@ void main() {
     test('saved value is immediately readable', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      final settings = LocalSettingsService(prefs);
+      final settings = LocalSettingsService(prefs, userId: 'test-user');
 
       await settings.setDailyGoal(25);
       // Immediate read — no restart needed
@@ -107,7 +107,7 @@ void main() {
     test('changing daily goal does not alter existing settings', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      final settings = LocalSettingsService(prefs);
+      final settings = LocalSettingsService(prefs, userId: 'test-user');
 
       // Set theme first
       await settings.setTheme('dark');
@@ -121,7 +121,7 @@ void main() {
     test('daily goal is forward-only (no history field)', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      final settings = LocalSettingsService(prefs);
+      final settings = LocalSettingsService(prefs, userId: 'test-user');
 
       // There is no "previous_daily_goal" or "history" field
       await settings.setDailyGoal(30);
@@ -156,7 +156,7 @@ void main() {
     test('other settings not affected by daily goal change', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      final settings = LocalSettingsService(prefs);
+      final settings = LocalSettingsService(prefs, userId: 'test-user');
 
       await settings.setDailyGoal(99);
       expect(settings.soundEnabled, true); // default unchanged

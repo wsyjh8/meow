@@ -16,13 +16,72 @@ import * as path from 'path';
 /**
  * Persistence adapter interface.
  * Any backend (JSON file, PostgreSQL, etc.) must implement this.
+ *
+ * 需求 23 Phase A4-β.5: load/save/clear accept an optional userId.
+ *   - PG backend uses it to scope queries (load only that user's data,
+ *     save only that user's slice).
+ *   - JSON backend ignores it (single-file dev fallback).
+ * Default param is DEV_USER_ID for back-compat with single-user dev mode.
  */
 export interface IDevStorePersistence {
   load(): DevStoreSnapshot | null;
   save(snapshot: DevStoreSnapshot): void;
   /** Async save — returns a promise that rejects if persistence fails. */
-  saveAsync?(snapshot: DevStoreSnapshot): Promise<void>;
-  clear(): void;
+  saveAsync?(snapshot: DevStoreSnapshot, userId?: string): Promise<void>;
+  /** Async load (PG only) — loads a single user's snapshot. */
+  loadAsync?(userId?: string): Promise<DevStoreSnapshot | null>;
+  clear(userId?: string): void;
+
+  // ============================================================
+  // 需求 23 Phase D PR-D-β: backup snapshot persistence (PG only).
+  //
+  // These methods are independent of saveAsync/loadAsync so backup
+  // cross-user reads work after server restart without depending
+  // on dev-store in-memory lazy-load (β.5b deferred).
+  //
+  // Optional in the interface so the JSON backend (test/emergency
+  // only) doesn't have to implement them — BackupController guards
+  // with `if (persistence.saveBackupForUser)` and throws a clear
+  // error in JSON mode.
+  // ============================================================
+  saveBackupForUser?(
+    userId: string,
+    meta: BackupSnapshotMeta,
+  ): Promise<void>;
+  loadBackupMetaForUser?(
+    userId: string,
+  ): Promise<BackupSnapshotMetaRow | null>;
+  loadBackupFullForUser?(
+    userId: string,
+  ): Promise<BackupSnapshotFullRow | null>;
+  clearBackupForUser?(userId: string): Promise<void>;
+}
+
+/// Payload BackupController hands to [IDevStorePersistence.saveBackupForUser].
+export interface BackupSnapshotMeta {
+  backupId: string;
+  schemaVersion: string;
+  uploadedAt: string;
+  snapshotSize: number;
+  deviceId?: string | null;
+  deviceModel?: string | null;
+  snapshot: unknown;
+}
+
+/// Shape returned by [IDevStorePersistence.loadBackupMetaForUser].
+export interface BackupSnapshotMetaRow {
+  backupId: string;
+  schemaVersion: string;
+  uploadedAt: string;
+  snapshotSize: number;
+  deviceId: string | null;
+  deviceModel: string | null;
+}
+
+/// Shape returned by [IDevStorePersistence.loadBackupFullForUser]
+/// (meta + full snapshot body).
+export interface BackupSnapshotFullRow extends BackupSnapshotMetaRow {
+  snapshot: unknown;
 }
 
 export interface DevStoreSnapshot {
@@ -52,14 +111,45 @@ export interface DevStoreSnapshot {
   // Idempotency keys
   idempotencyKeys: Record<string, any>;
 
-  // P3.2 Backup persistence — optional for backward compat with existing state files
-  latestBackup?: any | null;
-  backupSnapshot?: any | null;
+  // P3.2 Backup persistence
+  // α: single global slot fields (kept here for backward-compat hydration of
+  // pre-β.2 snapshots — old data gets migrated into the dev-user-001 bucket).
+  // β.2+: per-user records, keyed by userId.
+  latestBackup?: any | null;          // legacy single slot — read-only after β.2
+  backupSnapshot?: any | null;        // legacy single slot — read-only after β.2
+  latestBackupsByUser?: Record<string, any>;
+  backupSnapshotsByUser?: Record<string, any>;
 
   // Phase D: Fishing + Lottery — optional for backward compat
   fishingTasks?: Record<string, any>;
   fishingAttempts?: any[];
   lotteryBoxes?: any[];
+
+  // ============================================================
+  // 需求 23 Phase A4-β.5c: per-user inventory / equipment / wallet.
+  //
+  // Pre-β.5c the snapshot kept these as single-user flat fields
+  // (ownedItems / equippedOutfit / equippedRoom / coinsSpent /
+  //  feed*Accumulated), so pg-persistence saveAsync could only
+  // persist them for DEV_USER_ID — every other user's purchase /
+  // equip / wallet mutations were lost on server restart.
+  //
+  // β.5c: serialize flattens across all in-memory user buckets into
+  // these *ByUser maps. pg-persistence iterates the map for the
+  // current `saveAsync(snapshot, userId)` call. hydrate / ensureUserLoaded
+  // prefer the new fields; the legacy single-slot fields remain for
+  // backward-compat hydration of pre-β.5c JSON snapshots (still
+  // migrated into the DEV_USER_ID bucket).
+  // ============================================================
+  ownedItemsByUser?: Record<string, any[]>;
+  equippedOutfitByUser?: Record<string, Record<string, string | null>>;
+  equippedRoomByUser?: Record<string, Record<string, string | null>>;
+  walletByUser?: Record<string, {
+    coinsSpent: number;
+    feedMoodAccumulated: number;
+    feedExpAccumulated: number;
+    feedBondAccumulated: number;
+  }>;
 }
 
 const DEFAULT_PERSIST_DIR = path.resolve(__dirname, '..', '..', 'data');

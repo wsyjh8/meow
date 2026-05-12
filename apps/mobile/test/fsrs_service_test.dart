@@ -14,12 +14,17 @@ AppDatabase _createTestDb() {
 }
 
 void main() {
+  const testUserId = 'test-user';
   late AppDatabase db;
   late FsrsService service;
 
   setUp(() {
     db = _createTestDb();
-    service = FsrsService(db: db, desiredRetention: 0.9);
+    service = FsrsService.forUser(
+      db: db,
+      userId: testUserId,
+      desiredRetention: 0.9,
+    );
   });
 
   tearDown(() async {

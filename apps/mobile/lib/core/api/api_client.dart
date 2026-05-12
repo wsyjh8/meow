@@ -15,10 +15,37 @@ class ApiClient {
   final String baseUrl;
   final http.Client _client;
 
+  /// 需求 23 Phase B fix-1: process-wide default http.Client.
+  ///
+  /// Set by AuthBootstrap during app startup to an [AuthHttpClient] that
+  /// auto-injects `Authorization: Bearer <token>` and reports 401s back
+  /// to AuthController. All existing `ApiClient()` zero-arg call sites
+  /// inherit this default — no per-call-site change needed.
+  ///
+  /// Construction priority:
+  ///   1. explicit `client:` arg (tests, isolation)
+  ///   2. [_defaultHttpClient] (set by AuthBootstrap)
+  ///   3. fresh `http.Client()` (legacy / pre-bootstrap path)
+  static http.Client? _defaultHttpClient;
+
+  /// Install the process-wide default. Idempotent — last call wins.
+  /// Tests should call with `null` in `tearDown` to avoid leakage.
+  static void setDefaultHttpClient(http.Client? client) {
+    _defaultHttpClient = client;
+  }
+
+  /// 需求 23 Phase D PR-D-α: read the current default http client so
+  /// non-`ApiClient` HTTP consumers (BackupUploadService /
+  /// BackupRestoreService) can route through the AuthHttpClient that
+  /// AuthBootstrap installed at startup. Returns null when AuthBootstrap
+  /// hasn't wired one yet (legacy / pre-bootstrap path); callers should
+  /// fall back to a fresh `http.Client()` in that case.
+  static http.Client? get defaultHttpClient => _defaultHttpClient;
+
   ApiClient({
     this.baseUrl = apiV1Base,
     http.Client? client,
-  }) : _client = client ?? http.Client();
+  }) : _client = client ?? _defaultHttpClient ?? http.Client();
 
   // ========== Today ==========
 

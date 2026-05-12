@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 
@@ -9,6 +10,18 @@ import 'package:path/path.dart' as p;
 ///
 /// Tables: word_records, wordbook_progress, daily_checkins,
 ///         custom_wordbooks, vocabulary_notebook
+///
+/// 需求 23 Phase C PR-C-α (plan-023-C-v2 D1 + §4.0): schema 创建权完全
+/// 让渡给 drift。这里的 `onCreate` 改为 no-op，drift 的 `m.createAll()`
+/// 在 fresh install 路径上独占建表。strip 之后 drift 是唯一 schema owner.
+///
+/// 需求 23 Phase C PR-C-β (plan-023-C-v2 §4.1): every method that
+/// touches a user-scoped table now takes an explicit `String userId`
+/// argument and filters with `WHERE user_id = ?`. The PR-C-α
+/// transitional `AuthStorage.readBoundUserIdOrPlaceholder()` bridge is
+/// gone — callers must thread userId from `AuthScope`. `markSynced`
+/// also takes userId to defend against in-flight account-switch
+/// writing to the wrong user's row (plan §4.1 review 1 P2).
 class LocalDatabase {
   static LocalDatabase? _instance;
   static Database? _db;
@@ -22,6 +35,12 @@ class LocalDatabase {
     final dbPath = await getDatabasesPath();
     final path = p.join(dbPath, 'meow_progress.db');
 
+    // 需求 23 Phase C PR-C-α: keep `version: 1` for compatibility with
+    // existing devices (sqflite tracks user_version separately from
+    // drift's PRAGMA user_version on the same file); the `onCreate` hook
+    // is intentionally a no-op now — drift owns schema creation. The
+    // file may not have any tables yet when this returns; main.dart MUST
+    // force-init drift right after, before any DAO call.
     _db = await openDatabase(
       path,
       version: 1,
@@ -38,90 +57,150 @@ class LocalDatabase {
     return _instance!;
   }
 
+  /// TEST-ONLY bridge for PR-C-α.
+  ///
+  /// In production [initialize] opens an empty file and main.dart
+  /// immediately constructs [AppDatabase], whose drift onCreate creates
+  /// the v13 schema (including the 5 legacy tables WITH `user_id`).
+  /// Tests that exercise LocalDatabase methods WITHOUT also opening
+  /// AppDatabase on the same file have no other source of the schema —
+  /// drift owns it, but in-memory drift in tests is a separate DB.
+  ///
+  /// This helper plugs that gap by emitting the v13 schema for the 5
+  /// legacy tables inline. The SQL mirrors what drift's `m.createAll()`
+  /// emits from the legacy table classes — keep in sync if those drift
+  /// classes change.
+  @visibleForTesting
+  static Future<LocalDatabase> initializeForTesting() async {
+    if (_instance != null) return _instance!;
+
+    final dbPath = await getDatabasesPath();
+    final path = p.join(dbPath, 'meow_progress.db');
+
+    _db = await openDatabase(
+      path,
+      version: 1,
+      onCreate: (db, version) async {
+        // v13 schema for the 5 legacy tables. NOT NULL on user_id
+        // matches drift's fresh-install behavior; the composite UNIQUE
+        // on wordbook_progress / daily_checkins mirrors @TableIndex.
+        await db.execute('''
+          CREATE TABLE word_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            word_id TEXT NOT NULL,
+            book_id TEXT NOT NULL,
+            study_type TEXT NOT NULL DEFAULT 'new',
+            action_result TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            synced INTEGER NOT NULL DEFAULT 0,
+            session_id TEXT
+          )
+        ''');
+        await db.execute(
+            'CREATE INDEX idx_wr_word_id ON word_records(word_id)');
+        await db.execute(
+            'CREATE INDEX idx_wr_synced ON word_records(synced)');
+        await db.execute(
+            'CREATE INDEX idx_word_records_user ON word_records(user_id)');
+
+        await db.execute('''
+          CREATE TABLE wordbook_progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            book_id TEXT NOT NULL,
+            total_words INTEGER NOT NULL DEFAULT 0,
+            completed_words INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+            'CREATE UNIQUE INDEX idx_wordbook_progress_user_book '
+            'ON wordbook_progress(user_id, book_id)');
+
+        await db.execute('''
+          CREATE TABLE daily_checkins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            checked_in INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+            'CREATE UNIQUE INDEX idx_daily_checkins_user_date '
+            'ON daily_checkins(user_id, date)');
+
+        await db.execute('''
+          CREATE TABLE custom_wordbooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            word_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+            'CREATE INDEX idx_custom_wordbooks_user '
+            'ON custom_wordbooks(user_id)');
+
+        await db.execute('''
+          CREATE TABLE vocabulary_notebook (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            word TEXT NOT NULL,
+            meaning TEXT,
+            note TEXT,
+            created_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+            'CREATE INDEX idx_vocabulary_notebook_user '
+            'ON vocabulary_notebook(user_id)');
+      },
+    );
+
+    _instance = LocalDatabase._();
+    return _instance!;
+  }
+
   /// Get the raw database (for testing or advanced queries).
   Database get db {
     assert(_db != null, 'Database not opened.');
     return _db!;
   }
 
+  /// No-op on purpose. See class-level comment for context: schema 创建权
+  /// 完全 owned by drift onCreate.
   static Future<void> _createTables(Database db, int version) async {
-    // 学习记录（核心）
-    await db.execute('''
-      CREATE TABLE word_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        word_id TEXT NOT NULL,
-        book_id TEXT NOT NULL,
-        study_type TEXT NOT NULL DEFAULT 'new',
-        action_result TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        synced INTEGER NOT NULL DEFAULT 0
-      )
-    ''');
-    await db.execute('CREATE INDEX idx_wr_word_id ON word_records(word_id)');
-    await db.execute('CREATE INDEX idx_wr_synced ON word_records(synced)');
-
-    // 词书进度（核心）
-    await db.execute('''
-      CREATE TABLE wordbook_progress (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        book_id TEXT NOT NULL UNIQUE,
-        total_words INTEGER NOT NULL DEFAULT 0,
-        completed_words INTEGER NOT NULL DEFAULT 0,
-        updated_at TEXT NOT NULL
-      )
-    ''');
-
-    // 签到记录
-    await db.execute('''
-      CREATE TABLE daily_checkins (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL UNIQUE,
-        checked_in INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL
-      )
-    ''');
-
-    // 自定义词书
-    await db.execute('''
-      CREATE TABLE custom_wordbooks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        word_count INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
-      )
-    ''');
-
-    // 生词本
-    await db.execute('''
-      CREATE TABLE vocabulary_notebook (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        word TEXT NOT NULL,
-        meaning TEXT,
-        note TEXT,
-        created_at TEXT NOT NULL
-      )
-    ''');
+    // intentionally empty — drift owns schema
   }
 
   // ==================== Word Records (核心) ====================
 
-  /// Insert a study attempt record.
+  /// Insert a study attempt record for [userId].
   ///
   /// [sessionId] (Need #8) is the local Sessions.id this attempt belongs to,
   /// or null when the attempt happens outside any active session
   /// (legacy / pre-migration data — backend falls back to time-window match).
+  ///
+  /// PR-C-β: the upsert search is now scoped to `(user_id, word_id, study_type)`
+  /// so two users with the same word_id keep distinct rows. The composite
+  /// UNIQUE is not enforced at the SQLite level for word_records, but the
+  /// caller's WHERE makes it impossible to silently overwrite the other
+  /// user's progress.
   Future<int> insertWordRecord({
+    required String userId,
     required String wordId,
     required String bookId,
     required String studyType,
     required String actionResult,
     String? sessionId,
   }) async {
-    // If this word already has a record, update it (forgot → know upgrade)
     final existing = await _db!.query(
       'word_records',
-      where: 'word_id = ? AND study_type = ?',
-      whereArgs: [wordId, studyType],
+      where: 'user_id = ? AND word_id = ? AND study_type = ?',
+      whereArgs: [userId, wordId, studyType],
     );
 
     if (existing.isNotEmpty) {
@@ -129,7 +208,9 @@ class LocalDatabase {
       if (existingResult == actionResult) {
         return existing.first['id'] as int; // Already exists, same result
       }
-      // Update: e.g., forgot → know
+      // Update: e.g., forgot → know. Belt-and-braces user_id check in
+      // WHERE so an in-flight account switch can't flip the other
+      // user's row (plan §4.1 review 1 P2 markSynced parity).
       final updateValues = <String, Object?>{
         'action_result': actionResult,
         'created_at': DateTime.now().toUtc().toIso8601String(),
@@ -139,13 +220,14 @@ class LocalDatabase {
       await _db!.update(
         'word_records',
         updateValues,
-        where: 'id = ?',
-        whereArgs: [existing.first['id']],
+        where: 'id = ? AND user_id = ?',
+        whereArgs: [existing.first['id'], userId],
       );
       return existing.first['id'] as int;
     }
 
     return await _db!.insert('word_records', {
+      'user_id': userId,
       'word_id': wordId,
       'book_id': bookId,
       'study_type': studyType,
@@ -156,35 +238,47 @@ class LocalDatabase {
     });
   }
 
-  /// Get word IDs where action_result = 'know' (mastered).
-  Future<Set<String>> getMasteredWordIds() async {
+  /// Word IDs where this [userId] rated `know` on `study_type='new'`.
+  Future<Set<String>> getMasteredWordIds(String userId) async {
     final rows = await _db!.query(
       'word_records',
       columns: ['word_id'],
-      where: "action_result = 'know' AND study_type = 'new'",
+      where:
+          "user_id = ? AND action_result = 'know' AND study_type = 'new'",
+      whereArgs: [userId],
     );
     return rows.map((r) => r['word_id'] as String).toSet();
   }
 
-  /// Get all unsynced records.
-  Future<List<Map<String, dynamic>>> getUnsyncedRecords() async {
-    return await _db!.query('word_records', where: 'synced = 0');
+  /// All of [userId]'s unsynced records.
+  Future<List<Map<String, dynamic>>> getUnsyncedRecords(String userId) async {
+    return await _db!.query(
+      'word_records',
+      where: 'user_id = ? AND synced = 0',
+      whereArgs: [userId],
+    );
   }
 
-  /// Mark a record as synced.
-  Future<void> markSynced(int id) async {
-    await _db!.update('word_records', {'synced': 1}, where: 'id = ?', whereArgs: [id]);
+  /// Mark record [id] as synced. The WHERE includes [userId] so an
+  /// in-flight account switch can't flip the other user's row (plan
+  /// §4.1 review 1 P2 evaluator采纳).
+  Future<int> markSynced(int id, {required String userId}) async {
+    return await _db!.update(
+      'word_records',
+      {'synced': 1},
+      where: 'id = ? AND user_id = ?',
+      whereArgs: [id, userId],
+    );
   }
 
-  /// Bug 4 — Distinct word_id values for `study_type='new'` rated TODAY,
-  /// regardless of action_result (`know` or `forgot` both count).
+  /// Bug 4 — Distinct `word_id` values [userId] has rated TODAY on
+  /// `study_type='new'`, regardless of action_result.
   ///
   /// Used by StudyPage as the canonical "unique new words served today"
   /// gate so the daily goal cannot be exceeded by repeatedly tapping
   /// 不认识/模糊. The window is the user's LOCAL calendar day,
-  /// converted to UTC bounds since `created_at` is stored as UTC ISO-8601
-  /// (matches [countTodayNewCompleted]'s timezone handling).
-  Future<Set<String>> getTodayServedNewWordIds() async {
+  /// converted to UTC bounds since `created_at` is stored as UTC ISO-8601.
+  Future<Set<String>> getTodayServedNewWordIds(String userId) async {
     final now = DateTime.now();
     final localMidnight = DateTime(now.year, now.month, now.day);
     final nextLocalMidnight = localMidnight.add(const Duration(days: 1));
@@ -192,19 +286,18 @@ class LocalDatabase {
     final endUtcIso = nextLocalMidnight.toUtc().toIso8601String();
     final rows = await _db!.rawQuery(
       "SELECT DISTINCT word_id FROM word_records "
-      "WHERE study_type = 'new' "
+      "WHERE user_id = ? AND study_type = 'new' "
       "AND created_at >= ? AND created_at < ?",
-      [startUtcIso, endUtcIso],
+      [userId, startUtcIso, endUtcIso],
     );
     return rows.map((r) => r['word_id'] as String).toSet();
   }
 
-  /// Today's "stuck forgots" — word_ids that have at least one `forgot`
-  /// record today (study_type='new') AND have NO 'know' record at any
-  /// point in time. Used by StudyPage to rehydrate the consolidation
-  /// queue at session start, so words the user forgot in earlier
-  /// sessions today don't get permanently stranded by the daily-goal cap.
-  Future<Set<String>> getTodayStuckForgotIds() async {
+  /// Today's "stuck forgots" for [userId] — word_ids that have at least
+  /// one `forgot` record today (`study_type='new'`) AND have NO 'know'
+  /// record at any point in time. Used by StudyPage to rehydrate the
+  /// consolidation queue at session start.
+  Future<Set<String>> getTodayStuckForgotIds(String userId) async {
     final now = DateTime.now();
     final localMidnight = DateTime(now.year, now.month, now.day);
     final nextLocalMidnight = localMidnight.add(const Duration(days: 1));
@@ -212,29 +305,20 @@ class LocalDatabase {
     final endUtcIso = nextLocalMidnight.toUtc().toIso8601String();
     final rows = await _db!.rawQuery(
       "SELECT DISTINCT word_id FROM word_records "
-      "WHERE study_type = 'new' AND action_result = 'forgot' "
+      "WHERE user_id = ? AND study_type = 'new' AND action_result = 'forgot' "
       "AND created_at >= ? AND created_at < ? "
       "AND word_id NOT IN ("
       "  SELECT word_id FROM word_records "
-      "  WHERE study_type = 'new' AND action_result = 'know'"
+      "  WHERE user_id = ? AND study_type = 'new' AND action_result = 'know'"
       ")",
-      [startUtcIso, endUtcIso],
+      [userId, startUtcIso, endUtcIso, userId],
     );
     return rows.map((r) => r['word_id'] as String).toSet();
   }
 
-  /// Count new words successfully studied today.
+  /// Count new words [userId] successfully studied today.
   /// Used as offline fallback for [TodayState.todayNewCompleted].
-  ///
-  /// "Today" means the user's LOCAL calendar day. Since [created_at] is stored
-  /// as UTC ISO-8601 strings, we convert local midnight boundaries to UTC and
-  /// do a range query — this is correct for every timezone.
-  ///
-  /// Using a LIKE '{localDate}%' pattern here is WRONG: in UTC+8, records
-  /// written during local 00:00–07:59 have UTC dates of the previous day,
-  /// so a LIKE match against the local date misses them and progress
-  /// silently resets to 0 for several hours each morning.
-  Future<int> countTodayNewCompleted() async {
+  Future<int> countTodayNewCompleted(String userId) async {
     final now = DateTime.now();
     final localMidnight = DateTime(now.year, now.month, now.day);
     final nextLocalMidnight = localMidnight.add(const Duration(days: 1));
@@ -242,55 +326,166 @@ class LocalDatabase {
     final endUtcIso = nextLocalMidnight.toUtc().toIso8601String();
     final rows = await _db!.rawQuery(
       "SELECT COUNT(*) AS cnt FROM word_records "
-      "WHERE study_type = 'new' AND action_result = 'know' "
+      "WHERE user_id = ? AND study_type = 'new' AND action_result = 'know' "
       "AND created_at >= ? AND created_at < ?",
-      [startUtcIso, endUtcIso],
+      [userId, startUtcIso, endUtcIso],
     );
     return (rows.first['cnt'] as int?) ?? 0;
   }
 
-  /// Get all word records (for export).
-  Future<List<Map<String, dynamic>>> getAllWordRecords() async {
-    return await _db!.query('word_records', orderBy: 'created_at ASC');
+  /// All of [userId]'s word records (for snapshot export, ordered).
+  Future<List<Map<String, dynamic>>> getAllWordRecords(String userId) async {
+    return await _db!.query(
+      'word_records',
+      where: 'user_id = ?',
+      whereArgs: [userId],
+      orderBy: 'created_at ASC',
+    );
   }
 
-  /// Replace all word records (for restore). Transactional.
-  Future<void> replaceAllWordRecords(List<Map<String, dynamic>> records) async {
+  /// Replace [userId]'s word records with [records] (for restore).
+  /// Transactional. Other users' rows are untouched — only this
+  /// user's rows are deleted before insert.
+  ///
+  /// 需求 23 Phase D PR-D-γ (plan-023-D-v2 §4.3 / Review 2 P1-2):
+  /// `user_id` is **unconditionally** set to the caller's [userId],
+  /// regardless of whatever the snapshot row claims. Pre-γ this was
+  /// `r['user_id'] ?? userId`, which let a polluted snapshot drop
+  /// rows into another user's bucket — the current user's DELETE
+  /// then wiped their own data while INSERT silently stashed it
+  /// under a stranger's user_id. Server-side validateSnapshotUserIds
+  /// (PR-D-β) is the first line of defence; this is belt-and-braces.
+  Future<void> replaceAllWordRecords(
+    List<Map<String, dynamic>> records, {
+    required String userId,
+  }) async {
     await _db!.transaction((txn) async {
-      await txn.delete('word_records');
+      await txn.delete(
+        'word_records',
+        where: 'user_id = ?',
+        whereArgs: [userId],
+      );
       for (final r in records) {
         await txn.insert('word_records', {
+          'user_id': userId, // PR-D-γ: unconditional, never trust snapshot row
           'word_id': r['word_id'] ?? '',
           'book_id': r['book_id'] ?? '',
           'study_type': r['study_type'] ?? 'new',
           'action_result': r['action_result'] ?? 'forgot',
-          'created_at': r['created_at'] ?? DateTime.now().toUtc().toIso8601String(),
+          'created_at':
+              r['created_at'] ?? DateTime.now().toUtc().toIso8601String(),
           'synced': r['synced'] ?? 1, // Restored data considered synced
         });
       }
     });
   }
 
-  // ==================== Generic table operations (for other tables) ====================
+  // ==================== Stats raw queries (PR-C-β: now userId-scoped) ====================
+  //
+  // StatsService used to reach into [db] and run raw SQL on word_records.
+  // PR-C-β moves those queries here so the WHERE user_id clause lives in
+  // one place. StatsService consumes typed return values, not raw rows.
 
-  /// Get all rows from a table (for export).
-  Future<List<Map<String, dynamic>>> getAllFromTable(String table) async {
-    return await _db!.query(table);
+  /// Count distinct word_ids this user has touched (any action_result,
+  /// any study_type). Stats "totalWordsLearned" hero number.
+  Future<int> countDistinctLearnedWords(String userId) async {
+    final rows = await _db!.rawQuery(
+      'SELECT COUNT(DISTINCT word_id) AS cnt FROM word_records '
+      'WHERE user_id = ?',
+      [userId],
+    );
+    return (rows.first['cnt'] as int?) ?? 0;
   }
 
-  /// Replace all rows in a table (for restore). Transactional.
-  Future<void> replaceAllInTable(String table, List<Map<String, dynamic>> records) async {
+  /// Count distinct `know`/`new` word_ids since [sinceUtcIso] for this
+  /// user. Stats "weeklyDelta" and forecast "近 7 天日均".
+  Future<int> countDistinctNewKnowSince(
+    String userId,
+    String sinceUtcIso,
+  ) async {
+    final rows = await _db!.rawQuery(
+      'SELECT COUNT(DISTINCT word_id) AS cnt FROM word_records '
+      "WHERE user_id = ? AND study_type='new' AND action_result='know' "
+      'AND created_at >= ?',
+      [userId, sinceUtcIso],
+    );
+    return (rows.first['cnt'] as int?) ?? 0;
+  }
+
+  /// `created_at` strings for `know`/`new` records since [sinceUtcIso].
+  /// Stats trend / heatmap / badges convert each to local-day buckets.
+  Future<List<String>> listNewKnowCreatedAtSince(
+    String userId,
+    String sinceUtcIso,
+  ) async {
+    final rows = await _db!.rawQuery(
+      'SELECT created_at FROM word_records '
+      "WHERE user_id = ? AND study_type='new' AND action_result='know' "
+      'AND created_at >= ?',
+      [userId, sinceUtcIso],
+    );
+    return rows.map((r) => r['created_at'] as String).toList();
+  }
+
+  /// All-time `created_at` strings for this user's `know`/`new` records.
+  /// Stats "百日斩" badge scans the histogram for max-daily ≥ 100.
+  Future<List<String>> listAllNewKnowCreatedAt(String userId) async {
+    final rows = await _db!.rawQuery(
+      'SELECT created_at FROM word_records '
+      "WHERE user_id = ? AND study_type='new' AND action_result='know'",
+      [userId],
+    );
+    return rows.map((r) => r['created_at'] as String).toList();
+  }
+
+  // ==================== Generic table operations (for snapshot export) ====================
+
+  /// All rows from [table] belonging to [userId]. Use for snapshot
+  /// export of user-scoped tables (e.g. `card_states` directly via
+  /// drift's sqflite file). Non-user-scoped tables (audio_file_cache,
+  /// preset_wordbooks etc.) should NOT be called through here — those
+  /// are shared catalog data and don't have a `user_id` column.
+  Future<List<Map<String, dynamic>>> getAllFromTableForUser(
+    String table,
+    String userId,
+  ) async {
+    return await _db!.query(
+      table,
+      where: 'user_id = ?',
+      whereArgs: [userId],
+    );
+  }
+
+  /// Replace [userId]'s rows in [table] with [records]. Transactional.
+  /// Other users' rows are not touched.
+  ///
+  /// 需求 23 Phase D PR-D-γ (plan-023-D-v2 §4.3 / Review 2 P1-2):
+  /// `user_id` is unconditionally set to the caller's [userId]. The
+  /// spread `...r` still keeps every other column, but the explicit
+  /// override that follows must come LAST so it wins regardless of
+  /// what the snapshot row carries.
+  Future<void> replaceUserRowsInTable(
+    String table,
+    List<Map<String, dynamic>> records, {
+    required String userId,
+  }) async {
     await _db!.transaction((txn) async {
-      await txn.delete(table);
+      await txn.delete(table, where: 'user_id = ?', whereArgs: [userId]);
       for (final r in records) {
-        await txn.insert(table, r);
+        await txn.insert(table, {
+          ...r,
+          'user_id': userId, // PR-D-γ: unconditional, never trust snapshot row
+        });
       }
     });
   }
 
-  /// Count rows in a table.
-  Future<int> countRows(String table) async {
-    final result = await _db!.rawQuery('SELECT COUNT(*) as cnt FROM $table');
+  /// Count [userId]'s rows in [table].
+  Future<int> countRowsForUser(String table, String userId) async {
+    final result = await _db!.rawQuery(
+      'SELECT COUNT(*) AS cnt FROM $table WHERE user_id = ?',
+      [userId],
+    );
     return Sqflite.firstIntValue(result) ?? 0;
   }
 

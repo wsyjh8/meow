@@ -35,6 +35,7 @@ dependencies:
   # (Python) ↔ ingest (TS) ↔ App (Dart). Real-world LLM-generated example
   # text is almost always NFC, but the spec mandates explicit normalization.
   unorm_dart: ^0.3.0
+  flutter_secure_storage: ^10.1.0
 
 dev_dependencies:
   flutter_test:

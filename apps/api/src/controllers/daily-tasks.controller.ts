@@ -4,8 +4,11 @@ import {
   Post,
   HttpCode,
   HttpStatus,
+  UseGuards,
 } from '@nestjs/common';
 import { repositories } from '../domain';
+import { AuthGuard, RequestUser } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 /**
  * Daily fishing task controller (Phase D).
@@ -15,13 +18,16 @@ import { repositories } from '../domain';
  *   POST /me/daily-tasks/start   — begin (or resume) the next round
  *
  * §3.2 discipline: rewards never feed back into learning progress.
+ *
+ * 需求 23 Phase A4-α: AuthGuard required.
  */
 @Controller('me/daily-tasks')
+@UseGuards(AuthGuard)
 export class DailyTasksController {
   @Get()
-  getDailyTask() {
-    const task = repositories.fishing.getDailyFishingTask();
-    const balance = repositories.reward.getBalanceSnapshot();
+  getDailyTask(@CurrentUser() user: RequestUser) {
+    const task = repositories.fishing.getDailyFishingTask(user.id);
+    const balance = repositories.reward.getBalanceSnapshot(user.id);
     return {
       task_id: task.id,
       task_date: task.task_date,
@@ -35,10 +41,10 @@ export class DailyTasksController {
 
   @Post('start')
   @HttpCode(HttpStatus.OK)
-  async startRound() {
-    const question = repositories.fishing.startFishingRound();
+  async startRound(@CurrentUser() user: RequestUser) {
+    const question = repositories.fishing.startFishingRound(user.id);
     if (!question) {
-      const task = repositories.fishing.getDailyFishingTask();
+      const task = repositories.fishing.getDailyFishingTask(user.id);
       return {
         started: false,
         reason: task.status === 'exhausted' ? 'exhausted' : 'no_studied_words',

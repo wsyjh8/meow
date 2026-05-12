@@ -51,13 +51,18 @@ Future<void> _seedWords(AppDatabase db, int count) async {
 }
 
 void main() {
+  const testUserId = 'test-user';
   late AppDatabase db;
   late FsrsService fsrs;
   late SessionBuilder builder;
 
   setUp(() {
     db = _createTestDb();
-    fsrs = FsrsService(db: db, desiredRetention: 0.9);
+    fsrs = FsrsService.forUser(
+      db: db,
+      userId: testUserId,
+      desiredRetention: 0.9,
+    );
     builder = SessionBuilder(fsrsService: fsrs, db: db);
   });
 

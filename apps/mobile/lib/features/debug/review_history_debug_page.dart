@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
 import '../../core/services/review_log_service.dart';
 import '../../core/storage/drift/app_database.dart';
 
@@ -29,7 +30,12 @@ class _ReviewHistoryDebugPageState extends State<ReviewHistoryDebugPage> {
   @override
   void initState() {
     super.initState();
-    _log = ReviewLogService(apiClient: _api);
+    // PR-C-β: per-user via factory ctor.
+    _log = ReviewLogService.forUser(
+      apiClient: _api,
+      driftDb: AppDatabase(),
+      userId: AuthScope.currentUserIdOf(context),
+    );
   }
 
   @override

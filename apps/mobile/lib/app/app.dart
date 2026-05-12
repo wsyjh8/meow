@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../core/auth/auth.dart';
 import '../core/router/app_router.dart';
 import '../core/storage/auto_backup_service.dart';
 import '../spec/pages/spec_shell.dart';
@@ -26,7 +27,16 @@ final RouteObserver<PageRoute<dynamic>> studyPageRouteObserver =
 ///   The service only runs if >30min since the last backup.
 ///   Failures are silent — the user can always backup manually from Settings.
 class MeowApp extends StatefulWidget {
-  const MeowApp({super.key});
+  /// 需求 23 Phase B: AuthController is constructed by AuthBootstrap in
+  /// main.dart and injected here. Wrapped in an [AuthScope] so any
+  /// widget can call `AuthScope.of(context)`.
+  ///
+  /// Optional for back-compat with code paths (e.g. legacy tests) that
+  /// don't yet wire AuthBootstrap; if null, widgets that depend on
+  /// AuthScope must guard the absence.
+  final AuthController? authController;
+
+  const MeowApp({super.key, this.authController});
 
   @override
   State<MeowApp> createState() => _MeowAppState();
@@ -49,13 +59,19 @@ class _MeowAppState extends State<MeowApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       // App going to background — trigger auto-backup (fire-and-forget).
-      AutoBackupService.triggerIfNeeded();
+      // PR-C-β: per-user backup; grab the bound user from AuthController.
+      // If no controller is wired (legacy/test path), skip — there's no
+      // user to back up.
+      final controller = widget.authController;
+      if (controller != null) {
+        AutoBackupService.triggerIfNeeded(userId: controller.currentUserId);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    final app = MaterialApp(
       title: '背单词喵喵',
       debugShowCheckedModeBanner: false,
       // SPEC theme: warm beige canvas, no shadows
@@ -70,5 +86,14 @@ class _MeowAppState extends State<MeowApp> with WidgetsBindingObserver {
       home: const SpecShell(),
       onGenerateRoute: AppRouter.generateRoute,
     );
+
+    // 需求 23 Phase B: wrap with AuthScope so descendants can resolve
+    // the current user via AuthScope.of(context). When authController is
+    // null (legacy / test path), skip the wrap — descendants that depend
+    // on AuthScope will assert.
+    if (widget.authController != null) {
+      return AuthScope(controller: widget.authController!, child: app);
+    }
+    return app;
   }
 }

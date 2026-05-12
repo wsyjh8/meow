@@ -34,7 +34,11 @@ void main() {
     setUp(() {
       db = AppDatabase.forTesting(NativeDatabase.memory());
       api = _RecordingApiClient();
-      service = ReviewLogService(apiClient: api, driftDb: db);
+      service = ReviewLogService.forUser(
+        apiClient: api,
+        driftDb: db,
+        userId: 'test-user',
+      );
     });
 
     tearDown(() async {

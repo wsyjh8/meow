@@ -9,40 +9,52 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:meow_mobile/core/storage/local_database.dart';
 
 void main() {
+  const testUserId = 'test-user';
+
   // Use FFI for SQLite in headless tests (desktop).
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
+  // PR-C-α: drift is now the sole schema owner. Tests that exercise
+  // LocalDatabase WITHOUT also opening AppDatabase on the same file go
+  // through the test-only [initializeForTesting] bridge that emits the
+  // v13 schema inline. Production code uses [initialize] (no-op schema).
   setUp(() async {
     // Fresh DB per test so cross-test row leak can't mask a bug.
     await LocalDatabase.deleteDatabase_();
-    await LocalDatabase.initialize();
+    await LocalDatabase.initializeForTesting();
   });
 
   test('empty table → returns empty set', () async {
-    final ids = await LocalDatabase.instance.getTodayServedNewWordIds();
+    final ids =
+        await LocalDatabase.instance.getTodayServedNewWordIds(testUserId);
     expect(ids, isEmpty);
   });
 
   test('forgot + know mixed today → returns all 5 distinct ids', () async {
     final db = LocalDatabase.instance;
     await db.insertWordRecord(
+      userId: testUserId,
       wordId: 'w1', bookId: 'b', studyType: 'new', actionResult: 'forgot',
     );
     await db.insertWordRecord(
+      userId: testUserId,
       wordId: 'w2', bookId: 'b', studyType: 'new', actionResult: 'forgot',
     );
     await db.insertWordRecord(
+      userId: testUserId,
       wordId: 'w3', bookId: 'b', studyType: 'new', actionResult: 'forgot',
     );
     await db.insertWordRecord(
+      userId: testUserId,
       wordId: 'w4', bookId: 'b', studyType: 'new', actionResult: 'know',
     );
     await db.insertWordRecord(
+      userId: testUserId,
       wordId: 'w5', bookId: 'b', studyType: 'new', actionResult: 'know',
     );
 
-    final ids = await db.getTodayServedNewWordIds();
+    final ids = await db.getTodayServedNewWordIds(testUserId);
     expect(ids, {'w1', 'w2', 'w3', 'w4', 'w5'});
     expect(ids.length, 5,
         reason: 'forgot must count too — that is the whole point of Bug 4');
@@ -52,15 +64,17 @@ void main() {
     final db = LocalDatabase.instance;
     // First "forgot" — insert
     await db.insertWordRecord(
+      userId: testUserId,
       wordId: 'w1', bookId: 'b', studyType: 'new', actionResult: 'forgot',
     );
     // Second "know" on the SAME word — insertWordRecord upgrades the
     // existing row in place, so distinct count remains 1.
     await db.insertWordRecord(
+      userId: testUserId,
       wordId: 'w1', bookId: 'b', studyType: 'new', actionResult: 'know',
     );
 
-    final ids = await db.getTodayServedNewWordIds();
+    final ids = await db.getTodayServedNewWordIds(testUserId);
     expect(ids, {'w1'});
   });
 
@@ -74,6 +88,9 @@ void main() {
         .toIso8601String();
 
     await LocalDatabase.instance.db.insert('word_records', {
+      // PR-C-α: word_records.user_id is NOT NULL post-v13. Tests that
+      // bypass insertWordRecord() and write directly must include it.
+      'user_id': testUserId,
       'word_id': 'old-word',
       'book_id': 'b',
       'study_type': 'new',
@@ -84,13 +101,15 @@ void main() {
 
     // Today's row, definitely inside the window.
     await LocalDatabase.instance.insertWordRecord(
+      userId: testUserId,
       wordId: 'today-word',
       bookId: 'b',
       studyType: 'new',
       actionResult: 'forgot',
     );
 
-    final ids = await LocalDatabase.instance.getTodayServedNewWordIds();
+    final ids =
+        await LocalDatabase.instance.getTodayServedNewWordIds(testUserId);
     expect(ids, {'today-word'});
     expect(ids.contains('old-word'), isFalse,
         reason: 'yesterday must not leak into today\'s served-set');

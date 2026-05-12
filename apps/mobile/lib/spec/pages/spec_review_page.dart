@@ -4,6 +4,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/api/api_client.dart' show Word, WordExample;
+import '../../core/auth/auth.dart';
 import '../../core/audio/pronunciation_service.dart';
 import '../../core/util/pos_label.dart';
 import '../../core/memory/card_state_data.dart';
@@ -100,7 +101,11 @@ class _SpecReviewPageState extends State<SpecReviewPage> {
   void initState() {
     super.initState();
     _driftDb = AppDatabase();
-    _fsrsService = FsrsService(db: _driftDb);
+    // PR-C-β: user-scoped via factory.
+    _fsrsService = FsrsService.forUser(
+      db: _driftDb,
+      userId: AuthScope.currentUserIdOf(context),
+    );
     _pronunciationService = PronunciationService();
     _audioSub = _pronunciationService.onPlayerStateChanged.listen((state) {
       if (mounted) setState(() => _isPlayingAudio = state == PlayerState.playing);

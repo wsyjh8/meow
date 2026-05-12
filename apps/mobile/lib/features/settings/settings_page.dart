@@ -6,8 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/auth/auth.dart';
+import '../../core/config/api_base.dart';
 import '../../core/storage/local_settings_service.dart';
-import '../../core/storage/local_progress_repository.dart';
 import '../../core/storage/snapshot_export_service.dart';
 import '../../core/storage/backup_upload_service.dart';
 import '../../core/storage/backup_restore_service.dart';
@@ -77,11 +78,18 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadManifestSyncFlag();
   }
 
+  /// PR-C-β: snapshot AuthScope's currentUserId once at the top of
+  /// each async method so subsequent awaits don't re-cross the
+  /// async-gap-with-BuildContext lint.
+  String _currentUserId() => AuthScope.currentUserIdOf(context);
+
   Future<void> _loadLatestStatus() async {
+    final userId = _currentUserId();
     final prefs = await SharedPreferences.getInstance();
     final uploadService = BackupUploadService(
-      baseUrl: 'http://10.0.2.2:3000/api/v1',
+      baseUrl: apiV1Base,
       prefs: prefs,
+      userId: userId,
     );
     final info = uploadService.getLatestBackupInfo();
     if (mounted) {
@@ -111,18 +119,21 @@ class _SettingsPageState extends State<SettingsPage> {
   // follows (see _loadDeviceInfo / _performBackup), avoiding the need
   // for an InheritedWidget DI scaffold.
   Future<void> _loadManifestSyncFlag() async {
+    final userId = _currentUserId();
     final prefs = await SharedPreferences.getInstance();
     if (mounted) {
       setState(() {
         _manifestSyncEnabled =
-            LocalSettingsService(prefs).manifestSyncEnabled;
+            LocalSettingsService(prefs, userId: userId).manifestSyncEnabled;
       });
     }
   }
 
   Future<void> _setManifestSyncFlag(bool value) async {
+    final userId = _currentUserId();
     final prefs = await SharedPreferences.getInstance();
-    await LocalSettingsService(prefs).setManifestSyncEnabled(value);
+    await LocalSettingsService(prefs, userId: userId)
+        .setManifestSyncEnabled(value);
     if (mounted) setState(() => _manifestSyncEnabled = value);
   }
 
@@ -131,21 +142,24 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() { _isUploading = true; _error = null; });
 
     try {
+      final userId = _currentUserId();
       final prefs = await SharedPreferences.getInstance();
-      final settings = LocalSettingsService(prefs);
-      final progress = LocalProgressRepository(prefs);
+      final settings = LocalSettingsService(prefs, userId: userId);
       final deviceInfo = DeviceInfoService();
 
+      // PR-C-β D9: snapshot is single-source SQLite; LocalProgressRepository
+      // was retired so we no longer thread a progress arg through.
       final exportService = SnapshotExportService(
         settings: settings,
-        progress: progress,
         db: LocalDatabase.instance,
         deviceInfo: deviceInfo,
         prefs: prefs,
+        userId: userId,
       );
       final uploadService = BackupUploadService(
-        baseUrl: 'http://10.0.2.2:3000/api/v1',
+        baseUrl: apiV1Base,
         prefs: prefs,
+        userId: userId,
       );
 
       // Step 1: Export snapshot locally (async — reads SQLite + drift + device_info)
@@ -472,14 +486,16 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _handleRestore() async {
+    final userId = _currentUserId();
     final prefs = await SharedPreferences.getInstance();
-    final settings = LocalSettingsService(prefs);
-    final progress = LocalProgressRepository(prefs);
+    final settings = LocalSettingsService(prefs, userId: userId);
+    // PR-C-β D9: BackupRestoreService is single-source SQLite; the
+    // progress arg is gone.
     final restoreService = BackupRestoreService(
-      baseUrl: 'http://10.0.2.2:3000/api/v1',
+      baseUrl: apiV1Base,
       settings: settings,
-      progress: progress,
       db: LocalDatabase.instance,
+      userId: userId,
     );
 
     // Pre-check
@@ -577,10 +593,12 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _buildDailyGoalSection() {
     if (!_dailyGoalLoaded) {
+      final userId = _currentUserId();
       SharedPreferences.getInstance().then((prefs) {
         if (mounted) {
           setState(() {
-            _currentDailyGoal = LocalSettingsService(prefs).dailyGoal;
+            _currentDailyGoal =
+                LocalSettingsService(prefs, userId: userId).dailyGoal;
             _dailyGoalLoaded = true;
           });
         }
@@ -703,8 +721,9 @@ class _SettingsPageState extends State<SettingsPage> {
     );
 
     if (result != null && mounted) {
+      final userId = _currentUserId();
       final prefs = await SharedPreferences.getInstance();
-      final settings = LocalSettingsService(prefs);
+      final settings = LocalSettingsService(prefs, userId: userId);
       await settings.setDailyGoal(result);
 
       try {
@@ -785,11 +804,12 @@ class _SettingsPageState extends State<SettingsPage> {
   // ==================== FSRS Retention Setting ====================
 
   Widget _buildRetentionSection() {
+    final userId = AuthScope.currentUserIdOf(context);
     return FutureBuilder<SharedPreferences>(
       future: SharedPreferences.getInstance(),
       builder: (context, snap) {
         if (!snap.hasData) return const SizedBox.shrink();
-        final settings = LocalSettingsService(snap.data!);
+        final settings = LocalSettingsService(snap.data!, userId: userId);
         final current = settings.desiredRetention;
 
         return MeowCard(
