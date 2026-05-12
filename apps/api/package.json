@@ -28,7 +28,8 @@
     "db:import": "ts-node scripts/db/import-json.ts",
     "db:import:validate": "ts-node scripts/db/import-json.ts --validate",
     "db:backup": "ts-node scripts/db/backup.ts",
-    "db:restore": "ts-node scripts/db/restore.ts"
+    "db:restore": "ts-node scripts/db/restore.ts",
+    "load:auth-guest": "ts-node scripts/load-test-auth-guest.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.700.0",
