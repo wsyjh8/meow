@@ -524,6 +524,7 @@ v2 新增 D8~D15：
 - **D12** 30 天 token 过期 = 用户每月强制重登。如不可接受需做 refresh token，本轮加任务 → 计划再扩。如可接受 → 保持。**默认建议保持**。OK?
 - **D13** AUTH_ENFORCE 在 production 启动期断言为 true。OK?
 - **D14** 新 BR 文件命名沿用 `BR-USER-001_v0.1.0_full.md` 形式，目录 `docs/design/`。OK?
+  - ✅ **2026-05-11 落地**：[`./BR-USER-001_v0.1.0_full.md`](./BR-USER-001_v0.1.0_full.md)（Phase G commit；含 4 条 BR：身份规则 / 绑定规则 / 退出切换规则 / 数据归属规则）。
 - **D15** **不改路由前缀**（不把 `/sessions` 改成 `/me/sessions`），AuthGuard 加在控制器/方法级，避免破坏客户端（§4.1）。OK?
 
 v2 新增 D16：
@@ -558,3 +559,58 @@ v2 新增 D16：
 3. 是否同意先做 **Phase 0 现状审计**输出三份审计文档（controller-auth-audit.md / db-uniqueness-audit.md / sp-keys-audit.md），再正式开 Phase A。Phase 0 不改代码、纯审计落档，可作为后续 PR 的依据。
 
 不在本计划阶段写代码。按 CLAUDE.md §2.5，DB / API 设计需先取得用户确认。
+
+---
+
+## 14. 实施进度（2026-05-11 完成）
+
+按 commit 顺序列出所有阶段；commit hash 来自 `feature/user-auth` 分支 `git log --oneline` 实测；测试基线在该 commit 完成后所跑的 e2e/单测套件计数。
+
+| Phase | 子阶段 | Commit | 测试基线 | 完成日期 |
+|-------|--------|--------|---------|---------|
+| Phase 0 | 三份审计文档（controller-auth / db-uniqueness / sp-keys）落档 | `62ea590` | 静态文档 | 2026-05-09 |
+| A1-A3 | migrations 008/009 + `/auth/*` 6 接口 + AuthGuard + AUTH_ENFORCE flag | `5547a85` | 62/62 backend e2e（auth 7 + app baseline） | 2026-05-09 |
+| A4-α | repositories 接 userId + AuthGuard 接 17 controllers + audit §6 初步 owner-check | `1991be7` | 68/68 backend e2e（+6 isolation 用例） | 2026-05-09 |
+| A4-β.1+β.2 | withUser async-guard + 错误码统一 + backup per-user partition (P0) | `52c1a30` | 70/70 backend e2e（+2 backup isolation） | 2026-05-10 |
+| A4-β.3-β.6 | dev-store 23 *ByUser maps + idempotency Map per-user + pg-persistence userId | `3833c25` | 70/70 backend e2e（无新用例，内部重构） | 2026-05-10 |
+| A4-β.7+β.8 | audit §6 isolation e2e 补全 + plan β.8 文档 | `78eec7c` | 76/76 backend e2e（+6 isolation：idempotency 真测 / today / balance / review-group / inventory / lottery / fishing） | 2026-05-10 |
+| A4-β.9 | review 评审 hot-fix（userDailyNewTarget partition + catProfile.nickname per-user + source_ref_id/session_id cross-user check） | `a4b1627` | 79/79 backend e2e（+3 isolation：source_ref_id / session_id / settings daily_new_target） | 2026-05-10 |
+| Phase B | 移动端身份层（AuthStorage + AuthController + UI + AuthHttpClient） | `9d992c8` | 1218/1218 mobile unit | 2026-05-10 |
+| Phase B hot-fix | 评审采纳（ApiClient wiring / logout 切 guest / 网络 ≠ tokenExpired / placeholder） | `5d83936` | 1218/1218 mobile unit | 2026-05-10 |
+| Phase C PR-C-α | drift v13 user-scoped partition schema（9 张表 + 3 UNIQUE 复合 key） | `6d33cbe` | mobile drift migration test + 1218/1218 unit | 2026-05-10 |
+| Phase C-α tidy | 后端 e2e state-resilience + analyzer infos | `3ce5ec0` | backend e2e green | 2026-05-10 |
+| Phase C PR-C-β | user-scoped DAOs + repositories + SpMigrator（pre-C → `u_<userId>_*`） | `d93279d` | mobile unit + 新增 SpMigrator/DAO 隔离用例 | 2026-05-10 |
+| Phase C PR-C-γ | epoch race guard + pending-local-guest migration | `1584440` | 1212/1212 mobile（epoch 用例 + pending migrator 用例） | 2026-05-10 |
+| Phase C PR-C-δ | `phase_c_e2e_test.dart` 14 用例 T1-T14 + 集成 handoff | `4d3cb3a` | mobile +14 e2e（T3 SpMigrator / T4 UNIQUE / T5 DAO / T6 service / T7 logout / T8 same-row / T14 schema） | 2026-05-10 |
+| Phase D PR-D-α | mobile backup auth client（AuthHttpClient wiring）+ 10MB body limit | `83726ec` | mobile `backup_auth_header_test.dart` + backend body limit e2e | 2026-05-10 |
+| Phase D PR-D-β | backup PG 持久化（migration 010 + `backup_snapshots`）+ BackupController 旁路 dev-store + user_id 校验 | `aaefffc` | backend +`backup-persistence.e2e-spec.ts` ~10 用例（D-T1/T2/T3/T4/T6/T8/T10/T14） | 2026-05-10 |
+| Phase D PR-D-γ | restore 无条件 user_id 覆盖 + 6-entity pollution 客户端校验 | `2f32510` | mobile `backup_restore_hardening_test.dart` + 强制覆盖用例 | 2026-05-10 |
+| Phase D PR-D-δ | `phase_d_e2e_test.dart` 4 用例（D-T7 / D-T11 / D-T13 / D-T14）+ multi-account coexistence | `4c679a9` | mobile +4 e2e + backend D-T13/D-T14 backup-persistence 用例 | 2026-05-10 |
+| β.5b + β.5c + audit §6 残留 | dev-store ensureUserLoaded lazy-load + ownedItems/equipped/wallet *ByUser snapshot + pg-persistence per-user persist + 4 cross-user 404 e2e | `34a67df` | 101/101 backend e2e（auth-isolation 27 + auth 7 + backup-persistence 12 + pg-regression 55） | 2026-05-11 |
+| Phase G | 文档收尾（PRD §9 验收对照 + BR-USER-001 + plan 实施进度 + audit v1.2 修订） | _(本 commit)_ | 静态文档（无新业务测试） | 2026-05-11 |
+
+### 14.1 验收闭环
+
+PRD §9 七节 32 项验收逐条对照表见 [`./audits/prd-§9-acceptance-coverage.md`](./audits/prd-§9-acceptance-coverage.md)。Phase G commit 时表内**全部 ✅**（0 ⚠️ / 0 ❌）。
+
+### 14.2 不在本闭环（独立后续 PR）
+
+- **Phase E1**：staging → production 翻 `AUTH_ENFORCE=true` flag（plan v2 §2 / D13）。当前 production assertion 已生效（`main.ts:12`），但 staging 默认未开 enforce。
+- **Phase F**：跨设备绑定流程 UI 触发归属（plan-023-D-v2 §1.2 明示不在 Phase D 范围）。
+- **β.6 cosmetic refactor**：彻底去 withUser、给所有 ~50 个 dev-store 公共方法显式加 userId 参数（A4-β.9 决策保留 withUser 作为 binding 入口，纯 cosmetic 不阻塞 §9）。
+- **Audit §6 e2e 100% 硬化**：当前 ~89%（16/18 方法路径），剩 2 项是 lottery 跨用户「真隔离」和 review-attempts/local-batch 子用例细化，功能上已无 cross-user 写入路径。
+
+### 14.3 BR / 审计 落档
+
+| 文档 | 状态 |
+|------|------|
+| [`./audits/controller-auth-audit.md`](./audits/controller-auth-audit.md) | v1.2（Phase G 修订记录） |
+| [`./audits/db-uniqueness-audit.md`](./audits/db-uniqueness-audit.md) | v1.2（Phase G 修订记录） |
+| [`./audits/sp-keys-audit.md`](./audits/sp-keys-audit.md) | v1.2（Phase G 修订记录） |
+| [`./audits/prd-§9-acceptance-coverage.md`](./audits/prd-§9-acceptance-coverage.md) | v1.0（Phase G 新建，本节验收门票） |
+| [`./BR-USER-001_v0.1.0_full.md`](./BR-USER-001_v0.1.0_full.md) | v0.1.0（Phase G 新建，落地 D14） |
+| [`./plan-023-A4-beta-v1.md`](./plan-023-A4-beta-v1.md) | complete |
+| [`./plan-023-C-mobile-local-partition-v2.md`](./plan-023-C-mobile-local-partition-v2.md) | complete |
+| [`./plan-023-D-backup-restore-closure-v2.md`](./plan-023-D-backup-restore-closure-v2.md) | complete |
+| [`./plan-023-C-mobile-local-partition-v1.md`](./plan-023-C-mobile-local-partition-v1.md) | ⚠️ Superseded by v2 |
+| [`./plan-023-D-backup-restore-closure-v1.md`](./plan-023-D-backup-restore-closure-v1.md) | ⚠️ Superseded by v2 |

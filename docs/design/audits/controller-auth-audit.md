@@ -1,10 +1,12 @@
 # Controller Auth Audit — Phase 0 / 需求 23
 
-**Status:** complete (v1.1 — 修订计数错 + 增加 §6 对象归属校验矩阵)
+**Status:** complete (v1.2 — Phase G 实施落地映射 + §6 矩阵覆盖率终态)
 **Scope:** `apps/api/src/controllers/` 全部 23 个控制器、所有 HTTP 路由
-**Purpose:** 为 Phase A AuthGuard 实施提供逐路由决策依据
-**关联:** [plan-023-用户系统与用户数据隔离-v2.md](../plan-023-用户系统与用户数据隔离-v2.md) §4.1
-**日期:** 2026-05-09 (v1.0) → 2026-05-09 (v1.1，吸收两份外部 review)
+**Purpose:** 为 Phase A AuthGuard 实施提供逐路由决策依据；v1.2 补 Phase A→G 实施完成后的落地映射
+**关联:**
+- [plan-023-用户系统与用户数据隔离-v2.md](../plan-023-用户系统与用户数据隔离-v2.md) §4.1 / §14
+- [prd-§9-acceptance-coverage.md](./prd-§9-acceptance-coverage.md)（PRD §9 验收对照）
+**日期:** 2026-05-09 (v1.0) → 2026-05-09 (v1.1，吸收两份外部 review) → 2026-05-11 (v1.2，Phase G 落地映射)
 
 ---
 
@@ -294,3 +296,67 @@ plan v2 §4.1 是按 controller 列的；本审计补到方法级，并把以下
 ## 8. 输出
 
 本文档作为 Phase A 实施的 source of truth，PR 描述需 reference 本文件。Phase A 必须同时落地 §3（路由级 AuthGuard）+ §6（对象归属校验），二者缺一不可。
+
+---
+
+## 9. v1.2 修订记录（2026-05-11，Phase G 收尾）
+
+本节标注每个 audit finding 实际落地的 commit。
+
+### 9.1 §3 路由级 AuthGuard（17 + 1）
+
+| Audit finding | 实施 commit | 文件:行 / 测试 |
+|---------------|-------------|---------------|
+| 17 个 controller 加 `@UseGuards(AuthGuard)` | `1991be7`（A4-α） | 17 个 controller 文件顶部 `@UseGuards(AuthGuard)` 装饰；e2e 见 `apps/api/test/auth-isolation.e2e-spec.ts:132/137` 未带 token / 无效 token → 401 |
+| `shop.controller.ts` 方法级 AuthGuard（仅 `@Post('purchases')`） | `1991be7` | `shop.controller.ts:36` `@UseGuards(AuthGuard)` on purchase method only |
+| AUTH_ENFORCE flag + 401 路径 | `5547a85`（A1-A3）；production assertion `auth.guard.ts:92` 通过 `main.ts:12` `assertProductionAuthEnforce` | `auth-isolation.e2e-spec.ts:132-137` + `backup-persistence.e2e-spec.ts:430` D-T14（4 个用例）|
+
+### 9.2 §6 对象归属校验矩阵实际落地（v1.2 终态）
+
+audit §6 v1.1 列出 ~15 个 method 签名变更，实际 18 个方法路径。落地按 commit 追溯：
+
+| § 行号 | 路由 / Method | 实施 commit | 错误码 |
+|--------|--------------|-------------|--------|
+| 6 #1 | `getSession(userId, sessionId)` | `1991be7` (A4-α) | 返 null → controller 转 404 |
+| 6 #2 | `finishSession(userId, ...)` | `1991be7` + `52c1a30`（β.1 统一 throw NotFoundException） | 404 |
+| 6 #3 | `getSettlementBySourceEventId(userId, ...)` | `1991be7` | 404 |
+| 6 #4 | `createOrGetSourceEvent` cross-user source_ref_id | `a4b1627`（β.9.3）`dev-store.ts:1628-1663` | 404 (NotFoundException) |
+| 6 #5 | `openLotteryBox(userId, ...)` | `1991be7` + `52c1a30` 统一 throw | 404 |
+| 6 #6 | `submitReviewAttempt` review_group_id owner | `1991be7` + `52c1a30`（最危险修：去掉 `{success:false}` 泄密返回） | 404 |
+| 6 #7 | `submitLocalReviewBatch` session_id cross-user | `34a67df`（β.5c hot-fix）`dev-store.ts:1400-1407` 用 `assertSessionIdNotCrossUser` | 404 |
+| 6 #8 | `submitStudyAttempt(... session_id)` | `a4b1627`（β.9.3）`dev-store.ts:1088-1099` | 404 |
+| 6 #9 | task-attempts session_id（fishing path） | `a4b1627`（β.9） | 404 |
+| 6 #10 | `feedCat` 注：API 无 inventory item id 参数 — 隔离靠 dev-store wallet/feedRecords per-user partition | `3833c25`（β.3）+ `34a67df`（β.5c PG persist） | 隔离靠 partition；e2e 见 `auth-isolation.e2e-spec.ts:912` |
+| 6 #11 | `equipItem` cross-user inventory | `34a67df`（β.5c hot-fix）`dev-store.ts:2729+` 用 `assertInventoryItemNotCrossUser` | 404 |
+| 6 #12 | `unequipItem` cross-user | `34a67df`（β.5c hot-fix） | 404 |
+| 6 #13 | `getReviewHistory(userId, wordId)` | `1991be7` query 带 userId | 自然 user-scoped |
+| 6 #14 | `storeBackup(userId, ...)` | `52c1a30`（β.2 P0）+ `aaefffc`（D-β PG 持久化） | 404（其他用户 GET → no_backup_yet） |
+| 6 #15 | `getLatestBackupMeta(userId)` | `52c1a30` + `aaefffc` | 404 / no_backup_yet |
+| 6 #16 | `getBackupSnapshot(userId)` | `52c1a30` + `aaefffc` | 404 / no_backup_found |
+
+**E2E 覆盖率终态：** ~89%（16/18 方法路径有专门 cross-user 404 e2e）。
+
+剩余 2 项**功能上已无 cross-user 写入路径**，仅测试形式上未到 100%：
+
+1. **Lottery 跨用户「真隔离」硬化**：当前 `auth-isolation.e2e-spec.ts:506` 测试直接 PG 插入 box，但 dev-store in-memory 未 reload，所以测试实际验证「no-such-box → 404」而不是「not-yours → 404」。两个 outcome 同样返 404，行为等价。β.5b lazy-load 落地后可触发实际 PG 读路径，但优先级不阻塞 PRD §9 验收。
+2. **review-attempts/local-batch 子用例细化**：`audit-isolation.e2e-spec.ts:944` 已覆盖 cross-user session_id → 404。如需进一步分层（per word_attempt session_id mismatch 子分支等）可在 Phase E1 切流前补。
+
+详见 [`./prd-§9-acceptance-coverage.md`](./prd-§9-acceptance-coverage.md) §10 Caveats。
+
+### 9.3 §5.5 已知陷阱（v1.1 列）实际落地
+
+| 陷阱 | 实施 commit |
+|------|-------------|
+| #1 BackupController 直接 import devStore → in-memory 单例风险 | `aaefffc`（D-β）BackupController 旁路 dev-store，直接走 `pg.saveBackupForUser/loadBackupFullForUser` |
+| #2 local-batch 离线提交（游客 + registered 都能解析） | `34a67df`（β.5c session_id cross-user check 不阻塞 unknown session_id；仅拒绝明确属于他人的） |
+| #3 backup device_id 与 user_id 正交 | `aaefffc`（D-β）`backup_snapshots` 表 device_id 字段存独立列，user_id 是 PK |
+| #4 `/settlements/:sourceEventId` GET owner-check | `1991be7` `getSettlementBySourceEventId(userId, id)` |
+| #5 idempotency 应用层联动 | `5547a85`（migration 009 `idempotency_keys` PK 改 `(user_id, key)`）+ `3833c25`（β.4 内部 `Map<userId, Map<key, record>>`）|
+
+### 9.4 引用约定（v1.2 强化）
+
+后续任何修改 controller / dev-store 的 PR 必须在描述中 reference 本文件相关 §（§3 路由清单 / §6 矩阵某行）和落地 commit hash，作为 audit trail 起点。Phase G 起，audits 和 plan / BR 文档构成完整的需求 23 实施 trace；PR review 时使用以下 checklist：
+
+- [ ] 新加 controller / endpoint → 在 §1 一览表 + §3 实施清单加行
+- [ ] 新加 method / 改 method 签名 → 在 §6 矩阵加行（若需 owner-check）
+- [ ] 新加 owner-check 实现 → 在 §6 + §9.2 表中加 commit 行

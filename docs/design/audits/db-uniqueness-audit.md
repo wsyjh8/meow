@@ -1,10 +1,13 @@
 # DB Uniqueness Audit — Phase 0 / 需求 23
 
-**Status:** complete (v1.1 — 修订表数 + §3.6 应用层落地)
-**Scope:** `apps/api/src/infrastructure/postgres/migrations/` 001 ~ 007 全部表
-**Purpose:** 确认每张表的 PK / UNIQUE 约束在多用户化后是否会漏 user_id（导致跨用户冲突或越权）
-**关联:** [plan-023-用户系统与用户数据隔离-v2.md](../plan-023-用户系统与用户数据隔离-v2.md) §3.2
-**日期:** 2026-05-09 (v1.0) → 2026-05-09 (v1.1，吸收两份外部 review)
+**Status:** complete (v1.2 — Phase G 落地映射 + migration 009/010 commit hash)
+**Scope:** `apps/api/src/infrastructure/postgres/migrations/` 001 ~ 010 全部表
+**Purpose:** 确认每张表的 PK / UNIQUE 约束在多用户化后是否会漏 user_id（导致跨用户冲突或越权）；v1.2 补 Phase A→D 实施完成后的落地映射
+**关联:**
+- [plan-023-用户系统与用户数据隔离-v2.md](../plan-023-用户系统与用户数据隔离-v2.md) §3.2 / §14
+- [prd-§9-acceptance-coverage.md](./prd-§9-acceptance-coverage.md)
+- [controller-auth-audit.md](./controller-auth-audit.md) §6 #5 / §6 #14-16
+**日期:** 2026-05-09 (v1.0) → 2026-05-09 (v1.1，吸收两份外部 review) → 2026-05-11 (v1.2，Phase G 落地映射)
 
 ---
 
@@ -316,3 +319,46 @@ plan v2 §3.2 简述了这两个 GAP，本审计补：
 ## 7. 输出
 
 本文档作为 migration 009 PR 的参考依据。Phase A 实施时按 §5 的草案 + application 层改动一并提交。
+
+---
+
+## 8. v1.2 修订记录（2026-05-11，Phase G 收尾）
+
+### 8.1 §2 critical gap 落地映射
+
+| Audit finding | 实施 commit | 落地内容 |
+|---------------|-------------|---------|
+| **§2.1 GAP #1**: `reward_source_events` UNIQUE 缺 user_id | `5547a85`（A1-A3） | `008_user_auth.sql` 已先一步加 user 列；`009_user_uniqueness.sql` 把 UNIQUE 从 `(event_type, source_ref_id)` 改成 `(user_id, event_type, source_ref_id)` |
+| **§2.2 GAP #2**: `idempotency_keys` 全局 PK | `5547a85`（A1-A3） | `009_user_uniqueness.sql` 把 PK 从 `(key)` 改成 `(user_id, key)`；in-memory 同期升级为 `Map<userId, Map<key, record>>`（β.4 in `3833c25`） |
+
+### 8.2 §3.6 应用层依赖落地
+
+| 应用层调用点 | 实施 commit | 文件:行 |
+|--------------|-------------|--------|
+| `getIdempotencyKey(key)` → `getIdempotencyKey(userId, key)` | `1991be7`（A4-α） | `apps/api/src/domain/dev-store-adapter.ts:292-298` (Adapter 加 userId 参数)；`dev-store.ts:1451`（内部 facade，β.4 后 routes 到 `Map<userId, ...>`） |
+| `setIdempotencyKey(userId, key, ...)` | `1991be7` | 同上 dev-store-adapter |
+| dev-store 内部 18 个 idempotency 调用点全部带 user_id | `3833c25`（β.4） | `dev-store.ts` 中所有 `this.getIdempotencyKey` 都通过 facade 走 per-user inner Map |
+
+### 8.3 新增 migration 010（v1.2 增补，原审计未覆盖）
+
+Phase D-β 新增 `backup_snapshots` 表（plan-023-D-v2 §5）：
+
+| 字段 | 约束 |
+|------|------|
+| `user_id` | PRIMARY KEY（每用户一槽，last-write-wins）|
+| `backup_id` | 单独索引 `idx_backup_snapshots_backup_id`（plan-023-D-v2 Review 1 采纳）|
+| 其它 meta 字段 | schema_version / uploaded_at / snapshot_size / device_id / device_model / snapshot (JSONB) |
+
+实施 commit: `aaefffc`（Phase D PR-D-β）。完整 UP/DOWN 在 migration 010 文件，DOWN 在 plan-023-D-v2 §5 中。
+
+### 8.4 引用约定（v1.2 强化）
+
+后续 migration 改 schema 时必须先 reference 本文件 §1 一览表 + §2/§3 GAP 章节，确认新约束不会 reintroduce 已修复的 critical gap（特别是任何 UNIQUE / PK 调整都要保留 user_id 分量）。
+
+### 8.5 与 PRD §9 验收的对应
+
+| audit 项 | PRD §9 验收对应 |
+|----------|---------------|
+| §2.1 reward_source_events UNIQUE | §9.7-2（cross-user 越权 / ID 枚举防护）|
+| §2.2 idempotency_keys PK | §9.7-2（idempotency key 跨用户不冲撞，per-user response cache 不串）|
+| §8.3 backup_snapshots PK | §9.5-6（猫猫/奖励状态延续 — 通过业务表 user_id 稳定 + backup 通道 per-user 共同兑现）+ §9.7-3（/me/backup/* 只返当前用户）|

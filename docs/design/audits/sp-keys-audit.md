@@ -1,10 +1,13 @@
 # Mobile Local Storage Audit — Phase 0 / 需求 23
 
-**Status:** complete (v1.1 — 修订计数 + token 改 secure storage + v13 migration 算法)
+**Status:** complete (v1.2 — Phase G 落地映射 + Phase C 实施全部 commit hash)
 **Scope:** `apps/mobile/lib/` 的 SharedPreferences keys + raw sqflite `LocalDatabase` + drift `AppDatabase` 表
-**Purpose:** 列出所有需在多用户化时改为 user-scoped 的本地存储，并解决 drift 与 raw sqflite 的同名表归属
-**关联:** [plan-023-用户系统与用户数据隔离-v2.md](../plan-023-用户系统与用户数据隔离-v2.md) §7
-**日期:** 2026-05-09 (v1.0) → 2026-05-09 (v1.1，吸收两份外部 review)
+**Purpose:** 列出所有需在多用户化时改为 user-scoped 的本地存储，并解决 drift 与 raw sqflite 的同名表归属；v1.2 补 Phase B/C 实施完成后的落地映射
+**关联:**
+- [plan-023-用户系统与用户数据隔离-v2.md](../plan-023-用户系统与用户数据隔离-v2.md) §7 / §14
+- [plan-023-C-mobile-local-partition-v2.md](../plan-023-C-mobile-local-partition-v2.md)
+- [prd-§9-acceptance-coverage.md](./prd-§9-acceptance-coverage.md)
+**日期:** 2026-05-09 (v1.0) → 2026-05-09 (v1.1，吸收两份外部 review) → 2026-05-11 (v1.2，Phase G 落地映射)
 
 ---
 
@@ -416,3 +419,61 @@ drift onUpgrade v12→v13 一段 migration 脚本，对 9 张表（§4.1 + §4.2
 ## 8. 输出
 
 本文档作为 Phase C 实施的 source of truth，PR 描述需 reference 本文件。Phase C1（raw sqflite + drift v13）和 Phase C3（SP key 命名空间）的实现细节按本文档展开。
+
+---
+
+## 9. v1.2 修订记录（2026-05-11，Phase G 收尾）
+
+### 9.1 §1 SP keys 命名空间迁移落地
+
+| Audit §1 子项 | 实施 commit | 文件:行 |
+|---------------|-------------|--------|
+| §1.1 用户数据 7 个 settings_* keys 改 per-user prefix | `d93279d`（C-β） | `apps/mobile/lib/core/storage/local_settings_service.dart:22` `_k(suffix) => 'u_${_userId}_$suffix'`；7 个 suffix 见 `:24-30`；`migratableKeySuffixes` 列表 `:35-43` |
+| §1.2 设备级数据（device_id 等）不动 | `9d992c8`（Phase B） | `auth_storage.dart` 把 device_id 维持设备级（无 user prefix）|
+| §1.3 鉴权专用 keys（v1.1 把 token 改到 secure storage） | `9d992c8`（Phase B） | `auth_storage.dart` 把 token 写入 `flutter_secure_storage`，其他 auth keys (`auth_current_user_id` / `auth_pending_*`) 仍 SharedPreferences |
+| §2.1 命名约定 `u_<userId>_<suffix>` | `d93279d`（C-β） | 见上 |
+| §2.2 迁移时机（SpMigrator） | `d93279d`（C-β） | `apps/mobile/lib/core/auth/sp_migrator.dart` + `auth_pending_sp_migration` flag (`auth_storage.dart:28`) |
+| §2.3 退出登录后的访问 | `9d992c8` + `1584440`（C-γ） | logout 不删 SP business keys，但切回 guest 上下文；access via `AuthScope.currentUserIdOf` 自动按当前 user 取值 |
+
+### 9.2 §3-4 移动端两套数据库重叠 + drift v13 落地
+
+| Audit §3-4 子项 | 实施 commit | 详情 |
+|----------------|-------------|------|
+| §3.3 决策：Option B（LocalDatabase 让出 schema 维护权，drift 接管） | `6d33cbe`（C-α） | LocalDatabase 不再 `_createTables`；drift schemaVersion = 13 (`app_database.dart:119`)|
+| §4.1 raw sqflite + drift 共享的 5 张 legacy 表 v13 加 user_id | `6d33cbe`（C-α） | `legacy_tables.dart`：`word_records` / `wordbook_progress` / `daily_checkins` / `custom_wordbooks` / `vocabulary_notebook` 全部 `text().named('user_id')()` NOT NULL |
+| §4.2 drift-only 用户行为表 v13 加 user_id | `6d33cbe`（C-α） | `card_states` / `review_logs` / `sessions` / `review_records` 共 4 张 |
+| §4.3 公共内容表不加 user_id | n/a（保持原样） | `cached_words` / `examples` / `audio_assets` / `wordbooks` 等 11 张未动 |
+| §4.4 总计 20 张表 | `6d33cbe` | 5 + 4 + 11 = 20，已对齐 |
+| §5.2 v13 onUpgrade migration 算法（PRAGMA table_info 条件式） | `6d33cbe` | drift onUpgrade 用 `PRAGMA table_info` 检查列是否已存在，避免 fresh install 与升级路径冲突 |
+| §5.3 失败处理 | `6d33cbe` + `3ce5ec0` | migration 幂等；PR-C-α tidy 补 backend e2e state-resilience |
+
+### 9.3 §6 与 plan v2 的差异落地
+
+| plan v2 / audit 差异点 | 实施 commit |
+|------------------------|-------------|
+| `local_guest_id` 双 ID 方案 → **拒绝**（v1.1 §5.4）；单 ID 方案落地 | `9d992c8`（Phase B 实现 server_guest_user_id + 离线占位 `pending-local-guest`） |
+| pending-local-guest → server_guest_user_id 同行替换 | `1584440`（C-γ）`pending_guest_migrator.dart` + `auth_pending_local_*_migration` 三个 flag |
+| 完全离线启动场景 | `1584440`（C-γ）AuthBootstrap 在无网时返回 `pending-local-guest`，DB 写入仍按当前 currentUserId 路由 |
+
+### 9.4 §7 启动顺序保证（plan v2 §7.4）落地
+
+| 步骤 | 实施 commit | 文件:行 |
+|------|-------------|--------|
+| 1. SharedPreferences.getInstance() | `9d992c8` | `main.dart` 启动早期 |
+| 2. AuthBootstrap.run() → 写 currentUserId | `9d992c8` + `1584440` | `auth_bootstrap.dart` |
+| 3. LocalDatabase.initialize() | C-α `6d33cbe` | `main.dart`，在 drift initialize 之前 |
+| 4. AppDatabase.initialize() → drift onUpgrade 读 currentUserId | `6d33cbe` | `app_database.dart` v13 onUpgrade |
+| 5. SP namespace migration | `d93279d`（C-β） | `SpMigrator.runIfNeeded`，gated on `auth_pending_sp_migration` flag |
+| 6. runApp() | 同上 | 完成所有 pre-runApp 工作后 |
+
+测试覆盖：`phase_c_e2e_test.dart:521` "integration — full Phase C handoff" 提供完整启动顺序的端到端用例。
+
+### 9.5 与 PRD §9 验收的对应
+
+| audit 项 | PRD §9 验收对应 |
+|----------|---------------|
+| §1.1 settings_* per-user prefix | §9.2 用户设置隔离 5 项 |
+| §4.1-4.2 drift v13 user_id partition | §9.3 学习数据隔离 + §9.4 FSRS 隔离 |
+| §5 v13 migration | §9.5 游客绑定（id 稳定 → backfill 后行不需迁移）|
+| §6 单 ID 决策 + pending-local-guest | §9.5-2~5（绑定不丢数据）+ §9.6 退出/切换 |
+| §7 启动顺序 | §9.6 (App 各页面不显示 A 数据 = 全部 init 步骤都在 currentUserId 已绑定后) |

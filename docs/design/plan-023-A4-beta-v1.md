@@ -1,16 +1,18 @@
 # Plan: 需求 23 Phase A4-β — 真正的多用户数据隔离
 
 **Plan Version:** v1
-**Status:** **已完成**（3 个 batch 全部 commit, 76/76 e2e pass）
+**Status:** **complete**（3 个 batch + β.9 hot-fix + β.5b/c 残留全部落地；79/79 → 101/101 e2e pass。Phase G 收尾时确认 PRD §9 全 ✅）
 **Branch:** `feature/user-auth`（同 α）
 **前序:** Phase A4-α（commit `1991be7`）
 **Batch commits:**
 - Batch 1 (β.1+β.2): `52c1a30` — withUser async-guard + 错误码统一 + backup partition (P0)
 - Batch 2 (β.3+β.4+β.5+β.6 部分): `3833c25` — dev-store 全部 *ByUser partition + idempotency Map + pg-persistence userId
-- Batch 3 (β.7+β.8): 待 commit — 6 个新 isolation e2e + 文档同步
+- Batch 3 (β.7+β.8): `78eec7c` — 6 个新 isolation e2e + 文档同步
+- β.9 hot-fix（评审采纳）: `a4b1627` — userDailyNewTarget partition + catProfile.nickname per-user + 3 个新 isolation e2e
+- β.5b/c + audit §6 残留: `34a67df` — lazy-load ensureUserLoaded + ownedItems/equipped/wallet *ByUser PG persist + 4 个 cross-user 404 e2e
 
-**关联:** [plan-023-用户系统与用户数据隔离-v2.md](plan-023-用户系统与用户数据隔离-v2.md) §1.1 / §5
-**日期:** 2026-05-09 (v1 起草) → 2026-05-10 (v1 落地完成)
+**关联:** [plan-023-用户系统与用户数据隔离-v2.md](plan-023-用户系统与用户数据隔离-v2.md) §1.1 / §5 / §14
+**日期:** 2026-05-09 (v1 起草) → 2026-05-10 (v1 落地完成) → 2026-05-11 (Phase G 闭环确认)
 
 ---
 
