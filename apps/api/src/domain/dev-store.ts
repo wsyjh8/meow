@@ -346,6 +346,15 @@ export class DevStore {
   private latestBackupByUser: Map<string, any> = new Map();
   private backupSnapshotByUser: Map<string, any> = new Map();
 
+  // 需求 23 Phase A4-β.5b: lazy-load tracking for non-DEV users.
+  // - loadedUsers: users whose PG slice has been hydrated into in-memory
+  //   buckets. AuthGuard calls ensureUserLoaded() on every request; this
+  //   set short-circuits repeat work.
+  // - loadingByUser: in-flight load promises, keyed by userId. Concurrent
+  //   first-requests for the same user share one PG round-trip.
+  private loadedUsers: Set<string> = new Set();
+  private loadingByUser: Map<string, Promise<void>> = new Map();
+
   // Prize pool: seeded inline — mirrors lottery_drops_config seed data
   private readonly lotteryDropsConfig: LotteryDropConfig[] = [
     { id: 1, prize_type: 'coins', prize_ref: '20',  weight: 60, is_active: true },
@@ -425,9 +434,9 @@ export class DevStore {
   async initAsync(): Promise<void> {
     const pg = this.persistence as any;
     if (typeof pg.loadAsync === 'function') {
-      // β.5 startup: load only DEV_USER_ID's slice. Other users' state
-      // restores on demand via lazyLoad (β.5b — currently a stub: data
-      // for non-dev users will only exist after their first request).
+      // Startup: cold-load only DEV_USER_ID's slice. Non-dev users' slices
+      // hydrate on demand via ensureUserLoaded (β.5b) when AuthGuard sees
+      // the first request from each user.
       const snapshot = await pg.loadAsync(DEV_USER_ID);
       if (snapshot) {
         this.hydrate(snapshot);
@@ -437,8 +446,174 @@ export class DevStore {
     // Load word pool from PG (or fallback)
     await this.loadWordPool();
     // Load user settings (daily new target) from PG for DEV_USER_ID.
-    // β.5b: lazy-load other users' settings on first access (TODO).
+    // ensureUserLoaded() hydrates other users' settings on first access.
     await this.loadUserSettings(DEV_USER_ID);
+    // β.5b: DEV_USER_ID is now warmed; mark loaded so ensureUserLoaded
+    // becomes a no-op for permissive mode's default user.
+    this.loadedUsers.add(DEV_USER_ID);
+  }
+
+  /**
+   * 需求 23 Phase A4-β.5b: lazy-load a user's PG slice into in-memory buckets.
+   *
+   * AuthGuard awaits this once per request — for users already in
+   * `loadedUsers` it's an O(1) Set check. The first time we see a user we
+   * trigger `pg.loadAsync(userId)` + `hydrateUserSlice` + `loadUserSettings`.
+   *
+   * Concurrent first-requests for the same user share a single load via
+   * the `loadingByUser` promise cache, preventing duplicate SQL round-trips.
+   *
+   * Failure semantics: errors propagate to AuthGuard. Caller decides
+   * whether to fail the request or fall through with an empty bucket.
+   * `loadingByUser` is cleared in `finally` so a retry can re-attempt.
+   *
+   * No-op for JSON / unit-test persistence backends (loadAsync absent) —
+   * the user just gets an empty bucket which is correct for fresh tests.
+   */
+  async ensureUserLoaded(userId: string): Promise<void> {
+    if (this.loadedUsers.has(userId)) return;
+
+    const inflight = this.loadingByUser.get(userId);
+    if (inflight) return inflight;
+
+    const pg = this.persistence as any;
+    if (typeof pg.loadAsync !== 'function') {
+      // JSON / unit-test backend — nothing to load, just remember we tried.
+      this.loadedUsers.add(userId);
+      return;
+    }
+
+    const promise = (async () => {
+      try {
+        const snapshot = await pg.loadAsync(userId);
+        if (snapshot) {
+          this.hydrateUserSlice(userId, snapshot);
+        }
+        // Also hydrate per-user settings (daily_new_target, pet nickname)
+        // from their own PG tables.
+        await this.loadUserSettings(userId);
+        this.loadedUsers.add(userId);
+      } finally {
+        this.loadingByUser.delete(userId);
+      }
+    })();
+
+    this.loadingByUser.set(userId, promise);
+    return promise;
+  }
+
+  /**
+   * Replace ONLY `userId`'s slice in every per-user bucket, leaving other
+   * users' data untouched. Used by ensureUserLoaded — distinct from full
+   * `hydrate()` which clears every bucket and rebuilds from a flat snapshot.
+   *
+   * The input snapshot is the output of `pg.loadAsync(userId)`, so every
+   * collection / record describes exactly this one user.
+   */
+  private hydrateUserSlice(userId: string, snapshot: DevStoreSnapshot): void {
+    const setArr = <T>(by: Map<string, T[]>, rows: T[] | undefined) => {
+      by.set(userId, rows ? [...rows] : []);
+    };
+    setArr(this.studyAttemptsByUser, snapshot.studyAttempts);
+    setArr(this.reviewGroupsByUser, snapshot.reviewGroups);
+    setArr(this.reviewAttemptsByUser, snapshot.reviewAttempts);
+    setArr(this.sourceEventsByUser, snapshot.sourceEvents);
+    setArr(this.rewardLedgerItemsByUser, snapshot.rewardLedgerItems);
+    setArr(this.settlementsByUser, snapshot.settlements);
+    setArr(this.sessionsByUser, snapshot.sessions);
+    setArr(this.checkInsByUser, snapshot.checkIns);
+    setArr(this.learningDaysByUser, snapshot.learningDays);
+    setArr(this.feedRecordsByUser, snapshot.feedRecords);
+    setArr(this.fishingAttemptsByUser, snapshot.fishingAttempts as any);
+    setArr(this.lotteryBoxesByUser, snapshot.lotteryBoxes as any);
+
+    // Streak — pg.loadAsync returns it under `streakRecord` for this user.
+    if (snapshot.streakRecord) {
+      this.streakRecordByUser.set(userId, snapshot.streakRecord as StreakRecord);
+    } else {
+      this.streakRecordByUser.delete(userId);
+    }
+
+    // todayStates Record<date, state> — single user's daily progress.
+    const todayInner = new Map<string, TodayState>();
+    if (snapshot.todayStates) {
+      for (const [date, v] of Object.entries(snapshot.todayStates)) {
+        todayInner.set(date, v as TodayState);
+      }
+    }
+    this.todayStatesByUser.set(userId, todayInner);
+
+    // Idempotency keys.
+    const idemInner = new Map<string, IdempotencyKeyRecord>();
+    if (snapshot.idempotencyKeys) {
+      for (const [k, v] of Object.entries(snapshot.idempotencyKeys)) {
+        idemInner.set(k, v as IdempotencyKeyRecord);
+      }
+    }
+    this.idempotencyKeysByUser.set(userId, idemInner);
+
+    // β.5c: prefer per-user maps from pg-persistence; fall back to legacy
+    // flat fields for DEV_USER_ID only (other users have empty defaults
+    // since their data wasn't being persisted pre-β.5c).
+    const owned = snapshot.ownedItemsByUser?.[userId];
+    this.ownedItemsByUser.set(userId, owned ? [...(owned as OwnedItem[])] : []);
+
+    const outfit = snapshot.equippedOutfitByUser?.[userId];
+    this.equippedOutfitByUser.set(userId, outfit ? { ...outfit } : {});
+
+    const room = snapshot.equippedRoomByUser?.[userId];
+    this.equippedRoomByUser.set(userId, room ? { ...room } : {});
+
+    const wallet = snapshot.walletByUser?.[userId];
+    this.coinsSpentByUser.set(userId, wallet?.coinsSpent ?? 0);
+    this.feedMoodAccumulatedByUser.set(userId, wallet?.feedMoodAccumulated ?? 0);
+    this.feedExpAccumulatedByUser.set(userId, wallet?.feedExpAccumulated ?? 0);
+    this.feedBondAccumulatedByUser.set(userId, wallet?.feedBondAccumulated ?? 0);
+
+    // Backup buckets (β.2 stored in PG via separate methods, but the JSON
+    // path may still carry them via snapshot — keep parity for completeness).
+    const latestBackup = snapshot.latestBackupsByUser?.[userId];
+    if (latestBackup) this.latestBackupByUser.set(userId, latestBackup);
+    const backupSnap = snapshot.backupSnapshotsByUser?.[userId];
+    if (backupSnap) this.backupSnapshotByUser.set(userId, backupSnap);
+  }
+
+  /**
+   * Audit §6 owner-check helper: throw NotFoundException if `itemId` is in
+   * another user's inventory bucket. Inventory items get a global catalog
+   * id (e.g. `cat_hat_red`), so we can't fall back to "not in catalog" =>
+   * 404 — a legitimate ID can still be cross-user-owned. β.5c/this PR
+   * routes equip/unequip through this guard, complementing the β.9.3
+   * source_ref_id / session_id checks.
+   *
+   * Unknown items (not owned by anyone) fall through silently so the
+   * existing ITEM_NOT_OWNED / ITEM_NOT_FOUND error codes still surface
+   * for legitimate user-facing UX (e.g. user tries to equip something
+   * they never bought).
+   */
+  private assertInventoryItemNotCrossUser(itemId: string): void {
+    for (const [uid, items] of this.ownedItemsByUser.entries()) {
+      if (uid === this.userId) continue;
+      if (items.some(o => o.item_id === itemId)) {
+        throw new NotFoundException(`Inventory item not found: ${itemId}`);
+      }
+    }
+  }
+
+  /**
+   * Audit §6 owner-check helper for session_id values that arrive on
+   * write paths (study attempts, review attempts, local-batch reviews).
+   * Reject only if the session_id is clearly owned by another user;
+   * unknown / test-style ids fall through so dev workflows keep working.
+   */
+  private assertSessionIdNotCrossUser(sessionId: string | undefined): void {
+    if (!sessionId) return;
+    for (const [uid, sessions] of this.sessionsByUser.entries()) {
+      if (uid === this.userId) continue;
+      if (sessions.some(s => s.session_id === sessionId)) {
+        throw new NotFoundException(`Session not found: ${sessionId}`);
+      }
+    }
   }
 
   /**
@@ -490,7 +665,45 @@ export class DevStore {
     // Single-value per-user fields collapse to a primary-user view for the
     // legacy flat snapshot fields (backward compat). The new *ByUser
     // records are the truth; legacy fields kept for old hydrate paths.
+    //
+    // β.5c: ownedItems / equipped* / wallet now ALSO flatten across all
+    // users into *ByUser records. pg-persistence saveAsync(snapshot, userId)
+    // reads from the *ByUser maps for non-DEV users so their inventory /
+    // equipment / wallet survives server restart.
     const primary = DEV_USER_ID;
+    const equippedOutfitByUserObj: Record<string, Record<string, string | null>> = {};
+    for (const [uid, slots] of this.equippedOutfitByUser.entries()) {
+      equippedOutfitByUserObj[uid] = { ...slots };
+    }
+    const equippedRoomByUserObj: Record<string, Record<string, string | null>> = {};
+    for (const [uid, slots] of this.equippedRoomByUser.entries()) {
+      equippedRoomByUserObj[uid] = { ...slots };
+    }
+    const ownedItemsByUserObj: Record<string, OwnedItem[]> = {};
+    for (const [uid, items] of this.ownedItemsByUser.entries()) {
+      ownedItemsByUserObj[uid] = [...items];
+    }
+    const walletByUserObj: Record<string, {
+      coinsSpent: number;
+      feedMoodAccumulated: number;
+      feedExpAccumulated: number;
+      feedBondAccumulated: number;
+    }> = {};
+    const walletUserIds = new Set<string>([
+      ...this.coinsSpentByUser.keys(),
+      ...this.feedMoodAccumulatedByUser.keys(),
+      ...this.feedExpAccumulatedByUser.keys(),
+      ...this.feedBondAccumulatedByUser.keys(),
+    ]);
+    for (const uid of walletUserIds) {
+      walletByUserObj[uid] = {
+        coinsSpent: this.coinsSpentByUser.get(uid) ?? 0,
+        feedMoodAccumulated: this.feedMoodAccumulatedByUser.get(uid) ?? 0,
+        feedExpAccumulated: this.feedExpAccumulatedByUser.get(uid) ?? 0,
+        feedBondAccumulated: this.feedBondAccumulatedByUser.get(uid) ?? 0,
+      };
+    }
+
     return {
       studyAttempts: flat(this.studyAttemptsByUser),
       reviewGroups: flat(this.reviewGroupsByUser),
@@ -518,6 +731,11 @@ export class DevStore {
       fishingTasks: fishingTasksObj,
       fishingAttempts: flat(this.fishingAttemptsByUser),
       lotteryBoxes: flat(this.lotteryBoxesByUser),
+      // β.5c: per-user inventory / equipment / wallet.
+      ownedItemsByUser: ownedItemsByUserObj,
+      equippedOutfitByUser: equippedOutfitByUserObj,
+      equippedRoomByUser: equippedRoomByUserObj,
+      walletByUser: walletByUserObj,
     };
   }
 
@@ -555,35 +773,60 @@ export class DevStore {
     bucketize(snapshot.fishingAttempts as any ?? [], this.fishingAttemptsByUser);
     bucketize(snapshot.lotteryBoxes as any ?? [], this.lotteryBoxesByUser);
 
-    // ownedItems has no user_id field — assign all to DEV_USER_ID for now
-    // (β.3 limitation noted in plan; type doesn't carry owner). PG seed
-    // does have user_id on inventory_items rows, so this matters mostly
-    // for json-mode tests where multi-user data might exist.
+    // β.5c: prefer per-user maps; fall back to legacy single-slot fields
+    // (those migrate into the DEV_USER_ID bucket for backward compat).
+    const primary = DEV_USER_ID;
+
     this.ownedItemsByUser.clear();
-    if (snapshot.ownedItems && snapshot.ownedItems.length > 0) {
-      this.ownedItemsByUser.set(DEV_USER_ID, [...snapshot.ownedItems]);
+    if (snapshot.ownedItemsByUser) {
+      for (const [uid, items] of Object.entries(snapshot.ownedItemsByUser)) {
+        this.ownedItemsByUser.set(uid, [...(items as OwnedItem[])]);
+      }
+    } else if (snapshot.ownedItems && snapshot.ownedItems.length > 0) {
+      this.ownedItemsByUser.set(primary, [...snapshot.ownedItems]);
     }
 
-    // Single-value per-user fields hydrate to DEV_USER_ID bucket
-    // (legacy snapshot has only one user's view).
-    const primary = DEV_USER_ID;
     this.streakRecordByUser.clear();
     if (snapshot.streakRecord) {
       const sr = snapshot.streakRecord as StreakRecord;
       this.streakRecordByUser.set(sr.user_id ?? primary, sr);
     }
+
     this.feedMoodAccumulatedByUser.clear();
-    this.feedMoodAccumulatedByUser.set(primary, snapshot.feedMoodAccumulated ?? 0);
     this.feedExpAccumulatedByUser.clear();
-    this.feedExpAccumulatedByUser.set(primary, snapshot.feedExpAccumulated ?? 0);
     this.feedBondAccumulatedByUser.clear();
-    this.feedBondAccumulatedByUser.set(primary, snapshot.feedBondAccumulated ?? 0);
     this.coinsSpentByUser.clear();
-    this.coinsSpentByUser.set(primary, snapshot.coinsSpent ?? 0);
+    if (snapshot.walletByUser) {
+      for (const [uid, w] of Object.entries(snapshot.walletByUser)) {
+        this.coinsSpentByUser.set(uid, w.coinsSpent ?? 0);
+        this.feedMoodAccumulatedByUser.set(uid, w.feedMoodAccumulated ?? 0);
+        this.feedExpAccumulatedByUser.set(uid, w.feedExpAccumulated ?? 0);
+        this.feedBondAccumulatedByUser.set(uid, w.feedBondAccumulated ?? 0);
+      }
+    } else {
+      this.coinsSpentByUser.set(primary, snapshot.coinsSpent ?? 0);
+      this.feedMoodAccumulatedByUser.set(primary, snapshot.feedMoodAccumulated ?? 0);
+      this.feedExpAccumulatedByUser.set(primary, snapshot.feedExpAccumulated ?? 0);
+      this.feedBondAccumulatedByUser.set(primary, snapshot.feedBondAccumulated ?? 0);
+    }
+
     this.equippedOutfitByUser.clear();
-    this.equippedOutfitByUser.set(primary, snapshot.equippedOutfit ?? {});
+    if (snapshot.equippedOutfitByUser) {
+      for (const [uid, slots] of Object.entries(snapshot.equippedOutfitByUser)) {
+        this.equippedOutfitByUser.set(uid, { ...slots });
+      }
+    } else {
+      this.equippedOutfitByUser.set(primary, snapshot.equippedOutfit ?? {});
+    }
+
     this.equippedRoomByUser.clear();
-    this.equippedRoomByUser.set(primary, snapshot.equippedRoom ?? {});
+    if (snapshot.equippedRoomByUser) {
+      for (const [uid, slots] of Object.entries(snapshot.equippedRoomByUser)) {
+        this.equippedRoomByUser.set(uid, { ...slots });
+      }
+    } else {
+      this.equippedRoomByUser.set(primary, snapshot.equippedRoom ?? {});
+    }
 
     // todayStates: snapshot uses date-only keys (β.3 single-user persistence
     // limit; β.5 will introduce per-user persistence). Each value's
@@ -1398,6 +1641,14 @@ export class DevStore {
   ): { success: boolean; alreadyExists: boolean; localGroupId: string } {
     const localGroupId = `local_batch_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 
+    // β.5c/audit §6 hot-fix: reject if any word_attempt carries a session_id
+    // that belongs to another user. submitStudyAttempt and submitReviewAttempt
+    // already enforce this on their session_id arg; local-batch was the
+    // remaining gap audit §6 line 230 flagged.
+    for (const wa of wordAttempts) {
+      this.assertSessionIdNotCrossUser(wa.session_id);
+    }
+
     if (idempotencyKey) {
       const existing = this.getIdempotencyKey(idempotencyKey);
       if (existing) {
@@ -1596,6 +1847,10 @@ export class DevStore {
     // β.2: backup buckets
     this.latestBackupByUser.clear();
     this.backupSnapshotByUser.clear();
+    // β.5b: forget what we've already hydrated so the next request
+    // triggers a fresh load.
+    this.loadedUsers.clear();
+    this.loadingByUser.clear();
     // Phase 4: clear persistence
     this.persistence.clear();
   }
@@ -2736,6 +2991,12 @@ export class DevStore {
     itemType: string | null;
     alreadyExists: boolean;
   } {
+    // β.5c/audit §6 hot-fix: cross-user owner check. Reject only when the
+    // item is clearly owned by ANOTHER user — that's the ID-enumeration
+    // attack the audit prohibits. "Never bought by anyone" still resolves
+    // to ITEM_NOT_OWNED below (legitimate UX response).
+    this.assertInventoryItemNotCrossUser(itemId);
+
     // 1. Idempotency
     const existingRecord = this.getIdempotencyKey(idempotencyKey);
     if (existingRecord) {
@@ -2802,6 +3063,9 @@ export class DevStore {
     errorCode: EquipErrorCode | null;
     alreadyExists: boolean;
   } {
+    // β.5c/audit §6 hot-fix: cross-user owner check (same rule as equipItem).
+    this.assertInventoryItemNotCrossUser(itemId);
+
     const existingRecord = this.getIdempotencyKey(idempotencyKey);
     if (existingRecord) {
       return { status: 'succeeded', errorCode: null, alreadyExists: true };

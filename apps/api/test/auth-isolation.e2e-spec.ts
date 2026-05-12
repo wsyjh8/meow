@@ -44,6 +44,7 @@ process.env.AUTH_ENFORCE = 'true';
 
 import { AppModule } from '../src/app.module';
 import { getPool } from '../src/infrastructure/postgres/client';
+import { devStore } from '../src/domain/dev-store';
 
 const hasPg = !!process.env.DATABASE_URL;
 const describeIfPg = hasPg ? describe : describe.skip;
@@ -89,7 +90,21 @@ describeIfPg('Cross-user isolation (AUTH_ENFORCE=true, audit §6)', () => {
     if (createdUserIds.length > 0) {
       // Clean up FK rows first then users
       const pool = getPool();
-      // Order: child tables first (FK targets last)
+      // review_group_items has no user_id column — it links to review_groups
+      // via review_group_id. Must DELETE these children BEFORE we DELETE
+      // their parent review_groups rows; otherwise the parent DELETE
+      // FK-violates silently (caught below) and the final users DELETE
+      // fails with "review_groups_user_id_fkey".
+      await pool.query(
+        `DELETE FROM review_group_items
+           WHERE review_group_id IN (
+             SELECT id FROM review_groups WHERE user_id = ANY($1::text[])
+           )`,
+        [createdUserIds],
+      ).catch(() => {});
+      // Order: child tables first (FK targets last). backup_snapshots added
+      // for Phase D (PR-D-β) — its FK to users would also block the user
+      // delete otherwise.
       const tables = [
         'review_attempts', 'review_groups', 'study_attempts',
         'settlements', 'reward_ledger', 'reward_source_events',
@@ -98,6 +113,7 @@ describeIfPg('Cross-user isolation (AUTH_ENFORCE=true, audit §6)', () => {
         'fishing_attempts', 'daily_fishing_tasks', 'check_in_records',
         'streak_records', 'learning_day_facts', 'daily_goal_progress',
         'secondary_wallets', 'pet_profiles', 'user_book_settings',
+        'backup_snapshots',
       ];
       for (const t of tables) {
         await pool.query(
@@ -111,7 +127,7 @@ describeIfPg('Cross-user isolation (AUTH_ENFORCE=true, audit §6)', () => {
       );
     }
     await app.close();
-  });
+  }, 60_000);
 
   it('rejects requests with no token (AUTH_ENFORCE=true)', async () => {
     const r = await request(app.getHttpServer()).get('/api/v1/me/today');
@@ -466,10 +482,10 @@ describeIfPg('Cross-user isolation (AUTH_ENFORCE=true, audit §6)', () => {
         await request(app.getHttpServer())
           .post('/api/v1/settlements/learning-rounds')
           .set('Authorization', `Bearer ${tokenA}`)
-          .set('X-Idempotency-Key', `iso-invA-${i}-${Date.now()}-${Math.random()}`)
+          .set('X-Idempotency-Key', `iso-invA-${i}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`)
           .send({
             source_event_type: 'effective_new_word',
-            source_ref_id: `iso-invA-ref-${i}-${Date.now()}-${Math.random()}`,
+            source_ref_id: `iso-invA-ref-${i}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
           });
       }
     }
@@ -477,7 +493,7 @@ describeIfPg('Cross-user isolation (AUTH_ENFORCE=true, audit §6)', () => {
     const purchase = await request(app.getHttpServer())
       .post('/api/v1/shop/purchases')
       .set('Authorization', `Bearer ${tokenA}`)
-      .set('X-Idempotency-Key', `iso-invA-purchase-${Date.now()}-${Math.random()}`)
+      .set('X-Idempotency-Key', `iso-invA-purchase-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`)
       .send({ item_id: 'cat_hat_red' });
     expect(purchase.status).toBe(200);
     // Accept either "succeeded" or "failed:ALREADY_OWNED" — if test runs
@@ -668,6 +684,327 @@ describeIfPg('Cross-user isolation (AUTH_ENFORCE=true, audit §6)', () => {
       .send({
         task_id: aTaskId,
         chosen_word_id: 'abandon',
+      });
+    expect(cross.status).toBe(404);
+  });
+
+  // ========== β.5b — lazy-load non-DEV users from PG ==========
+
+  // Pre-β.5b, dev-store startup only hydrated DEV_USER_ID's bucket; every
+  // other user's slice was empty after server restart even though PG still
+  // had the truth. ensureUserLoaded() — wired into AuthGuard — fixes that
+  // by hydrating each user on their first protected request.
+  //
+  // device_id values use only [A-Za-z0-9_-] per GuestDto.@Matches regex —
+  // Math.random() produces a `0.123` string with a `.` which fails validation.
+  it('β.5b: ensureUserLoaded warms a fresh user from PG on first request', async () => {
+    // Create user C — /auth/guest doesn't pass through AuthGuard so the
+    // dev-store cache is cold for C at this point.
+    const c = await request(app.getHttpServer())
+      .post('/api/v1/auth/guest')
+      .send({ device_id: `iso-C-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}` });
+    expect(c.status).toBe(200);
+    const tokenC = c.body.token;
+    const userCId = c.body.user.id;
+    createdUserIds.push(userCId);
+
+    // Seed PG wallet for C bypassing the API.
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO secondary_wallets
+         (user_id, coins_spent, feed_mood_accumulated,
+          feed_exp_accumulated, feed_bond_accumulated, updated_at)
+       VALUES ($1, 0, 7, 4, 3, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         feed_mood_accumulated = 7,
+         feed_exp_accumulated  = 4,
+         feed_bond_accumulated = 3,
+         updated_at = NOW()`,
+      [userCId],
+    );
+
+    // First protected request → AuthGuard awaits ensureUserLoaded(C).
+    const summary = await request(app.getHttpServer())
+      .get('/api/v1/me/secondary-summary')
+      .set('Authorization', `Bearer ${tokenC}`);
+    expect(summary.status).toBe(200);
+    // cat_summary.mood = base(60) + treats(0)*5 + feedMoodAccumulated(7) = 67
+    // cat_summary.bond = reward_exp(0) + feedBondAccumulated(3) = 3
+    expect(summary.body.cat_summary.mood).toBe(67);
+    expect(summary.body.cat_summary.bond).toBe(3);
+  });
+
+  it('β.5b: concurrent first-requests for a fresh user share one load', async () => {
+    const d = await request(app.getHttpServer())
+      .post('/api/v1/auth/guest')
+      .send({ device_id: `iso-D-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}` });
+    expect(d.status).toBe(200);
+    const tokenD = d.body.token;
+    const userDId = d.body.user.id;
+    createdUserIds.push(userDId);
+
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO secondary_wallets
+         (user_id, coins_spent, feed_mood_accumulated,
+          feed_exp_accumulated, feed_bond_accumulated, updated_at)
+       VALUES ($1, 0, 12, 8, 5, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         feed_mood_accumulated = 12,
+         feed_exp_accumulated  = 8,
+         feed_bond_accumulated = 5,
+         updated_at = NOW()`,
+      [userDId],
+    );
+
+    // 5 parallel requests — only the first triggers a PG load, the other
+    // four share its promise via loadingByUser dedup. We can't directly
+    // count loadAsync calls in e2e, but if the dedup were broken these
+    // would race and final state could be inconsistent — assert all five
+    // see identical hydrated values.
+    const responses = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        request(app.getHttpServer())
+          .get('/api/v1/me/secondary-summary')
+          .set('Authorization', `Bearer ${tokenD}`),
+      ),
+    );
+    for (const r of responses) {
+      expect(r.status).toBe(200);
+      expect(r.body.cat_summary.mood).toBe(72); // 60 + 12
+      expect(r.body.cat_summary.bond).toBe(5);
+    }
+  });
+
+  // ========== β.5c — per-user inventory / equipment / wallet PG persistence ==========
+
+  // Pre-β.5c, pg-persistence only wrote inventory_items / equipment_slots /
+  // secondary_wallets for DEV_USER_ID. Non-dev users' purchases / equip /
+  // wallet mutations were lost on restart even though the other entity
+  // tables (study_attempts etc.) were per-user.
+  it('β.5c: User A\'s purchase persists to PG inventory_items per-user', async () => {
+    // Top up A's coins only as needed (cat_bow_blue costs 80; settlements
+    // give 2 each). Most prior tests already gave A coins — read first to
+    // size the top-up.
+    const before = await request(app.getHttpServer())
+      .get('/api/v1/me/secondary-summary')
+      .set('Authorization', `Bearer ${tokenA}`);
+    const coinsNeeded = Math.max(0, 100 - (before.body.coins ?? 0));
+    const loops = Math.ceil(coinsNeeded / 2);
+    for (let i = 0; i < loops; i++) {
+      await request(app.getHttpServer())
+        .post('/api/v1/settlements/learning-rounds')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .set('X-Idempotency-Key', `iso-b5c-coins-${i}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`)
+        .send({
+          source_event_type: 'effective_new_word',
+          source_ref_id: `iso-b5c-coins-ref-${i}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
+        });
+    }
+
+    const purchase = await request(app.getHttpServer())
+      .post('/api/v1/shop/purchases')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Idempotency-Key', `iso-b5c-buy-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`)
+      .send({ item_id: 'cat_bow_blue' });
+    expect(purchase.status).toBe(200);
+    // Either succeeds (this run) or fails-with-ALREADY_OWNED (retry).
+    // Both leave the PG row in place — assert that, not the response shape.
+    const ps = purchase.body.purchase_result.status;
+    expect(['succeeded', 'failed']).toContain(ps);
+    if (ps === 'failed') {
+      expect(purchase.body.purchase_result.error_code).toBe('ITEM_ALREADY_OWNED');
+    }
+
+    // PG truth: A owns cat_bow_blue.
+    const pool = getPool();
+    const r = await pool.query(
+      `SELECT item_id FROM inventory_items WHERE user_id = $1 AND item_id = 'cat_bow_blue'`,
+      [userAId],
+    );
+    expect(r.rows.length).toBe(1);
+
+    // Restart-simulation: loadAsync(A) returns the item under A's bucket.
+    const snapshot = await (devStore.backingPersistence as any).loadAsync(userAId);
+    expect(snapshot.ownedItemsByUser?.[userAId]?.some(
+      (o: any) => o.item_id === 'cat_bow_blue',
+    )).toBe(true);
+  }, 30_000);
+
+  it('β.5c: User A\'s equip persists to PG equipment_slots; loadAsync reflects it', async () => {
+    // cat_bow_blue is in A's inventory from the previous test (either freshly
+    // purchased or already-owned). Equip — idempotent on success.
+    const equip = await request(app.getHttpServer())
+      .post('/api/v1/me/equipment/equip')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Idempotency-Key', `iso-b5c-equip-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`)
+      .send({ item_id: 'cat_bow_blue' });
+    expect(equip.status).toBe(200);
+    expect(equip.body.equip_result.status).toBe('succeeded');
+
+    // PG truth.
+    const pool = getPool();
+    const r = await pool.query(
+      `SELECT item_id FROM equipment_slots
+         WHERE user_id = $1 AND item_type = 'outfit' AND slot = 'neck'`,
+      [userAId],
+    );
+    expect(r.rows[0]?.item_id).toBe('cat_bow_blue');
+
+    // Restart-simulation.
+    const snapshot = await (devStore.backingPersistence as any).loadAsync(userAId);
+    expect(snapshot.equippedOutfitByUser?.[userAId]?.neck).toBe('cat_bow_blue');
+  }, 30_000);
+
+  it('β.5c: User A\'s wallet (coins_spent) persists to PG secondary_wallets per-user', async () => {
+    const pool = getPool();
+    const r = await pool.query(
+      `SELECT coins_spent FROM secondary_wallets WHERE user_id = $1`,
+      [userAId],
+    );
+    // After A's purchase above, coins_spent > 0.
+    expect(r.rows.length).toBe(1);
+    expect(r.rows[0].coins_spent).toBeGreaterThan(0);
+
+    const snapshot = await (devStore.backingPersistence as any).loadAsync(userAId);
+    expect(snapshot.walletByUser?.[userAId]?.coinsSpent).toBeGreaterThan(0);
+  }, 30_000);
+
+  it('β.5c: a user with no purchases gets an empty inventory bucket on loadAsync', async () => {
+    // Fresh guest, no API activity → loadAsync should return empty *ByUser
+    // slices for this user (proves we don't accidentally leak someone else's
+    // inventory rows).
+    const e = await request(app.getHttpServer())
+      .post('/api/v1/auth/guest')
+      .send({ device_id: `iso-E-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}` });
+    expect(e.status).toBe(200);
+    const userEId = e.body.user.id;
+    createdUserIds.push(userEId);
+
+    const snapshot = await (devStore.backingPersistence as any).loadAsync(userEId);
+    expect(snapshot).toBeTruthy();
+    expect(snapshot.ownedItemsByUser?.[userEId] ?? []).toHaveLength(0);
+    expect(snapshot.equippedOutfitByUser?.[userEId] ?? {}).toEqual({});
+    expect(snapshot.equippedRoomByUser?.[userEId] ?? {}).toEqual({});
+  }, 30_000);
+
+  // ========== Audit §6 — cross-user owner-check residuals (β.5c hardening) ==========
+
+  // Pre-this-PR equipItem returned `{status: 'failed', errorCode: 'ITEM_NOT_OWNED'}`
+  // (HTTP 200) for any unowned item, conflating "you don't own it" with
+  // "another user owns it". Audit §6 mandates 404 for the latter so
+  // entity-id enumeration leaks no information. dev-store now throws
+  // NotFoundException when the target item_id is in another user's
+  // ownedItemsByUser bucket.
+  it('audit §6: User B cannot equip User A\'s item → 404', async () => {
+    // Re-use cat_bow_blue from the β.5c purchase test — A already owns it.
+    // (The β.5c test runs first in declaration order; if the user runs this
+    //  test in isolation we top-up + buy again as a safety net.)
+    const aInv = await request(app.getHttpServer())
+      .get('/api/v1/me/inventory')
+      .set('Authorization', `Bearer ${tokenA}`);
+    const alreadyOwned = aInv.body.owned_items?.some(
+      (o: any) => o.item_id === 'cat_bow_blue',
+    );
+    if (!alreadyOwned) {
+      const before = await request(app.getHttpServer())
+        .get('/api/v1/me/secondary-summary')
+        .set('Authorization', `Bearer ${tokenA}`);
+      const needed = Math.max(0, 100 - (before.body.coins ?? 0));
+      const loops = Math.ceil(needed / 2);
+      for (let i = 0; i < loops; i++) {
+        await request(app.getHttpServer())
+          .post('/api/v1/settlements/learning-rounds')
+          .set('Authorization', `Bearer ${tokenA}`)
+          .set('X-Idempotency-Key', `iso-a6-equip-coins-${i}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`)
+          .send({
+            source_event_type: 'effective_new_word',
+            source_ref_id: `iso-a6-equip-ref-${i}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
+          });
+      }
+      await request(app.getHttpServer())
+        .post('/api/v1/shop/purchases')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .set('X-Idempotency-Key', `iso-a6-equip-buy-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`)
+        .send({ item_id: 'cat_bow_blue' });
+    }
+
+    // B tries to equip A's owned item → 404.
+    const cross = await request(app.getHttpServer())
+      .post('/api/v1/me/equipment/equip')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Idempotency-Key', `iso-a6-equip-cross-${Date.now()}`)
+      .send({ item_id: 'cat_bow_blue' });
+    expect(cross.status).toBe(404);
+  }, 30_000);
+
+  it('audit §6: User B cannot unequip User A\'s item → 404', async () => {
+    // A owns cat_bow_blue from prior test in this suite.
+    const cross = await request(app.getHttpServer())
+      .post('/api/v1/me/equipment/unequip')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Idempotency-Key', `iso-a6-unequip-cross-${Date.now()}`)
+      .send({ item_id: 'cat_bow_blue' });
+    expect(cross.status).toBe(404);
+  });
+
+  // audit §6 line 232 lists `POST /me/feed` against `inventory_items.user_id`,
+  // but the actual feedCat API takes `{feed_item_type: 'fish_treat'}` — an
+  // enum, not an inventory-item id. There is no cross-user attack vector
+  // through the request payload itself; the only isolation concern is that
+  // B's feedCat must not affect A's wallet (which is per-user partitioned).
+  // This test verifies the wallet partition end-to-end via the feed flow.
+  it('audit §6: feedCat is per-user partitioned (B\'s feed never affects A\'s wallet)', async () => {
+    // Snapshot A's wallet BEFORE B's feed attempt.
+    const aBefore = await request(app.getHttpServer())
+      .get('/api/v1/me/secondary-summary')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(aBefore.status).toBe(200);
+    const aMoodBefore = aBefore.body.cat_summary.mood;
+    const aBondBefore = aBefore.body.cat_summary.bond;
+    const aExpBefore = aBefore.body.cat_summary.level;
+
+    // B feeds — most likely insufficient_resource for fresh guest B; the
+    // status doesn't matter for the partition assertion. What matters: A's
+    // wallet stays identical regardless of what B did.
+    await request(app.getHttpServer())
+      .post('/api/v1/me/feed')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Idempotency-Key', `iso-a6-feed-cross-${Date.now()}`)
+      .send({ feed_item_type: 'fish_treat' });
+
+    const aAfter = await request(app.getHttpServer())
+      .get('/api/v1/me/secondary-summary')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(aAfter.status).toBe(200);
+    expect(aAfter.body.cat_summary.mood).toBe(aMoodBefore);
+    expect(aAfter.body.cat_summary.bond).toBe(aBondBefore);
+    expect(aAfter.body.cat_summary.level).toBe(aExpBefore);
+  });
+
+  it('audit §6: User B cannot submit local-batch review with A\'s session_id → 404', async () => {
+    // A starts a session — its id is now in A's sessionsByUser bucket.
+    const start = await request(app.getHttpServer())
+      .post('/api/v1/sessions')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Idempotency-Key', `iso-a6-batch-sess-${Date.now()}`)
+      .send({ session_minutes_target: 15 });
+    expect(start.status).toBe(200);
+    const aSessionId = start.body.session_id;
+    expect(aSessionId).toBeTruthy();
+
+    // B posts a local-batch where one word_attempt carries A's session_id.
+    // submitLocalReviewBatch now rejects via assertSessionIdNotCrossUser
+    // — the only audit §6 owner-check the β.7/9 batches missed for this
+    // path. ReviewAttemptsController's NotFoundException → HTTP 404.
+    const cross = await request(app.getHttpServer())
+      .post('/api/v1/review-attempts/local-batch')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Idempotency-Key', `iso-a6-batch-cross-${Date.now()}`)
+      .send({
+        word_attempts: [
+          { word_id: 'abandon', action_result: 'correct', session_id: aSessionId },
+        ],
       });
     expect(cross.status).toBe(404);
   });

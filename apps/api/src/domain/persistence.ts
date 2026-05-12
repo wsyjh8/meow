@@ -124,6 +124,32 @@ export interface DevStoreSnapshot {
   fishingTasks?: Record<string, any>;
   fishingAttempts?: any[];
   lotteryBoxes?: any[];
+
+  // ============================================================
+  // 需求 23 Phase A4-β.5c: per-user inventory / equipment / wallet.
+  //
+  // Pre-β.5c the snapshot kept these as single-user flat fields
+  // (ownedItems / equippedOutfit / equippedRoom / coinsSpent /
+  //  feed*Accumulated), so pg-persistence saveAsync could only
+  // persist them for DEV_USER_ID — every other user's purchase /
+  // equip / wallet mutations were lost on server restart.
+  //
+  // β.5c: serialize flattens across all in-memory user buckets into
+  // these *ByUser maps. pg-persistence iterates the map for the
+  // current `saveAsync(snapshot, userId)` call. hydrate / ensureUserLoaded
+  // prefer the new fields; the legacy single-slot fields remain for
+  // backward-compat hydration of pre-β.5c JSON snapshots (still
+  // migrated into the DEV_USER_ID bucket).
+  // ============================================================
+  ownedItemsByUser?: Record<string, any[]>;
+  equippedOutfitByUser?: Record<string, Record<string, string | null>>;
+  equippedRoomByUser?: Record<string, Record<string, string | null>>;
+  walletByUser?: Record<string, {
+    coinsSpent: number;
+    feedMoodAccumulated: number;
+    feedExpAccumulated: number;
+    feedBondAccumulated: number;
+  }>;
 }
 
 const DEFAULT_PERSIST_DIR = path.resolve(__dirname, '..', '..', 'data');

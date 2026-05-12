@@ -23,6 +23,7 @@ import {
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { AccountType } from './auth.types';
+import { devStore } from '../domain/dev-store';
 
 export interface RequestUser {
   id: string;
@@ -41,32 +42,45 @@ function extractBearer(req: Request): string | null {
 export class AuthGuard implements CanActivate {
   constructor(private readonly authService: AuthService) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<Request>();
     const enforce = process.env.AUTH_ENFORCE === 'true';
     const token = extractBearer(req);
 
+    let user: RequestUser | null = null;
+
     if (token) {
       try {
         const payload = this.authService.verifyToken(token);
-        (req as any).user = { id: payload.sub, type: payload.type } as RequestUser;
-        return true;
+        user = { id: payload.sub, type: payload.type };
       } catch (err) {
         if (enforce) throw err;
         // permissive: bad token → fall back to dev user
       }
     }
 
-    if (enforce) {
-      throw new UnauthorizedException({
-        error_code: 'UNAUTHENTICATED',
-        message: 'Missing or invalid Authorization header',
-      });
+    if (!user) {
+      if (enforce) {
+        throw new UnauthorizedException({
+          error_code: 'UNAUTHENTICATED',
+          message: 'Missing or invalid Authorization header',
+        });
+      }
+      // Permissive fallback (Phase A~D)
+      const devUserId = process.env.DEV_FALLBACK_USER_ID || 'dev-user-001';
+      user = { id: devUserId, type: 'registered' };
     }
 
-    // Permissive fallback (Phase A~D)
-    const devUserId = process.env.DEV_FALLBACK_USER_ID || 'dev-user-001';
-    (req as any).user = { id: devUserId, type: 'registered' } as RequestUser;
+    (req as any).user = user;
+
+    // 需求 23 Phase A4-β.5b: warm this user's dev-store slice from PG so
+    // downstream controllers see their durable state after server restart.
+    // The very first request from a non-DEV user pays one PG round-trip;
+    // subsequent requests hit the in-memory cache. Concurrent first calls
+    // for the same user share a single in-flight load (see dev-store
+    // `loadingByUser` map).
+    await devStore.ensureUserLoaded(user.id);
+
     return true;
   }
 }

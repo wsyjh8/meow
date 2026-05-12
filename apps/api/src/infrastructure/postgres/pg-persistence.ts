@@ -17,13 +17,15 @@ import type { IDevStorePersistence, DevStoreSnapshot } from '../../domain/persis
 // user dev mode (AUTH_ENFORCE=false). When AUTH_ENFORCE=true callers pass
 // the actual userId so that each user's slice is loaded/saved independently.
 //
-// β.5 limitation: lazy-load on first withUser of an unseen user is NOT
-// implemented — startup loadAsync only restores DEV_USER_ID's bucket.
-// Other users' state lives in memory after their first request and gets
-// persisted via saveAsync(snapshot, userId). After server restart, those
-// users start with an empty in-memory bucket; PG row truth still per-user
-// correct, but in-memory cache must be re-warmed. Full lazy-load is
-// β.5b / Phase E1 切流前置 work.
+// β.5b (now landed): dev-store exposes `ensureUserLoaded(userId)`; AuthGuard
+// awaits it so the first request from any user hydrates their bucket from
+// PG before downstream controllers run. Subsequent requests hit the cache.
+//
+// β.5c (now landed): inventory / equipment / wallet are persisted PER-USER
+// — saveAsync iterates the snapshot's *ByUser maps (ownedItemsByUser,
+// equippedOutfitByUser, equippedRoomByUser, walletByUser) for the current
+// userId, instead of the old `if (userId === DEV_USER_ID)` gate which lost
+// non-dev users' purchases / equip / wallet mutations on server restart.
 const DEV_USER_ID = 'dev-user-001';
 
 export class PgDevStorePersistence implements IDevStorePersistence {
@@ -139,6 +141,38 @@ export class PgDevStorePersistence implements IDevStorePersistence {
         else equippedRoom[eq.slot] = eq.item_id;
       }
 
+      // β.5c: also populate the per-user maps so non-DEV users hydrate
+      // their own inventory / equipment / wallet on lazy-load (β.5b).
+      const ownedItemsByUser: Record<string, any[]> = {};
+      const ownedItemsRows = ownedItemsR.rows.map((r: any) => ({
+        item_id: r.item_id, item_type: r.item_type, slot: r.slot,
+        owned_at: r.owned_at?.toISOString?.() || r.owned_at || undefined,
+        equipped: r.equipped,
+      }));
+      if (ownedItemsRows.length > 0) {
+        ownedItemsByUser[userId] = ownedItemsRows;
+      }
+      const equippedOutfitByUser: Record<string, Record<string, string | null>> = {};
+      const equippedRoomByUser: Record<string, Record<string, string | null>> = {};
+      if (Object.keys(equippedOutfit).length > 0) {
+        equippedOutfitByUser[userId] = { ...equippedOutfit };
+      }
+      if (Object.keys(equippedRoom).length > 0) {
+        equippedRoomByUser[userId] = { ...equippedRoom };
+      }
+      const walletByUser: Record<string, {
+        coinsSpent: number; feedMoodAccumulated: number;
+        feedExpAccumulated: number; feedBondAccumulated: number;
+      }> = {};
+      if (wallet) {
+        walletByUser[userId] = {
+          coinsSpent: wallet.coins_spent || 0,
+          feedMoodAccumulated: wallet.feed_mood_accumulated || 0,
+          feedExpAccumulated: wallet.feed_exp_accumulated || 0,
+          feedBondAccumulated: wallet.feed_bond_accumulated || 0,
+        };
+      }
+
       // Map idempotency keys
       const idempotencyKeys: Record<string, any> = {};
       for (const ik of idempotencyR.rows) {
@@ -226,6 +260,11 @@ export class PgDevStorePersistence implements IDevStorePersistence {
         equippedOutfit,
         equippedRoom,
         idempotencyKeys,
+        // β.5c: per-user fields (single-entry slices for this userId)
+        ownedItemsByUser,
+        equippedOutfitByUser,
+        equippedRoomByUser,
+        walletByUser,
       };
     } catch (err) {
       console.warn('[PgPersistence] Failed to load:', err);
@@ -396,13 +435,27 @@ export class PgDevStorePersistence implements IDevStorePersistence {
         );
       }
 
-      // Secondary wallet (single-row per user; snapshot accumulators reflect
-      // the primary user — for current user only).
-      // β.5 limitation: dev-store snapshot.coinsSpent etc. is the primary
-      // user's view, not necessarily this userId's. β.5b will add per-user
-      // accumulator columns to snapshot. For now, only update wallet for
-      // the primary user (DEV_USER_ID under permissive AUTH_ENFORCE=false).
-      if (userId === DEV_USER_ID) {
+      // β.5c: secondary wallet, inventory items, equipment slots are now
+      // ALL persisted per-user via the *ByUser snapshot maps. Pre-β.5c
+      // these were gated on `userId === DEV_USER_ID` (because the legacy
+      // snapshot fields had no user_id discriminator). Non-DEV users now
+      // survive server restart with their purchases / equipment / wallet
+      // intact.
+      const walletForUser = snapshot.walletByUser?.[userId];
+      const ownedForUser = snapshot.ownedItemsByUser?.[userId];
+      const outfitForUser = snapshot.equippedOutfitByUser?.[userId];
+      const roomForUser = snapshot.equippedRoomByUser?.[userId];
+
+      // Wallet: write the new-shape per-user entry; fall back to legacy
+      // flat field only for the primary DEV user (so existing single-user
+      // dev sessions keep working).
+      if (walletForUser) {
+        await client.query(
+          `INSERT INTO secondary_wallets (user_id, coins_spent, feed_mood_accumulated, feed_exp_accumulated, feed_bond_accumulated, updated_at)
+           VALUES ($1,$2,$3,$4,$5,NOW()) ON CONFLICT (user_id) DO UPDATE SET coins_spent=$2, feed_mood_accumulated=$3, feed_exp_accumulated=$4, feed_bond_accumulated=$5, updated_at=NOW()`,
+          [userId, walletForUser.coinsSpent || 0, walletForUser.feedMoodAccumulated || 0, walletForUser.feedExpAccumulated || 0, walletForUser.feedBondAccumulated || 0],
+        );
+      } else if (userId === DEV_USER_ID) {
         await client.query(
           `INSERT INTO secondary_wallets (user_id, coins_spent, feed_mood_accumulated, feed_exp_accumulated, feed_bond_accumulated, updated_at)
            VALUES ($1,$2,$3,$4,$5,NOW()) ON CONFLICT (user_id) DO UPDATE SET coins_spent=$2, feed_mood_accumulated=$3, feed_exp_accumulated=$4, feed_bond_accumulated=$5, updated_at=NOW()`,
@@ -410,33 +463,37 @@ export class PgDevStorePersistence implements IDevStorePersistence {
         );
       }
 
-      // ownedItems: legacy snapshot has no user_id field — only persist
-      // for the primary user (DEV_USER_ID). β.5b will add user_id column.
-      if (userId === DEV_USER_ID) {
-        for (const oi of snapshot.ownedItems || []) {
+      // Inventory items: prefer per-user map; fall back to legacy single
+      // slot only for DEV_USER_ID.
+      const ownedItemsToPersist: any[] = ownedForUser
+        ?? (userId === DEV_USER_ID ? (snapshot.ownedItems ?? []) : []);
+      for (const oi of ownedItemsToPersist) {
+        await client.query(
+          `INSERT INTO inventory_items (user_id, item_id, item_type, slot, equipped, owned_at)
+           VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id, item_id) DO UPDATE SET equipped=$5`,
+          [userId, oi.item_id, oi.item_type, oi.slot, oi.equipped || false, oi.owned_at],
+        );
+      }
+
+      // Equipment slots: same pattern.
+      const outfitToPersist = outfitForUser
+        ?? (userId === DEV_USER_ID ? (snapshot.equippedOutfit ?? {}) : {});
+      for (const [slot, itemId] of Object.entries(outfitToPersist)) {
+        if (itemId) {
           await client.query(
-            `INSERT INTO inventory_items (user_id, item_id, item_type, slot, equipped, owned_at)
-             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id, item_id) DO UPDATE SET equipped=$5`,
-            [userId, oi.item_id, oi.item_type, oi.slot, oi.equipped || false, oi.owned_at],
+            `INSERT INTO equipment_slots (user_id, slot, item_type, item_id) VALUES ($1,$2,'outfit',$3) ON CONFLICT (user_id, slot, item_type) DO UPDATE SET item_id=$3, updated_at=NOW()`,
+            [userId, slot, itemId],
           );
         }
-
-        // Equipment slots — same single-user limit
-        for (const [slot, itemId] of Object.entries(snapshot.equippedOutfit || {})) {
-          if (itemId) {
-            await client.query(
-              `INSERT INTO equipment_slots (user_id, slot, item_type, item_id) VALUES ($1,$2,'outfit',$3) ON CONFLICT (user_id, slot, item_type) DO UPDATE SET item_id=$3, updated_at=NOW()`,
-              [userId, slot, itemId],
-            );
-          }
-        }
-        for (const [slot, itemId] of Object.entries(snapshot.equippedRoom || {})) {
-          if (itemId) {
-            await client.query(
-              `INSERT INTO equipment_slots (user_id, slot, item_type, item_id) VALUES ($1,$2,'room_item',$3) ON CONFLICT (user_id, slot, item_type) DO UPDATE SET item_id=$3, updated_at=NOW()`,
-              [userId, slot, itemId],
-            );
-          }
+      }
+      const roomToPersist = roomForUser
+        ?? (userId === DEV_USER_ID ? (snapshot.equippedRoom ?? {}) : {});
+      for (const [slot, itemId] of Object.entries(roomToPersist)) {
+        if (itemId) {
+          await client.query(
+            `INSERT INTO equipment_slots (user_id, slot, item_type, item_id) VALUES ($1,$2,'room_item',$3) ON CONFLICT (user_id, slot, item_type) DO UPDATE SET item_id=$3, updated_at=NOW()`,
+            [userId, slot, itemId],
+          );
         }
       }
 
