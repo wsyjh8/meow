@@ -47,6 +47,20 @@ import { CurrentUser } from '../auth/current-user.decorator';
  * backup map is kept (for snapshot serialize/hydrate compat) but no
  * longer the truth — the PG row is.
  *
+ * 需求 23 Phase E1 PR-E0.2 (plan-023-E1-v2 §3.2, Review 1 P1#1):
+ * D-β still called `devStore.storeBackup` UNCONDITIONALLY after the
+ * PG write so the in-memory map stayed in sync. That kept the broken
+ * side-effect alive: storeBackup → saveToDisk → pg-persistence
+ * saveAsync(snapshot, this.userId) where `this.userId` is whatever
+ * the last `withUser` binding set (defaults to DEV_USER_ID). That
+ * extra saveAsync wrote dev-user-001's slice to PG on every backup
+ * upload, polluting prod-shape data.
+ *
+ * PR-E0.2 moves storeBackup into the JSON-test-backend fallback
+ * branch only. Under PG (production / staging / pg-regression e2e)
+ * the upload now performs exactly ONE write: `saveBackupForUser`.
+ * No more dev-user-001 saveAsync side-effect.
+ *
  * Additionally adds server-side `validateSnapshotUserIds` defence
  * (Review 2 P2-1): every `user_id` field embedded in the snapshot
  * MUST match `req.user.id`, otherwise 400 INVALID_SNAPSHOT_USER_ID.
@@ -102,20 +116,15 @@ export class BackupController {
     const resolvedDeviceModel =
       deviceModel ?? (snapshot.device?.device_model as string | undefined);
 
-    // PR-D-β: write directly to PG via the persistence adapter. The
-    // dev-store storeBackup call is RETAINED so any code that still
-    // reads the in-memory backup map sees consistent metadata until
-    // the rest of the codebase migrates off it (Phase E1 cleanup).
+    // PR-D-β: write directly to PG via the persistence adapter.
+    // PR-E0.2: split the two backends — PG path is exactly one write,
+    // JSON path keeps the legacy dev-store map for in-memory test use.
     const persistence = devStore.backingPersistence;
-    if (!persistence.saveBackupForUser) {
-      // JSON test backend doesn't implement backup persistence.
-      // Fall through to dev-store-only writes — tests that exercise
-      // backup either run against PG or explicitly mock the path.
-      console.warn(
-        '[BackupController] persistence.saveBackupForUser not available; ' +
-          'falling back to dev-store in-memory (test backend).',
-      );
-    } else {
+    if (persistence.saveBackupForUser) {
+      // Production path (PG): PG row is the truth. Do NOT also write
+      // through devStore.storeBackup — that would trigger saveToDisk
+      // → pg-persistence.saveAsync(snapshot, devStore.userId) which
+      // pollutes the DEV_USER_ID slice (plan E1 §3.2 / Review 1 P1#1).
       await persistence.saveBackupForUser(user.id, {
         backupId,
         schemaVersion: resolvedSchema,
@@ -125,18 +134,25 @@ export class BackupController {
         deviceModel: resolvedDeviceModel ?? null,
         snapshot,
       });
+    } else {
+      // JSON test backend has no `saveBackupForUser` implementation.
+      // Use the dev-store in-memory map; saveToDisk on JSON backend
+      // writes to the dev-store-state.json file (no PG side-effect).
+      console.warn(
+        '[BackupController] persistence.saveBackupForUser not available; ' +
+          'falling back to dev-store in-memory (JSON test backend).',
+      );
+      devStore.storeBackup(
+        user.id,
+        backupId,
+        resolvedSchema,
+        uploadedAt,
+        snapshotSize,
+        snapshot,
+        resolvedDeviceId,
+        resolvedDeviceModel,
+      );
     }
-
-    devStore.storeBackup(
-      user.id,
-      backupId,
-      resolvedSchema,
-      uploadedAt,
-      snapshotSize,
-      snapshot,
-      resolvedDeviceId,
-      resolvedDeviceModel,
-    );
 
     return {
       status: 'succeeded',

@@ -455,4 +455,42 @@ describeIfPg('Backup persistence (PR-D-β / e2e)', () => {
       expect(r.status).toBe(401);
     });
   });
+
+  // ── PR-E0.2 — backup upload no longer triggers devStore.storeBackup
+  //    under PG (plan-023-E1-v2 §3.2, Review 1 P1#1) ─────────────────
+  describe('PR-E0.2: PG path does not call devStore.storeBackup', () => {
+    it('uploadBackup writes only via persistence.saveBackupForUser; ' +
+        'devStore.storeBackup is NOT invoked (no saveToDisk side-effect)',
+        async () => {
+      const storeBackupSpy = jest.spyOn(devStore, 'storeBackup');
+      try {
+        const snap = buildSnapshotForUser(userAId, {
+          extraWordId: 'pre-no-sideeffect',
+        });
+        const up = await request(app.getHttpServer())
+          .post('/api/v1/me/backup')
+          .set('Authorization', `Bearer ${tokenA}`)
+          .send({ snapshot: snap, schema_version: 'p3_2_snapshot_v1' });
+        expect(up.status).toBe(201);
+        expect(up.body.status).toBe('succeeded');
+
+        // PG row exists (D-β invariant still holds)
+        const pool = getPool();
+        const r = await pool.query(
+          'SELECT user_id FROM backup_snapshots WHERE user_id = $1',
+          [userAId],
+        );
+        expect(r.rows.length).toBe(1);
+        expect(r.rows[0].user_id).toBe(userAId);
+
+        // PR-E0.2 invariant: storeBackup was NOT called. Pre-E0.2 it
+        // was invoked unconditionally and the resulting saveToDisk
+        // chain wrote a DEV_USER_ID slice into PG, polluting prod-shape
+        // data. After E0.2 the call is JSON-fallback-only.
+        expect(storeBackupSpy).not.toHaveBeenCalled();
+      } finally {
+        storeBackupSpy.mockRestore();
+      }
+    });
+  });
 });

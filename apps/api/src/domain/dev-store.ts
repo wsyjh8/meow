@@ -1723,8 +1723,28 @@ export class DevStore {
   //
   // 需求 23 Phase A4-β.2: per-user buckets. All three methods take userId
   // as first arg (no `withUser` wrapping needed) for explicit ownership.
+  //
+  // 需求 23 Phase E1 PR-E0.2 (plan-023-E1-v2 §3.2): these three methods
+  // are now JSON-test-backend-only. BackupController under PG goes
+  // straight to `persistence.saveBackupForUser` / `loadBackupMetaForUser`
+  // / `loadBackupFullForUser` and never touches the in-memory map —
+  // see backup.controller.ts JSDoc for the rationale (saveToDisk was
+  // pulling dev-user-001 into pg-persistence saveAsync on every backup
+  // upload, polluting the DEV_USER_ID slice in PG).
+  //
+  // The maps are NOT removed because dev-store snapshot serialize /
+  // hydrate still reference `latestBackupsByUser` / `backupSnapshotsByUser`
+  // for the JSON-file persistence round-trip (used by unit tests).
+  // Eventual cleanup is out of scope for E1 — this is purely a
+  // side-effect fix.
 
   /**
+   * @deprecated PG path no longer calls this (PR-E0.2). Retained for
+   * the JSON test backend only — see backup.controller.ts. Production
+   * (PG) callers must use `persistence.saveBackupForUser` directly
+   * via `devStore.backingPersistence` to avoid saveToDisk's
+   * pg-persistence.saveAsync side-effect.
+   *
    * Store a backup snapshot for the given user (last-write-wins per user).
    * Persisted via the normal saveToDisk() chain.
    */
@@ -1751,12 +1771,24 @@ export class DevStore {
     this.saveToDisk();
   }
 
-  /** Get latest backup metadata for the given user. Null if none stored. */
+  /**
+   * @deprecated Bypassed by BackupController under PG (PR-D-β). Only
+   * reached when the active persistence is JSON (test backend). PG
+   * callers should use `persistence.loadBackupMetaForUser` directly.
+   *
+   * Get latest backup metadata for the given user. Null if none stored.
+   */
   getLatestBackupMeta(userId: string): any | null {
     return this.latestBackupByUser.get(userId) ?? null;
   }
 
-  /** Get the full backup snapshot for the given user. Null if none stored. */
+  /**
+   * @deprecated Bypassed by BackupController under PG (PR-D-β). Only
+   * reached when the active persistence is JSON (test backend). PG
+   * callers should use `persistence.loadBackupFullForUser` directly.
+   *
+   * Get the full backup snapshot for the given user. Null if none stored.
+   */
   getBackupSnapshot(userId: string): any | null {
     return this.backupSnapshotByUser.get(userId) ?? null;
   }
