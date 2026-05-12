@@ -4,6 +4,7 @@ import 'snapshot_export_service.dart';
 import 'backup_upload_service.dart';
 import 'local_settings_service.dart';
 import 'local_database.dart';
+import '../config/api_base.dart';
 import '../device/device_info_service.dart';
 
 /// Auto-backup service — triggers periodic cloud backup when conditions are met.
@@ -36,9 +37,12 @@ class AutoBackupService {
 
   static String _k(String userId, String suffix) => 'u_${userId}_$suffix';
 
-  // Base URL matches the rest of the app; kept as const for consistency.
-  // In production this would come from config injection.
-  static const String _baseUrl = 'http://10.0.2.2:3000/api/v1';
+  // 需求 23 Phase E1 PR-E0.1 (plan-023-E1-v2 §3.1): use the centralised
+  // [apiV1Base] (compile-time `--dart-define=API_BASE=...`) instead of
+  // the Android-emulator-only `10.0.2.2:3000`. Release builds without
+  // the dart-define still fall back to the same dev default via
+  // [apiV1Base], so dev behaviour is unchanged.
+  static String get _baseUrl => apiV1Base;
 
   /// Whether an auto-backup is currently in progress (guards against re-entrancy).
   static bool _isRunning = false;

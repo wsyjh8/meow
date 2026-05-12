@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/auth/auth.dart';
+import '../../core/config/api_base.dart';
 import '../../core/storage/local_settings_service.dart';
 import '../../core/storage/snapshot_export_service.dart';
 import '../../core/storage/backup_upload_service.dart';
@@ -86,7 +87,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final userId = _currentUserId();
     final prefs = await SharedPreferences.getInstance();
     final uploadService = BackupUploadService(
-      baseUrl: 'http://10.0.2.2:3000/api/v1',
+      baseUrl: apiV1Base,
       prefs: prefs,
       userId: userId,
     );
@@ -156,7 +157,7 @@ class _SettingsPageState extends State<SettingsPage> {
         userId: userId,
       );
       final uploadService = BackupUploadService(
-        baseUrl: 'http://10.0.2.2:3000/api/v1',
+        baseUrl: apiV1Base,
         prefs: prefs,
         userId: userId,
       );
@@ -491,7 +492,7 @@ class _SettingsPageState extends State<SettingsPage> {
     // PR-C-β D9: BackupRestoreService is single-source SQLite; the
     // progress arg is gone.
     final restoreService = BackupRestoreService(
-      baseUrl: 'http://10.0.2.2:3000/api/v1',
+      baseUrl: apiV1Base,
       settings: settings,
       db: LocalDatabase.instance,
       userId: userId,
