@@ -498,4 +498,130 @@ export class PgDevStorePersistence implements IDevStorePersistence {
   getPool(): Pool {
     return this.pool;
   }
+
+  // ============================================================
+  // 需求 23 Phase D PR-D-β: per-user backup snapshot persistence.
+  //
+  // These methods are INDEPENDENT of saveAsync / loadAsync — they
+  // own the `backup_snapshots` PG table directly. BackupController
+  // calls them so that backup cross-user reads don't depend on
+  // dev-store in-memory lazy-load (β.5b deferred). Net effect:
+  // server restart → backup data is durable; user A's POST →
+  // user B's GET returns no_backup_yet because the row is keyed
+  // by user_id PRIMARY KEY.
+  //
+  // Plan reference: plan-023-D-backup-restore-closure-v2.md §4.2
+  // ============================================================
+
+  /// Persist (UPSERT) the latest snapshot for [userId]. PRIMARY KEY
+  /// is user_id, so each user owns exactly one slot — last-write-wins.
+  async saveBackupForUser(
+    userId: string,
+    meta: {
+      backupId: string;
+      schemaVersion: string;
+      uploadedAt: string;
+      snapshotSize: number;
+      deviceId?: string | null;
+      deviceModel?: string | null;
+      snapshot: unknown;
+    },
+  ): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO backup_snapshots
+         (user_id, backup_id, schema_version, uploaded_at,
+          snapshot_size, device_id, device_model, snapshot, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         backup_id      = EXCLUDED.backup_id,
+         schema_version = EXCLUDED.schema_version,
+         uploaded_at    = EXCLUDED.uploaded_at,
+         snapshot_size  = EXCLUDED.snapshot_size,
+         device_id      = EXCLUDED.device_id,
+         device_model   = EXCLUDED.device_model,
+         snapshot       = EXCLUDED.snapshot,
+         updated_at     = NOW()`,
+      [
+        userId,
+        meta.backupId,
+        meta.schemaVersion,
+        meta.uploadedAt,
+        meta.snapshotSize,
+        meta.deviceId ?? null,
+        meta.deviceModel ?? null,
+        JSON.stringify(meta.snapshot),
+      ],
+    );
+  }
+
+  /// Read metadata only for [userId] — no snapshot body. Used by
+  /// GET /me/backup/latest where the client only wants status + ids.
+  async loadBackupMetaForUser(userId: string): Promise<{
+    backupId: string;
+    schemaVersion: string;
+    uploadedAt: string;
+    snapshotSize: number;
+    deviceId: string | null;
+    deviceModel: string | null;
+  } | null> {
+    const result = await this.pool.query(
+      `SELECT backup_id, schema_version, uploaded_at, snapshot_size,
+              device_id, device_model
+         FROM backup_snapshots
+        WHERE user_id = $1`,
+      [userId],
+    );
+    if (result.rows.length === 0) return null;
+    const r = result.rows[0];
+    return {
+      backupId: r.backup_id,
+      schemaVersion: r.schema_version,
+      uploadedAt: r.uploaded_at?.toISOString?.() ?? r.uploaded_at,
+      snapshotSize: r.snapshot_size,
+      deviceId: r.device_id ?? null,
+      deviceModel: r.device_model ?? null,
+    };
+  }
+
+  /// Read full snapshot + meta for [userId]. Used by
+  /// GET /me/backup/latest/snapshot during restore.
+  async loadBackupFullForUser(userId: string): Promise<{
+    backupId: string;
+    schemaVersion: string;
+    uploadedAt: string;
+    snapshotSize: number;
+    deviceId: string | null;
+    deviceModel: string | null;
+    snapshot: unknown;
+  } | null> {
+    const result = await this.pool.query(
+      `SELECT backup_id, schema_version, uploaded_at, snapshot_size,
+              device_id, device_model, snapshot
+         FROM backup_snapshots
+        WHERE user_id = $1`,
+      [userId],
+    );
+    if (result.rows.length === 0) return null;
+    const r = result.rows[0];
+    return {
+      backupId: r.backup_id,
+      schemaVersion: r.schema_version,
+      uploadedAt: r.uploaded_at?.toISOString?.() ?? r.uploaded_at,
+      snapshotSize: r.snapshot_size,
+      deviceId: r.device_id ?? null,
+      deviceModel: r.device_model ?? null,
+      // pg driver auto-parses JSONB to JS objects; if it's a string
+      // (some test stubs), parse defensively.
+      snapshot: typeof r.snapshot === 'string' ? JSON.parse(r.snapshot) : r.snapshot,
+    };
+  }
+
+  /// Drop [userId]'s backup row (test helper, or admin / user-deletion
+  /// flow). Not surfaced via REST in Phase D.
+  async clearBackupForUser(userId: string): Promise<void> {
+    await this.pool.query(
+      `DELETE FROM backup_snapshots WHERE user_id = $1`,
+      [userId],
+    );
+  }
 }

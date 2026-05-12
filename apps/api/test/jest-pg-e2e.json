@@ -5,7 +5,7 @@
   "transform": {
     "^.+\\.ts$": "ts-jest"
   },
-  "testRegex": "(pg-regression|auth|auth-isolation).e2e-spec.ts$",
+  "testRegex": "(pg-regression|auth|auth-isolation|backup-persistence).e2e-spec.ts$",
   "moduleNameMapper": {
     "^@/(.*)$": "<rootDir>/../src/$1",
     "^@domain/(.*)$": "<rootDir>/../src/domain/$1",

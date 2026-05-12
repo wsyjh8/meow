@@ -170,6 +170,14 @@ export class DevStore {
   // Persistence adapter (PG or JSON, determined by factory)
   private persistence: IDevStorePersistence;
 
+  /// 需求 23 Phase D PR-D-β: exposed read-only so BackupController can
+  /// call the PG-only backup methods directly (bypassing the
+  /// dev-store in-memory backup map that depends on β.5b lazy-load).
+  /// Plan-023-D-v2 §4.2.
+  get backingPersistence(): IDevStorePersistence {
+    return this.persistence;
+  }
+
   // ========== Per-user partitioned state ==========
   // (the public legacy fields are getters defined below)
 

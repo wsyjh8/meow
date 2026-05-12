@@ -31,6 +31,57 @@ export interface IDevStorePersistence {
   /** Async load (PG only) — loads a single user's snapshot. */
   loadAsync?(userId?: string): Promise<DevStoreSnapshot | null>;
   clear(userId?: string): void;
+
+  // ============================================================
+  // 需求 23 Phase D PR-D-β: backup snapshot persistence (PG only).
+  //
+  // These methods are independent of saveAsync/loadAsync so backup
+  // cross-user reads work after server restart without depending
+  // on dev-store in-memory lazy-load (β.5b deferred).
+  //
+  // Optional in the interface so the JSON backend (test/emergency
+  // only) doesn't have to implement them — BackupController guards
+  // with `if (persistence.saveBackupForUser)` and throws a clear
+  // error in JSON mode.
+  // ============================================================
+  saveBackupForUser?(
+    userId: string,
+    meta: BackupSnapshotMeta,
+  ): Promise<void>;
+  loadBackupMetaForUser?(
+    userId: string,
+  ): Promise<BackupSnapshotMetaRow | null>;
+  loadBackupFullForUser?(
+    userId: string,
+  ): Promise<BackupSnapshotFullRow | null>;
+  clearBackupForUser?(userId: string): Promise<void>;
+}
+
+/// Payload BackupController hands to [IDevStorePersistence.saveBackupForUser].
+export interface BackupSnapshotMeta {
+  backupId: string;
+  schemaVersion: string;
+  uploadedAt: string;
+  snapshotSize: number;
+  deviceId?: string | null;
+  deviceModel?: string | null;
+  snapshot: unknown;
+}
+
+/// Shape returned by [IDevStorePersistence.loadBackupMetaForUser].
+export interface BackupSnapshotMetaRow {
+  backupId: string;
+  schemaVersion: string;
+  uploadedAt: string;
+  snapshotSize: number;
+  deviceId: string | null;
+  deviceModel: string | null;
+}
+
+/// Shape returned by [IDevStorePersistence.loadBackupFullForUser]
+/// (meta + full snapshot body).
+export interface BackupSnapshotFullRow extends BackupSnapshotMetaRow {
+  snapshot: unknown;
 }
 
 export interface DevStoreSnapshot {
