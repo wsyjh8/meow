@@ -76,9 +76,22 @@ apps/api/audio-pipeline-staging/*
 __pycache__/
 *.pyc
 
-# Claude Code local config (per-machine, not shared)
-.claude/settings.local.json
+# Claude Code local config + worktrees (per-machine, not shared)
+.claude/
 CLAUDE_backup.md
+
+# Empty placeholder (kept untracked)
+/AGENTS.md
+
+# Root-level package-lock — monorepo uses per-app lockfiles
+/package-lock.json
+
+# Personal handoff notes (per-machine)
+handsoff/
+
+# Local scratch directories (large, per-machine; regenerated)
+temp/
+mp3/
 
 # Misc
 *.pem
